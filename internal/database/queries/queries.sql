@@ -1,0 +1,2 @@
+-- Package queries contains SQL queries for use with sqlc.
+-- This file is a placeholder; sqlc configuration and queries will be added later.

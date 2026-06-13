@@ -1,0 +1,58 @@
+# Binaries
+goddi
+/goddi
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+*.prof
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+.trae/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+/dist/
+/build/
+
+# Data directory
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Config with secrets (keep template)
+config.local.yaml
+config.prod.yaml
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.backup
+
+# Environment files
+.env
+.env.*
+
+# Temporary files
+/tmp/

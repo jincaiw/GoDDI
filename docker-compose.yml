@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  goddi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "0.1.0"
+        GIT_COMMIT: "unknown"
+        BUILD_DATE: "unknown"
+    container_name: goddi
+    restart: unless-stopped
+    # DHCP broadcast traffic requires the Linux host network. This also makes
+    # DNS and the Web console available directly on their configured ports.
+    network_mode: host
+    volumes:
+      - goddi-data:/var/lib/goddi
+      - ./config.yaml:/etc/goddi/config.yaml:ro
+    environment:
+      - GODDI_LOG_LEVEL=info
+      - GODDI_SECURITY_JWT_SECRET=${GODDI_SECURITY_JWT_SECRET:?set GODDI_SECURITY_JWT_SECRET to a strong secret}
+      - GODDI_ADMIN_USERNAME=${GODDI_ADMIN_USERNAME:-admin}
+      - GODDI_ADMIN_PASSWORD=${GODDI_ADMIN_PASSWORD:?set GODDI_ADMIN_PASSWORD for the first startup}
+      - GODDI_SERVER_DATA_DIR=/var/lib/goddi
+      - GODDI_DATABASE_DSN=/var/lib/goddi/goddi.db
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  goddi-data:
+    driver: local
