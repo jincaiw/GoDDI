@@ -20,11 +20,12 @@ var systemInitOnce sync.Once
 
 // SystemServiceContainer holds references to system service components.
 type SystemServiceContainer struct {
-	DB          *sql.DB
-	SettingsMgr *system.Manager
-	BackupMgr   *backup.Manager
-	TaskMgr     *task.Manager
-	Version     string
+	DB                 *sql.DB
+	SettingsMgr        *system.Manager
+	BackupMgr          *backup.Manager
+	TaskMgr            *task.Manager
+	Version            string
+	ReloadAfterRestore func() error
 }
 
 // InitSystemServices initializes the system service container for API handlers.

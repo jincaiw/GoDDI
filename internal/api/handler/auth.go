@@ -38,11 +38,15 @@ type Handlers struct {
 // NewHandlers creates a new Handlers instance with all dependencies.
 // loginRateWindowSec is the lockout window in seconds; pass 0 for the
 // default (15 minutes).
-func NewHandlers(db *sql.DB, jwtSecret string, loginRateLimit int, loginRateWindowSec int) *Handlers {
+func NewHandlers(db *sql.DB, jwtSecret string, totpEncryptionKey string, loginRateLimit int, loginRateWindowSec int) *Handlers {
 	jwtMgr, _ := auth.NewJWTManager(jwtSecret)
 	sessMgr := auth.NewSessionManager(db)
 	rateLimit := auth.NewRateLimiter(db, loginRateLimit, time.Duration(loginRateWindowSec)*time.Second)
-	totpMgr := auth.NewTOTPManager(db, "GoDDI")
+	if totpEncryptionKey == "" {
+		slog.Warn("TOTP encryption key not configured; deriving from JWT secret. Set security.encryption_key for dedicated key material.")
+		totpEncryptionKey = jwtSecret
+	}
+	totpMgr := auth.NewTOTPManager(db, "GoDDI", totpEncryptionKey)
 	tokenMgr := auth.NewTokenManager(db)
 	rbacMgr := rbac.NewRBACManager(db)
 	auditMgr := audit.NewAuditManager(db)

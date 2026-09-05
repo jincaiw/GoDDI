@@ -22,9 +22,9 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.1.0 功能边界
+## v0.1.1 功能边界
 
-GoDDI v0.1.0 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HTTPS/QUIC 配置、DHCP 高可用、SSO、集群和应用扩展运行时为预留 API，本版本会返回 `501 Not Implemented`。
+GoDDI v0.1.1 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HTTPS/QUIC 配置、DHCP 高可用、SSO、集群和应用扩展运行时为预留 API，本版本会返回 `501 Not Implemented`。
 
 ## 快速开始
 
@@ -34,7 +34,7 @@ GoDDI v0.1.0 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HT
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.0/goddi-v0.1.0-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.1.1/goddi-v0.1.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
@@ -44,8 +44,10 @@ GoDDI 使用 DNS、DHCP 特权端口。快速体验可使用 root 运行；生�
 ```bash
 sudo setcap 'cap_net_bind_service,cap_net_raw=+ep' /usr/local/bin/goddi
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export GODDI_ADMIN_USERNAME=admin
-export GODDI_ADMIN_PASSWORD='请替换为高强度密码'
+read -rsp '初始管理员密码（至少12位，包含大小写字母和数字）: ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 goddi serve
 ```
 
@@ -55,8 +57,10 @@ goddi serve
 
 ```bash
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export GODDI_ADMIN_USERNAME=admin
-export GODDI_ADMIN_PASSWORD='请替换为高强度密码'
+read -rsp '初始管理员密码: ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 export GODDI_DNS_ENABLED=false
 export GODDI_DHCP_ENABLED=false
 goddi serve
@@ -79,11 +83,13 @@ sudo install -m 0644 deployments/systemd/goddi.service /etc/systemd/system/goddi
 ```bash
 sudo tee /etc/goddi/goddi.env >/dev/null <<EOF
 GODDI_SECURITY_JWT_SECRET=$(openssl rand -hex 32)
+GODDI_SECURITY_ENCRYPTION_KEY=$(openssl rand -hex 32)
 GODDI_ADMIN_USERNAME=admin
-GODDI_ADMIN_PASSWORD=请替换为高强度密码
+GODDI_ADMIN_PASSWORD=CHANGE-ME-Before-Starting-123!
 EOF
 sudo chown root:goddi /etc/goddi/goddi.env
 sudo chmod 0640 /etc/goddi/goddi.env
+sudoedit /etc/goddi/goddi.env # 启动前替换示例管理员密码。
 ```
 
 可选：安装并修改完整配置：
@@ -106,7 +112,7 @@ sudo journalctl -u goddi -f
 
 ## 配置说明
 
-默认 HTTP 端口为 `6080`，DNS 监听 TCP/UDP `53`。程序会在文件存在时加载 `/etc/goddi/config.yaml`，并支持通过 `GODDI_*` 环境变量覆盖。生产环境必须替换 `GODDI_SECURITY_JWT_SECRET`。
+默认 HTTP 端口为 `6080`，DNS 监听 TCP/UDP `53`。程序会在文件存在时加载 `/etc/goddi/config.yaml`，并支持通过 `GODDI_*` 环境变量覆盖。生产环境必须替换 `GODDI_SECURITY_JWT_SECRET`，并建议设置 `GODDI_SECURITY_ENCRYPTION_KEY` 作为独立的 TOTP 密钥加密材料。
 
 常用端点：
 
@@ -123,7 +129,9 @@ DHCP 依赖广播流量，因此附带的 Compose 文件在 Linux 上使用 host
 
 ```bash
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
-export GODDI_ADMIN_PASSWORD='请替换为高强度密码'
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+read -rsp '初始管理员密码: ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 docker compose up -d --build
 ```
 
@@ -146,6 +154,11 @@ go build ./cmd/goddi
 由于 `web/dist` 会在编译时嵌入 Go 二进制，因此必须先构建前端。
 
 ## 安全建议
+
+- 控制台的“完整备份”包含 DNS、DHCP、IPAM、DNS 安全策略及数据库设置，不包含用户、令牌、审计日志、外部配置和加密密钥。灾难恢复备份应停服后备份整个数据目录、配置和密钥；运行中的 SQLite 数据库应采用支持 SQLite 的一致性备份方式，不要单独复制主数据库文件。
+
+- 两个安全密钥应安全持久保存并单独备份，重启和升级时不要重新生成。更改加密密钥会导致已有 TOTP 密文无法解密。
+- 已验证的测试范围和仍需现场验证的部署场景见 [v0.1.1 生产评审](docs/production-review-v0.1.1.md)。
 
 - 内置 HTTP 服务不负责 TLS 终止，请部署在 HTTPS 反向代理后或可信内网中。
 - 通过防火墙或反向代理限制 `/metrics` 与管理控制台访问范围。

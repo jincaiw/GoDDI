@@ -13,6 +13,13 @@ The first public release of GoDDI provides an integrated, single-node DNS, DHCP,
 - Responsive English and Simplified Chinese web console
 - Hardened systemd service and Linux host-network Docker deployment
 
+## Security and Performance Updates
+
+- API token scopes are now enforced during authorization.
+- TOTP secrets can be encrypted with a dedicated `GODDI_SECURITY_ENCRYPTION_KEY`.
+- Frontend dependencies were upgraded to remove known audit findings.
+- The dashboard chart is split into an async component to reduce initial UI payload.
+
 ## Deployment Notes
 
 - SQLite is the supported database for v0.1.0.

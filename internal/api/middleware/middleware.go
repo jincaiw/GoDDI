@@ -255,6 +255,10 @@ func Authentication(jwtMgr *auth.JWTManager, sessionMgr *auth.SessionManager, to
 				writeForbiddenError(w, "只读API令牌不能执行修改操作")
 				return
 			}
+			if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") && r.URL.Path != "/api/v1/auth/me" {
+				writeForbiddenError(w, "账户安全操作需要登录会话")
+				return
+			}
 
 			var username string
 			var enabled bool

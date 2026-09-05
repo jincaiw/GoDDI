@@ -14,6 +14,7 @@ import (
 
 	"github.com/jasonwa/goddi/internal/auth"
 	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jasonwa/goddi/internal/rbac"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,7 +29,7 @@ func deriveTestCSRFKey(jwtSecret string) []byte {
 	return key
 }
 
-func setupAPITokenAuthTest(t *testing.T, readonly bool) (http.Handler, string, *sql.DB) {
+func setupAPITokenAuthTest(t *testing.T, readonly bool, scope ...string) (http.Handler, string, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -37,6 +38,10 @@ func setupAPITokenAuthTest(t *testing.T, readonly bool) (http.Handler, string, *
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`
 		CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL, enabled BOOLEAN NOT NULL);
+		CREATE TABLE permissions (id TEXT PRIMARY KEY, resource TEXT NOT NULL, action TEXT NOT NULL, description TEXT, UNIQUE(resource, action));
+		CREATE TABLE roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT, is_builtin BOOLEAN NOT NULL DEFAULT 0, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL);
+		CREATE TABLE role_permissions (role_id TEXT NOT NULL, permission_id TEXT NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (role_id, permission_id));
+		CREATE TABLE user_roles (user_id TEXT NOT NULL, role_id TEXT NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (user_id, role_id));
 		CREATE TABLE api_tokens (
 			id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
 			token_hash TEXT NOT NULL UNIQUE, token_prefix TEXT NOT NULL,
@@ -50,12 +55,20 @@ func setupAPITokenAuthTest(t *testing.T, readonly bool) (http.Handler, string, *
 			created_at DATETIME NOT NULL
 		);
 		INSERT INTO users (id, username, enabled) VALUES ('user-1', 'api-user', 1);
+		INSERT INTO permissions (id, resource, action, description) VALUES ('perm-dns-write', 'dns', 'write', 'dns write');
+		INSERT INTO roles (id, name, description, is_builtin, created_at, updated_at) VALUES ('role-admin', 'admin', 'admin', 1, datetime('now'), datetime('now'));
+		INSERT INTO role_permissions (role_id, permission_id, created_at) VALUES ('role-admin', 'perm-dns-write', datetime('now'));
+		INSERT INTO user_roles (user_id, role_id, created_at) VALUES ('user-1', 'role-admin', datetime('now'));
 	`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tokenMgr := auth.NewTokenManager(db)
-	_, fullToken, err := tokenMgr.CreateToken("user-1", "test", "", auth.TokenOptions{IsReadonly: readonly})
+	tokenScope := ""
+	if len(scope) > 0 {
+		tokenScope = scope[0]
+	}
+	_, fullToken, err := tokenMgr.CreateToken("user-1", "test", tokenScope, auth.TokenOptions{IsReadonly: readonly})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,14 +77,15 @@ func setupAPITokenAuthTest(t *testing.T, readonly bool) (http.Handler, string, *
 		t.Fatal(err)
 	}
 	cfg := &config.Config{Security: config.SecurityConfig{JWTSecret: "test-secret-key-for-api-token-auth"}}
+	rbacMgr := rbac.NewRBACManager(db)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := Authentication(jwtMgr, nil, tokenMgr, db)(CSRFProtection(cfg)(next))
+	handler := Authentication(jwtMgr, nil, tokenMgr, db)(CSRFProtection(cfg)(rbac.RequirePermission(rbacMgr, "dns", "write")(next)))
 	return handler, fullToken, db
 }
 
-func TestAuthentication_APITokenAllowsReadAndSkipsCSRFForWrite(t *testing.T) {
+func TestAuthentication_APITokenAllowsPermissionAndSkipsCSRFForWrite(t *testing.T) {
 	handler, token, db := setupAPITokenAuthTest(t, false)
 	defer db.Close()
 
@@ -96,6 +110,32 @@ func TestAuthentication_ReadonlyAPITokenRejectsMutation(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("readonly API token returned %d, want 403", rec.Code)
+	}
+}
+
+func TestAuthentication_APITokenScopeRestrictsPermissions(t *testing.T) {
+	handler, token, db := setupAPITokenAuthTest(t, false, "dns:read")
+	defer db.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("scoped API token returned %d, want 403", rec.Code)
+	}
+}
+
+func TestAuthentication_APITokenScopeAllowsMatchingPermission(t *testing.T) {
+	handler, token, db := setupAPITokenAuthTest(t, false, "dns:write")
+	defer db.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matching-scope API token returned %d, want 200", rec.Code)
 	}
 }
 

@@ -21,7 +21,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	r := chi.NewRouter()
 
 	// Create handlers with dependencies.
-	h := handler.NewHandlers(db.DB, cfg.Security.JWTSecret, cfg.Security.LoginRateLimit, cfg.Security.LoginRateWindow)
+	h := handler.NewHandlers(db.DB, cfg.Security.JWTSecret, cfg.Security.EncryptionKey, cfg.Security.LoginRateLimit, cfg.Security.LoginRateWindow)
 
 	// Create RBAC manager for middleware.
 	rbacMgr := rbac.NewRBACManager(db.DB)

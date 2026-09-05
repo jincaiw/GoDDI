@@ -43,7 +43,7 @@ func staticDirCandidates() []string {
 // string if none is found.
 func resolveStaticDir() string {
 	for _, dir := range staticDirCandidates() {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !info.IsDir() {
 			return dir
 		}
 	}

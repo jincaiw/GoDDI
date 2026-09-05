@@ -182,7 +182,7 @@ func exportTable(db *sql.DB, query string) ([]map[string]interface{}, error) {
 			val := values[i]
 			// Handle nil values.
 			if val == nil {
-				row[col] = ""
+				row[col] = nil
 				continue
 			}
 			// Convert []byte to string for JSON compatibility.

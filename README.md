@@ -10,7 +10,7 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 - DHCP scopes, reservations, options, leases, and activity logs
 - IPAM spaces, subnets, addresses, allocation status, and import/export
 - Users, roles, groups, permissions, API tokens, TOTP, sessions, and audit logs
-- Full-data backup and restore, system settings, health checks, and Prometheus metrics
+- DNS/DHCP/IPAM and policy backup and restore, system settings, health checks, and Prometheus metrics
 - Responsive Vue 3 console with English and Simplified Chinese
 - SQLite with WAL mode for a low-operations single-node deployment
 
@@ -22,9 +22,9 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ![Backup management](docs/images/backup.png)
 
-## Version 0.1.0 Scope
+## Version 0.1.1 Scope
 
-GoDDI v0.1.0 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
+GoDDI v0.1.1 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
 
 ## Quick Start
 
@@ -34,7 +34,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.0/goddi-v0.1.0-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.1.1/goddi-v0.1.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
@@ -44,8 +44,10 @@ GoDDI uses privileged DNS and DHCP ports. Run as root for a quick evaluation, or
 ```bash
 sudo setcap 'cap_net_bind_service,cap_net_raw=+ep' /usr/local/bin/goddi
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export GODDI_ADMIN_USERNAME=admin
-export GODDI_ADMIN_PASSWORD='replace-with-a-strong-password'
+read -rsp 'Initial admin password (12+ characters, upper/lowercase and digits): ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 goddi serve
 ```
 
@@ -55,8 +57,10 @@ For a web-console-only evaluation without DNS or DHCP listeners:
 
 ```bash
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export GODDI_ADMIN_USERNAME=admin
-export GODDI_ADMIN_PASSWORD='replace-with-a-strong-password'
+read -rsp 'Initial admin password: ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 export GODDI_DNS_ENABLED=false
 export GODDI_DHCP_ENABLED=false
 goddi serve
@@ -79,11 +83,13 @@ Store secrets outside the unit file:
 ```bash
 sudo tee /etc/goddi/goddi.env >/dev/null <<EOF
 GODDI_SECURITY_JWT_SECRET=$(openssl rand -hex 32)
+GODDI_SECURITY_ENCRYPTION_KEY=$(openssl rand -hex 32)
 GODDI_ADMIN_USERNAME=admin
-GODDI_ADMIN_PASSWORD=replace-with-a-strong-password
+GODDI_ADMIN_PASSWORD=CHANGE-ME-Before-Starting-123!
 EOF
 sudo chown root:goddi /etc/goddi/goddi.env
 sudo chmod 0640 /etc/goddi/goddi.env
+sudoedit /etc/goddi/goddi.env # Replace the example admin password before starting.
 ```
 
 Optionally install and edit the full configuration:
@@ -106,7 +112,7 @@ After the first administrator is created, remove `GODDI_ADMIN_USERNAME` and `GOD
 
 ## Configuration
 
-The default HTTP port is `6080`; DNS listens on TCP/UDP `53`. Configuration is loaded from `/etc/goddi/config.yaml` when present and can be overridden with `GODDI_*` environment variables. Always replace `GODDI_SECURITY_JWT_SECRET` in production.
+The default HTTP port is `6080`; DNS listens on TCP/UDP `53`. Configuration is loaded from `/etc/goddi/config.yaml` when present and can be overridden with `GODDI_*` environment variables. Always replace `GODDI_SECURITY_JWT_SECRET` in production, and set `GODDI_SECURITY_ENCRYPTION_KEY` to use a dedicated key for encrypted TOTP secrets.
 
 Useful endpoints:
 
@@ -123,7 +129,9 @@ DHCP requires broadcast traffic, so the included Compose file uses Linux host ne
 
 ```bash
 export GODDI_SECURITY_JWT_SECRET="$(openssl rand -hex 32)"
-export GODDI_ADMIN_PASSWORD='replace-with-a-strong-password'
+export GODDI_SECURITY_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+read -rsp 'Initial admin password: ' GODDI_ADMIN_PASSWORD; echo
+export GODDI_ADMIN_PASSWORD
 docker compose up -d --build
 ```
 
@@ -146,6 +154,11 @@ go build ./cmd/goddi
 The frontend must be built before the Go binary because `web/dist` is embedded at compile time.
 
 ## Security Notes
+
+- Console "full" backups cover DNS, DHCP, IPAM, DNS security policies, and database settings, not users, tokens, audit logs, external configuration, or encryption keys. For disaster recovery, stop the service and back up the complete data directory plus configuration and secrets. Do not copy a live SQLite database without its WAL or a SQLite-aware backup procedure.
+
+- Persist both security keys securely across restarts and back them up separately. Changing the encryption key makes existing encrypted TOTP secrets unreadable. Do not regenerate keys during routine upgrades.
+- See the [v0.1.1 production review](docs/production-review-v0.1.1.md) for verified coverage and remaining deployment qualification requirements.
 
 - Put GoDDI behind HTTPS or a trusted private network; the built-in HTTP listener does not terminate TLS.
 - Restrict `/metrics` and the management console with firewall or reverse-proxy policy.

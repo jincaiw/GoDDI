@@ -14,10 +14,14 @@ BUILD_DIR=./dist
 all: lint test build
 
 ## build: Build the binary
-build:
+build: web-build
 	@echo "Building $(BINARY_NAME)..."
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/goddi
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
+
+.PHONY: web-build
+web-build:
+	cd web && npm ci && npm run build
 
 ## test: Run all tests
 test:

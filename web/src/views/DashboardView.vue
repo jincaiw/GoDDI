@@ -47,7 +47,8 @@
     <n-grid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
       <n-gi span="2 l:1">
         <n-card :title="t('dashboard.queryChart')">
-          <v-chart :option="chartOption" style="height: 300px;" autoresize />
+          <dashboard-chart v-if="chartReady" :hours="chartData.hours" :queries="chartData.queries" />
+          <n-skeleton v-else :height="300" />
         </n-card>
       </n-gi>
       <n-gi span="2 l:1">
@@ -60,21 +61,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
 import { GlobeOutline, ServerOutline, DesktopOutline, GridOutline } from '@vicons/ionicons5'
 import PageHeader from '@/components/PageHeader.vue'
 import { getDashboardStats, type HourlyDNSStats } from '@/api/dns'
 import { listAuditLogs } from '@/api/logs'
 
-use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const stats = ref({
   dnsQueries: 0,
@@ -83,41 +79,25 @@ const stats = ref({
   ipamUsage: 0,
 })
 
+const chartReady = ref(false)
 const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queries: [] })
 
-const chartOption = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-  xAxis: {
-    type: 'category',
-    boundaryGap: false,
-    data: chartData.value.hours,
-  },
-  yAxis: { type: 'value' },
-  series: [
-    {
-      name: 'DNS Queries',
-      type: 'line',
-      smooth: true,
-      areaStyle: { opacity: 0.3 },
-      data: chartData.value.queries,
-      itemStyle: { color: '#18a058' },
-    },
-  ],
-}))
-
-const eventColumns = [
+const eventColumns = computed(() => [
   { title: t('logs.audit.user'), key: 'username', width: 100 },
   { title: t('logs.audit.action'), key: 'action', width: 100 },
   { title: t('logs.audit.resource'), key: 'resource_type', width: 120 },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
-]
+  { title: t('common.createdAt'), key: 'created_at', width: 160,
+    render: (row: { created_at: string }) => {
+      const date = new Date(row.created_at)
+      return Number.isNaN(date.getTime()) ? row.created_at : date.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+    },
+  },
+])
 
 const recentEvents = ref<unknown[]>([])
 
 onMounted(async () => {
   try {
-    // Load dashboard data and audit logs in parallel
     const [dashboardResult, auditResult] = await Promise.allSettled([
       getDashboardStats(),
       listAuditLogs({ page: 1, page_size: 10 }),
@@ -130,13 +110,9 @@ onMounted(async () => {
       stats.value.activeLeases = d.active_leases
       stats.value.ipamUsage = Math.round(d.ipam_usage)
 
-      // Use real hourly data from backend
       const hourlyData = d.recent_dns_stats as HourlyDNSStats[]
       if (hourlyData && hourlyData.length > 0) {
         const hours = hourlyData.map(item => {
-          // Backend currently returns "YYYY-MM-DD HH:MM:SS"; display HH:MM only.
-          // The space-split keeps us tolerant to small format changes (e.g.
-          // "HH:MM" alone or "YYYY-MM-DDTHH:MM:SSZ").
           const parts = item.hour.split(' ')
           const timePart = parts[1] ?? item.hour
           return timePart.substring(0, 5)
@@ -151,6 +127,8 @@ onMounted(async () => {
     }
   } catch {
     // Silently handle dashboard errors
+  } finally {
+    chartReady.value = true
   }
 })
 </script>

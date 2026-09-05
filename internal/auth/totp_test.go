@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pquerna/otp/totp"
+	_ "modernc.org/sqlite"
 )
 
 func TestVerifyTOTP(t *testing.T) {
@@ -109,5 +112,63 @@ func TestGenerateRecoveryCode_Entropy(t *testing.T) {
 	}
 	if len(code) != 32 {
 		t.Errorf("recovery code length = %d, want 32 (16 bytes hex-encoded)", len(code))
+	}
+}
+
+func TestTOTPSecretEncryptionRoundTrip(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE user_totp_secrets (
+			user_id TEXT PRIMARY KEY,
+			secret_ciphertext TEXT NOT NULL,
+			enabled BOOLEAN DEFAULT FALSE,
+			confirmed_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	tm := NewTOTPManager(db, "GoDDI-Test", "unit-test-encryption-key")
+	secret, _, err := tm.GenerateTOTPSecret("user-1", "alice")
+	if err != nil {
+		t.Fatalf("GenerateTOTPSecret() error = %v", err)
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT secret_ciphertext FROM user_totp_secrets WHERE user_id = ?`, "user-1").Scan(&stored); err != nil {
+		t.Fatalf("query stored secret: %v", err)
+	}
+	if stored == secret {
+		t.Fatal("stored TOTP secret should be encrypted, but it matches plaintext")
+	}
+	if !strings.HasPrefix(stored, totpSecretCipherPrefix) {
+		t.Fatalf("stored TOTP secret = %q, want prefix %q", stored, totpSecretCipherPrefix)
+	}
+
+	got, err := tm.GetTOTPSecret("user-1")
+	if err != nil {
+		t.Fatalf("GetTOTPSecret() error = %v", err)
+	}
+	if got != secret {
+		t.Fatalf("GetTOTPSecret() = %q, want %q", got, secret)
+	}
+
+	if err := tm.EnableTOTP("user-1", secret); err != nil {
+		t.Fatalf("EnableTOTP() error = %v", err)
+	}
+	var enabled bool
+	if err := db.QueryRow(`SELECT enabled FROM user_totp_secrets WHERE user_id = ?`, "user-1").Scan(&enabled); err != nil {
+		t.Fatalf("query enabled: %v", err)
+	}
+	if !enabled {
+		t.Fatal("TOTP should be enabled after successful verification")
 	}
 }

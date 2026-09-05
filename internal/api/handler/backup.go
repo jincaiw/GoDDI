@@ -114,7 +114,13 @@ func RestoreBackupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OKWithMessage(w, "备份恢复成功", map[string]string{"id": id})
+	if SystemServices.ReloadAfterRestore != nil {
+		if err := SystemServices.ReloadAfterRestore(); err != nil {
+			response.InternalError(w, "数据已恢复，但运行状态刷新失败，请重启服务")
+			return
+		}
+	}
+	response.OKWithMessage(w, "备份恢复成功；监听地址等启动配置需重启服务生效", map[string]string{"id": id})
 }
 
 // DeleteBackupHandler handles DELETE /api/v1/backup/{id}

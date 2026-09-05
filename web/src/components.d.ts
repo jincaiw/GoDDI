@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppLayout: typeof import('./components/AppLayout.vue')['default']
     ConfirmDialog: typeof import('./components/ConfirmDialog.vue')['default']
+    DashboardChart: typeof import('./components/DashboardChart.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']
     NBreadcrumb: typeof import('naive-ui')['NBreadcrumb']
     NBreadcrumbItem: typeof import('naive-ui')['NBreadcrumbItem']
@@ -47,6 +48,7 @@ declare module 'vue' {
     NModal: typeof import('naive-ui')['NModal']
     NNotificationProvider: typeof import('naive-ui')['NNotificationProvider']
     NSelect: typeof import('naive-ui')['NSelect']
+    NSkeleton: typeof import('naive-ui')['NSkeleton']
     NSpace: typeof import('naive-ui')['NSpace']
     NSpin: typeof import('naive-ui')['NSpin']
     NStatistic: typeof import('naive-ui')['NStatistic']

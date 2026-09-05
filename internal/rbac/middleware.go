@@ -108,6 +108,11 @@ func RequirePermission(rbacMgr *RBACManager, resource, action string) func(http.
 				return
 			}
 
+			if apiToken := GetAPIToken(r.Context()); apiToken != nil && !auth.TokenScopeAllows(apiToken.Scope, resource, action) {
+				writeJSONError(w, http.StatusForbidden, 403, "API令牌范围不足")
+				return
+			}
+
 			allowed, err := rbacMgr.CheckPermission(userID, resource, action)
 			if err != nil {
 				writeJSONError(w, http.StatusInternalServerError, 500, "权限检查失败")

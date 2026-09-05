@@ -81,6 +81,7 @@ ipam:
 
 security:
   jwt_secret: "change-me-in-production" # Set GODDI_SECURITY_JWT_SECRET before startup
+  encryption_key: ""                     # Optional; set GODDI_SECURITY_ENCRYPTION_KEY for dedicated TOTP secret encryption
   login_rate_limit: 5                       # Max login attempts per minute per IP
   totp_enabled: true
   rebinding_protection: true

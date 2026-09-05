@@ -1,0 +1,1 @@
+import{a as e}from"./auth-CYMAsBzV.js";function t(t){return e(`/logs/audit`,t)}export{t};

@@ -87,7 +87,7 @@ export default {
   },
   dashboard: {
     title: '仪表盘',
-    dnsQueriesToday: '今日 DNS 查询',
+    dnsQueriesToday: 'DNS 查询（近24小时）',
     cacheHitRate: '缓存命中率',
     activeLeases: '活跃 DHCP 租约',
     ipamUsage: 'IPAM 使用率',

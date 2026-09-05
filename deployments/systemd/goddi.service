@@ -1,6 +1,6 @@
 [Unit]
 Description=GoDDI - Enterprise DDI Platform
-Documentation=https://github.com/jasonwa/goddi
+Documentation=https://github.com/jincaiw/GoDDI
 After=network-online.target
 Wants=network-online.target
 

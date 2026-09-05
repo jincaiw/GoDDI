@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Run Go tests
+        run: go test -race ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Install browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser and API regression tests
+        env:
+          GODDI_SERVER_HTTP_ADDR: 127.0.0.1:16090
+          GODDI_SERVER_PUBLIC_URL: http://127.0.0.1:16090
+          GODDI_SERVER_DATA_DIR: /tmp/goddi-ci
+          GODDI_DATABASE_DSN: /tmp/goddi-ci/goddi.db
+          GODDI_SECURITY_JWT_SECRET: ci-only-secret-not-for-production-123456
+          GODDI_ADMIN_USERNAME: admin
+          GODDI_ADMIN_PASSWORD: Admin@123456
+          GODDI_DNS_ENABLED: 'false'
+          GODDI_DHCP_ENABLED: 'false'
+        run: |
+          go build -o /tmp/goddi-ci-server ./cmd/goddi
+          /tmp/goddi-ci-server serve > /tmp/goddi-ci.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"; cat /tmp/goddi-ci.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:16090/health; then break; fi
+            sleep 1
+          done
+          cd web
+          npx playwright test

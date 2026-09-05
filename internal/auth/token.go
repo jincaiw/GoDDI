@@ -63,6 +63,10 @@ func (tm *TokenManager) CreateToken(userID, name, scope string, opts TokenOption
 		}
 	}
 
+	if err := ValidateTokenScope(scope); err != nil {
+		return nil, "", err
+	}
+
 	// Validate ExpiresAt up front: it must be in the future. Without this
 	// check the token would be created, returned to the caller, and then
 	// immediately be unusable.

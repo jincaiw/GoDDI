@@ -128,6 +128,7 @@ type IPAMConfig struct {
 // SecurityConfig holds security-related configuration.
 type SecurityConfig struct {
 	JWTSecret           string `yaml:"jwt_secret" validate:"required"`
+	EncryptionKey       string `yaml:"encryption_key"`
 	LoginRateLimit      int    `yaml:"login_rate_limit"`
 	LoginRateWindow     int    `yaml:"login_rate_window_seconds"` // lockout window in seconds (0 = default 900s)
 	TOTPEnabled         bool   `yaml:"totp_enabled"`
@@ -193,6 +194,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvBool("GODDI_DHCP_ENABLED", &cfg.DHCP.Enabled)
 
 	setEnvString("GODDI_SECURITY_JWT_SECRET", &cfg.Security.JWTSecret)
+	setEnvString("GODDI_SECURITY_ENCRYPTION_KEY", &cfg.Security.EncryptionKey)
 	setEnvInt("GODDI_SECURITY_LOGIN_RATE_LIMIT", &cfg.Security.LoginRateLimit)
 	setEnvBool("GODDI_SECURITY_TOTP_ENABLED", &cfg.Security.TOTPEnabled)
 	setEnvBool("GODDI_SECURITY_REBINDING_PROTECTION", &cfg.Security.RebindingProtection)
@@ -300,6 +302,7 @@ func DefaultConfig() *Config {
 		},
 		Security: SecurityConfig{
 			JWTSecret:           "change-me-in-production",
+			EncryptionKey:       "",
 			LoginRateLimit:      5,
 			TOTPEnabled:         true,
 			RebindingProtection: true,
@@ -353,6 +356,7 @@ func setEnvInt(key string, target *int) {
 func (c *Config) String() string {
 	clone := *c
 	clone.Security.JWTSecret = maskSecret(clone.Security.JWTSecret)
+	clone.Security.EncryptionKey = maskSecret(clone.Security.EncryptionKey)
 	out, _ := yaml.Marshal(&clone)
 	return string(out)
 }

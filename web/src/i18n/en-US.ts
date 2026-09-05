@@ -87,7 +87,7 @@ export default {
   },
   dashboard: {
     title: 'Dashboard',
-    dnsQueriesToday: 'DNS Queries Today',
+    dnsQueriesToday: 'DNS Queries (Last 24h)',
     cacheHitRate: 'Cache Hit Rate',
     activeLeases: 'Active DHCP Leases',
     ipamUsage: 'IPAM Usage',

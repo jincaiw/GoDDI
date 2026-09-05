@@ -151,7 +151,7 @@ async function loadData() {
   loading.value = true
   try {
     const params: Record<string, unknown> = { page: pagination.page, page_size: pagination.pageSize }
-    if (searchQuery.value) params.search = searchQuery.value
+    if (searchQuery.value) params.name = searchQuery.value
     if (filterType.value) params.type = filterType.value
     const result = await listDNSZones(params)
     zones.value = result.data

@@ -238,7 +238,7 @@ func (m *Manager) executeBackup(job *BackupJob) (string, error) {
 	// two backups complete within the same second.
 	fileName := fmt.Sprintf("%s_%s_%s_%s.json", job.Type, time.Now().Format("20060102_150405"), job.ID[:8], uuid.New().String()[:8])
 	filePath := filepath.Join(backupDir, fileName)
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		return "", fmt.Errorf("writing backup file: %w", err)
 	}
 
@@ -259,6 +259,8 @@ func (m *Manager) executeBackup(job *BackupJob) (string, error) {
 
 // RestoreBackup restores data from a backup.
 func (m *Manager) RestoreBackup(jobID string) error {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
 	// No second confirmation / MFA prompt is performed here. Authorization
 	// is the responsibility of the HTTP layer (RBAC + audit log entry). The
 	// backup payload itself is treated as trusted because it is produced
@@ -711,6 +713,10 @@ func restoreRows(db execOrQuery, table string, rows []map[string]interface{}, co
 		args := make([]interface{}, len(columns))
 		for j, column := range columns {
 			value, ok := row[column]
+			// Older backups encoded SQL NULL as an empty string, including numbers.
+			if value == "" && ((table == "dns_records" && (column == "priority" || column == "weight" || column == "port" || column == "flag")) || (table == "ipam_subnets" && column == "vlan_id") || (table == "dhcp_scopes" && column == "max_lease_time")) {
+				value = nil
+			}
 			if !ok || value == nil || value == "" && (column == "created_at" || column == "updated_at") {
 				if fallback, exists := defaults[column]; exists {
 					value = fallback

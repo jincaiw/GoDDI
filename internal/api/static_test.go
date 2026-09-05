@@ -10,6 +10,18 @@ import (
 	"testing"
 )
 
+func TestStaticHandler_UnrelatedDistDoesNotHideEmbeddedUI(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("dist", 0755); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	newStaticHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "id=\"app\"") {
+		t.Fatalf("embedded UI unavailable: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // writeMinimalDist creates a minimal web/dist directory containing the
 // files needed to exercise the static handler and returns the absolute
 // path to it. The directory lives inside t.TempDir() so it is cleaned

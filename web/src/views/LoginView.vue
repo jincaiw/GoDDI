@@ -140,6 +140,8 @@ async function handleLogin() {
 
 <style scoped>
 .login-container {
+  padding: 24px 16px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -149,6 +151,8 @@ async function handleLogin() {
 
 .login-card {
   width: 400px;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 40px;
   background: var(--n-color);
   border-radius: 12px;

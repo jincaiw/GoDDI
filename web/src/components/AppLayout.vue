@@ -52,7 +52,7 @@
               v-for="item in breadcrumbs"
               :key="item.path"
               class="breadcrumb-item"
-              @click="router.push(item.path)"
+              @click="router.resolve(item.path).matched.some(record => record.path === item.path) && router.push(item.path)"
             >
               {{ item.label }}
             </n-breadcrumb-item>
@@ -315,6 +315,7 @@ function canAccess(key: string) {
 
 const menuOptions = computed<MenuOption[]>(() => menuOptionList.flatMap((item): MenuOption[] => {
   const itemKey = String(item.key)
+  if (!canAccess(itemKey)) return []
   if (item.children) {
     const children = item.children.filter((child) => canAccess(String(child.key)))
     if (children.length === 0) return []

@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -72,6 +74,10 @@ func (h *Handlers) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	token, fullToken, err := h.tokenMgr.CreateToken(userID, req.Name, req.Scope, opts)
 	if err != nil {
+		if errors.Is(err, auth.ErrInvalidTokenScope) || strings.Contains(err.Error(), "invalid IP restriction") || strings.Contains(err.Error(), "expires_at must be in the future") {
+			response.BadRequest(w, err.Error())
+			return
+		}
 		response.InternalError(w, "创建令牌失败")
 		return
 	}

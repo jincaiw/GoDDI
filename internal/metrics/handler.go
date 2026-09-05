@@ -63,7 +63,7 @@ func DashboardDataHandler(db *sql.DB, version string) http.HandlerFunc {
 				COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0),
 				COUNT(*)
 			FROM dns_query_logs
-			WHERE created_at >= ?
+			WHERE datetime(created_at) >= datetime(?)
 		`, twentyFourHoursAgo).Scan(&dnsQueriesToday, &cacheHits, &cacheTotal)
 		if err != nil {
 			slog.Warn("metrics: failed to query DNS query stats", "error", err)
@@ -120,12 +120,12 @@ func getRecentDNSStats(db *sql.DB) []HourlyDNSStats {
 
 	rows, err := db.Query(`
 		SELECT
-			created_at AS hour,
+			strftime('%Y-%m-%d %H:00', created_at) AS hour,
 			COUNT(*) AS queries,
 			SUM(CASE WHEN blocked = 1 THEN 1 ELSE 0 END) AS blocked,
 			SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) AS cached
 		FROM dns_query_logs
-		WHERE created_at >= ?
+		WHERE datetime(created_at) >= datetime(?)
 		GROUP BY hour
 		ORDER BY hour ASC
 	`, twentyFourHoursAgo)

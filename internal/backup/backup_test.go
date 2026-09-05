@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,35 @@ import (
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/database"
 )
+
+func TestDNSBackupPreservesNullableNumbers(t *testing.T) {
+	mgr, db := setupBackupTest(t)
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO dns_zones (id,name,type,soa_mname,soa_rname,serial) VALUES ('nullable-zone','nullable.example','primary','ns.nullable.example','admin.nullable.example',1); INSERT INTO dns_records (id,zone_id,name,type,value,priority,port,weight) VALUES ('nullable-record','nullable-zone','www','A','192.0.2.42',NULL,NULL,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	job, err := mgr.CreateBackup(BackupOptions{Type: "dns"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RestoreBackup(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	var priority, port, weight sql.NullInt64
+	if err := db.QueryRow(`SELECT priority,port,weight FROM dns_records WHERE id='nullable-record'`).Scan(&priority, &port, &weight); err != nil {
+		t.Fatal(err)
+	}
+	if priority.Valid || port.Valid || weight.Valid {
+		t.Fatal("NULL numeric fields changed during restore")
+	}
+	info, err := os.Stat(job.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("backup permissions: %v", info.Mode())
+	}
+}
 
 func setupBackupTest(t *testing.T) (*Manager, *database.DB) {
 	t.Helper()
