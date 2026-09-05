@@ -64,10 +64,16 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate each setting key against the whitelist.
+	// Validate each setting key against the whitelist and enforce the same
+	// per-key value constraints as the single-update path (otherwise values
+	// like dns_default_ttl="abc" bypass validation via the batch endpoint).
 	for _, s := range settings {
 		if !validSettingKeys[s.Key] {
 			response.BadRequest(w, "无效的设置项: "+s.Key)
+			return
+		}
+		if err := validateSettingValue(s.Key, s.Value); err != nil {
+			response.BadRequest(w, err.Error())
 			return
 		}
 	}

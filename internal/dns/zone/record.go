@@ -834,18 +834,18 @@ func validateRecordValue(rtype, value string, priority, weight, port *int, tag s
 			return fmt.Errorf("invalid IPv6 address: %s", value)
 		}
 	case "MX":
-		if priority == nil || *priority <= 0 {
-			return fmt.Errorf("MX record requires a valid priority")
+		if priority == nil || *priority < 0 || *priority > 65535 {
+			return fmt.Errorf("MX record requires a valid priority (0-65535)")
 		}
 	case "SRV":
-		if priority == nil || *priority <= 0 {
-			return fmt.Errorf("SRV record requires a valid priority")
+		if priority == nil || *priority < 0 || *priority > 65535 {
+			return fmt.Errorf("SRV record requires a valid priority (0-65535)")
 		}
 		if weight == nil {
 			return fmt.Errorf("SRV record requires weight")
 		}
-		if port == nil || *port <= 0 {
-			return fmt.Errorf("SRV record requires a valid port")
+		if port == nil || *port < 0 || *port > 65535 {
+			return fmt.Errorf("SRV record requires a valid port (0-65535)")
 		}
 	case "CAA":
 		if flag == nil {

@@ -235,6 +235,20 @@ func (s *Server) lookupAuthoritative(qname string, qtype uint16) (*dns.Msg, bool
 			resp.Authoritative = true
 			return resp, true
 		}
+		// Zone match but no record: answer authoritatively (NXDOMAIN or
+		// NODATA with SOA). Returning false here would leak queries for
+		// names inside local zones to upstream resolvers.
+		if zoneName := s.zoneStore.MatchingZone(qname); zoneName != "" {
+			resp := new(dns.Msg)
+			resp.Authoritative = true
+			if !s.zoneStore.NameExists(zoneName, qname) {
+				resp.Rcode = dns.RcodeNameError
+			}
+			if soa := s.zoneStore.ZoneSOA(zoneName); soa != nil {
+				resp.Ns = []dns.RR{soa}
+			}
+			return resp, true
+		}
 		// No match found in zone store.
 		return nil, false
 	}

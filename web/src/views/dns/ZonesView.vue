@@ -20,7 +20,7 @@
       :columns="columns"
       :data="zones"
       :loading="loading"
-      remote :pagination="zones.length > 0 ? pagination : false"
+      remote :pagination="pagination"
       :row-key="(row: DNSZone) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"

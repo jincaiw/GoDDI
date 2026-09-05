@@ -173,12 +173,17 @@ func isOriginAllowed(origin string, allowedOrigins []string) bool {
 		}
 
 		// Prefix match for development mode: if the allowed entry is a scheme+host
-		// (e.g. "http://localhost"), then any port on that host is acceptable.
+		// WITHOUT a port (e.g. "http://localhost"), then any port on that host is
+		// acceptable. If the allowed entry specifies a port, it must match exactly —
+		// otherwise any same-host service on a different port would be trusted
+		// while Allow-Credentials is on.
 		parsed, err := url.Parse(originLower)
 		parsedAllowed, errA := url.Parse(allowedLower)
 		if err == nil && errA == nil {
 			if parsed.Scheme == parsedAllowed.Scheme && parsed.Hostname() == parsedAllowed.Hostname() {
-				return true
+				if parsedAllowed.Port() == "" || parsed.Port() == parsedAllowed.Port() {
+					return true
+				}
 			}
 		}
 	}

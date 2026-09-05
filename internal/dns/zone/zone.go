@@ -515,10 +515,19 @@ func (m *ZoneManager) DeleteZone(id string) error {
 }
 
 // IncrementSerial increments the SOA serial for a zone.
+// The read-modify-write runs inside a transaction guarded by a conditional
+// UPDATE: two concurrent increments could otherwise compute the same new
+// serial (violating SOA monotonicity), with the loser silently ignored.
 func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Get current serial.
 	var currentSerial uint32
-	err := m.db.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&currentSerial)
+	err = tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&currentSerial)
 	if err != nil {
 		return 0, fmt.Errorf("querying serial: %w", err)
 	}
@@ -532,9 +541,21 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		newSerial = currentSerial + 1
 	}
 
-	_, err = m.db.Exec("UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ?", newSerial, zoneID)
+	result, err := tx.Exec(
+		"UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?",
+		newSerial, zoneID, currentSerial)
 	if err != nil {
 		return 0, fmt.Errorf("updating serial: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		// A concurrent writer changed the serial between our read and
+		// write; report failure so the caller can retry.
+		return 0, fmt.Errorf("serial changed concurrently, retry needed")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing serial update: %w", err)
 	}
 
 	return newSerial, nil

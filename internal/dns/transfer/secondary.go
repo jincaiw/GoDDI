@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -56,8 +57,8 @@ func parseTransferPolicy(policy string) (*transferTSIGConfig, error) {
 	if cfg.primaryAddr == "" {
 		return nil, fmt.Errorf("transfer_policy missing primary address")
 	}
-	if !strings.Contains(cfg.primaryAddr, ":") {
-		cfg.primaryAddr += ":53"
+	if _, _, err := net.SplitHostPort(cfg.primaryAddr); err != nil {
+		cfg.primaryAddr = net.JoinHostPort(cfg.primaryAddr, "53")
 	}
 
 	if len(parts) >= 3 {
@@ -416,10 +417,26 @@ func (s *SecondarySync) insertRRTx(exec executor, zoneID string, rr dns.RR, zone
 	rtype := dns.TypeToString[hdr.Rrtype]
 	value := rrValue(rr)
 
+	// Extract the per-type numeric fields stored in dedicated columns; the
+	// value column alone cannot represent MX preference, SRV priority /
+	// weight / port or CAA flag, and dropping them silently corrupts the
+	// zone after a transfer.
+	var priority, weight, port, caaFlag interface{}
+	switch v := rr.(type) {
+	case *dns.MX:
+		priority = int(v.Preference)
+	case *dns.SRV:
+		priority = int(v.Priority)
+		weight = int(v.Weight)
+		port = int(v.Port)
+	case *dns.CAA:
+		caaFlag = int(v.Flag)
+	}
+
 	_, err := exec.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, 1)
-	`, uuid.New().String(), zoneID, name, rtype, value, int(hdr.Ttl))
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+	`, uuid.New().String(), zoneID, name, rtype, value, int(hdr.Ttl), priority, weight, port, caaFlag)
 	return err
 }
 

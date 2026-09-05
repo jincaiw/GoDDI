@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -131,8 +132,14 @@ func (c *Cache) SetPrefetchCallback(fn func(qname string, qtype uint16)) {
 }
 
 // cacheKey generates a cache key from qname and qtype.
+// Types unknown to dns.TypeToString map to "" which would collide distinct
+// query types; fall back to the numeric type in that case.
 func cacheKey(qname string, qtype uint16) string {
-	return strings.ToLower(qname) + "/" + dns.TypeToString[qtype]
+	typeName := dns.TypeToString[qtype]
+	if typeName == "" {
+		typeName = "TYPE" + strconv.Itoa(int(qtype))
+	}
+	return strings.ToLower(qname) + "/" + typeName
 }
 
 // Get retrieves a cached DNS response.

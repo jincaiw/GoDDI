@@ -58,6 +58,8 @@ func NewStore(db *sql.DB) *Store {
 }
 
 // Load loads all zones and records from the database.
+// If the database query fails, the previously loaded zones are kept so a
+// transient DB error cannot wipe authoritative data and break resolution.
 func (s *Store) Load() {
 	if s.db == nil {
 		return
@@ -67,6 +69,14 @@ func (s *Store) Load() {
 	newZones := s.loadFromDB()
 
 	s.mu.Lock()
+	if newZones == nil {
+		// loadFromDB signals a query failure with nil: retain the existing
+		// map and keep answering authoritatively from the stale data.
+		count := len(s.zones)
+		s.mu.Unlock()
+		slog.Warn("zone_store: reload failed, keeping previous zone data", "count", count)
+		return
+	}
 	s.zones = newZones
 	s.mu.Unlock()
 
@@ -245,6 +255,55 @@ func (s *Store) Lookup(qname string, qtype uint16) (string, []dns.RR, bool) {
 	}
 
 	return "", nil, false
+}
+
+// MatchingZone returns the most specific local zone that would be
+// authoritative for qname (exact or parent match), or "" if none.
+func (s *Store) MatchingZone(qname string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	name := dns.Fqdn(strings.ToLower(qname))
+	for {
+		if _, ok := s.zones[name]; ok {
+			return name
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 || idx >= len(name)-1 {
+			return ""
+		}
+		name = name[idx+1:]
+		if name == "." {
+			if _, ok := s.zones["."]; ok {
+				return "."
+			}
+			return ""
+		}
+	}
+}
+
+// ZoneSOA returns the SOA record of the given zone (used in the authority
+// section of authoritative negative responses).
+func (s *Store) ZoneSOA(zoneName string) dns.RR {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if zd, ok := s.zones[zoneName]; ok && zd.soa != nil {
+		return zd.soa
+	}
+	return nil
+}
+
+// NameExists reports whether any record with the exact qname exists in the
+// zone (any type). Used to distinguish NODATA from NXDOMAIN.
+func (s *Store) NameExists(zoneName, qname string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	zd, ok := s.zones[zoneName]
+	if !ok {
+		return false
+	}
+	_, exists := zd.records[dns.Fqdn(strings.ToLower(qname))]
+	return exists
 }
 
 // lookupInZone searches for matching records in a specific zone.

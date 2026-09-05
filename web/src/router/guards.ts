@@ -1,6 +1,12 @@
 import type { Router } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useI18n } from 'vue-i18n'
+import i18n from '@/i18n'
+import { createDiscreteApi } from 'naive-ui'
+
+// Naive UI's message API only exists inside a component setup context, so a
+// router guard needs the discrete API. Lazily created and cached; it follows
+// the app theme only loosely, which is acceptable for a rare warning toast.
+const { message: discreteMessage } = createDiscreteApi(['message'])
 
 export function setupRouterGuards(router: Router) {
   router.beforeEach(async (to, _from, next) => {
@@ -39,9 +45,15 @@ export function setupRouterGuards(router: Router) {
     const permission = to.meta.permission as { resource: string; action: string } | undefined
     if (permission && authStore.user) {
       if (!authStore.hasPermission(permission.resource, permission.action)) {
-        // Show permission denied message
-        const { t } = useI18n()
-        try { (window as any).$message?.warning(t('common.noPermission')) } catch {}
+        // useI18n() is only valid inside a component setup function — calling
+        // it here (router guard context) throws and aborts navigation. Use
+        // the global composer instead.
+        const t = i18n.global.t
+        try {
+          discreteMessage.warning(t('common.noPermission'))
+        } catch {
+          /* message API unavailable — navigation still proceeds */
+        }
         next({ name: 'Dashboard' })
         return
       }

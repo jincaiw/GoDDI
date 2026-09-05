@@ -61,7 +61,15 @@ func (h *UpdateHandler) lookupTSIGSecret(keyName string) (string, bool) {
 }
 
 // HandleUpdate processes an RFC 2136 Dynamic DNS Update message.
+// The client IP is unknown in this form, so IP-based update policies are
+// skipped. Prefer HandleUpdateFrom when the source address is available.
 func (h *UpdateHandler) HandleUpdate(msg *dns.Msg) (*dns.Msg, error) {
+	return h.HandleUpdateFrom(msg, "")
+}
+
+// HandleUpdateFrom processes an RFC 2136 Dynamic DNS Update message from a
+// known client IP (used for IP-based update policies).
+func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Msg, error) {
 	if len(msg.Question) == 0 {
 		return h.makeResponse(msg, dns.RcodeFormatError), nil
 	}
@@ -112,7 +120,7 @@ func (h *UpdateHandler) HandleUpdate(msg *dns.Msg) (*dns.Msg, error) {
 		slog.Warn("dynamic_update: TSIG verification failed", "key", tsig.Hdr.Name, "error", err)
 		return h.makeResponse(msg, dns.RcodeRefused), nil
 	}
-	if !h.checkUpdatePolicy(z.ID, tsig.Hdr.Name, "") {
+	if !h.checkUpdatePolicy(z.ID, tsig.Hdr.Name, clientIP) {
 		return h.makeResponse(msg, dns.RcodeRefused), nil
 	}
 
@@ -131,33 +139,46 @@ func (h *UpdateHandler) HandleUpdate(msg *dns.Msg) (*dns.Msg, error) {
 		return h.makeResponse(msg, dns.RcodeRefused), nil
 	}
 
-	// Apply updates.
+	// Apply updates. RFC 2136 §2.4.2 classifies each RR in the Update
+	// section by its CLASS, not by its type:
+	//   CLASS ANY  + type ANY  -> delete all RRsets at the name
+	//   CLASS NONE            -> delete the specific RRset (match by
+	//                            name/type, and by rdata when TTL==0)
+	//   CLASS == zone class   -> add the RR
+	// The previous dispatch on Rrtype never matched real deletions:
+	// delete-RRset messages (real type, CLASS NONE) fell into the add
+	// branch and TypeAny/TypeNone Rrtypes do not occur in real traffic.
 	var applied int
 	for _, rr := range msg.Ns {
-		switch rr.Header().Rrtype {
-		case dns.TypeANY:
+		hdr := rr.Header()
+		switch {
+		case hdr.Class == dns.ClassANY && hdr.Rrtype == dns.TypeANY:
 			// Delete all records at a name.
-			if err := h.deleteAllRecords(z.ID, rr.Header().Name); err != nil {
+			if err := h.deleteAllRecords(z.ID, hdr.Name); err != nil {
 				slog.Error("dynamic_update: delete all records failed", "error", err)
 				continue
 			}
 			applied++
 
-		case dns.TypeNone:
-			// Delete specific record.
+		case hdr.Class == dns.ClassNONE:
+			// Delete the specific RRset (or single record when TTL==0).
 			if err := h.deleteRecord(z.ID, rr); err != nil {
 				slog.Error("dynamic_update: delete record failed", "error", err)
 				continue
 			}
 			applied++
 
-		default:
+		case hdr.Class == dns.ClassINET:
 			// Add record.
 			if err := h.addRecord(z.ID, rr, z.Name); err != nil {
 				slog.Error("dynamic_update: add record failed", "error", err)
 				continue
 			}
 			applied++
+
+		default:
+			slog.Warn("dynamic_update: unsupported class in update section",
+				"class", hdr.Class, "type", hdr.Rrtype, "name", hdr.Name)
 		}
 	}
 

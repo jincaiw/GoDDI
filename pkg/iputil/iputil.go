@@ -100,10 +100,26 @@ func SubnetSize(cidr string) (uint64, error) {
 }
 
 // IPRange returns the first and last usable IP addresses in a CIDR range.
+// For point-to-point prefixes (/31 per RFC 3021 and /32) both addresses of
+// the subnet are usable: NextIP/PrevIP adjustments would produce an inverted
+// (first > last) range.
 func IPRange(cidr string) (net.IP, net.IP, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing CIDR %s: %w", cidr, err)
+	}
+
+	ones, bits := ipNet.Mask.Size()
+	if ones >= bits-1 {
+		// /31 (or /127) and /32 (or /128): return the full subnet.
+		first := make(net.IP, len(ipNet.IP))
+		copy(first, ipNet.IP)
+		last := make(net.IP, len(ipNet.IP))
+		copy(last, ipNet.IP)
+		for i := range last {
+			last[i] |= ^ipNet.Mask[i]
+		}
+		return first, last, nil
 	}
 
 	first := NextIP(ipNet.IP)

@@ -23,7 +23,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const payload = t.split('.')[1]
       if (!payload) return true
-      const decoded = JSON.parse(atob(payload))
+      // JWT uses base64url ('-' and '_' instead of '+' and '/'), which atob
+      // rejects; convert and re-pad before decoding.
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+      const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+      const decoded = JSON.parse(atob(padded))
       if (!decoded.exp) return false
       return decoded.exp * 1000 < Date.now()
     } catch {

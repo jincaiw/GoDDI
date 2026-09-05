@@ -20,6 +20,11 @@ type RateLimiter struct {
 type attemptRecord struct {
 	count       int
 	lockedUntil time.Time
+	// lastSeen tracks the most recent activity for this key so entries for
+	// keys that never reach the lockout threshold (lockedUntil zero) can
+	// still be garbage-collected; otherwise an attacker can grow the map
+	// without bound by sending failures for arbitrary username/IP pairs.
+	lastSeen time.Time
 }
 
 // NewRateLimiter creates a new RateLimiter.
@@ -150,36 +155,27 @@ func (rl *RateLimiter) queryRateLimit(key string) (allowed bool, locked bool, er
 func (rl *RateLimiter) RecordFailedLogin(username, ip string) error {
 	key := rl.key(username, ip)
 
-	// Try database first. SQLite/MySQL provide their own concurrency
-	// control, so we don't need the in-process mutex for the DB path; that
-	// way DB latency doesn't block unrelated callers.
+	// Database path: use a single atomic UPSERT so concurrent failed logins
+	// cannot overwrite each other's counters (a read-modify-write across two
+	// statements allowed N parallel requests to all record count=N/2 and
+	// bypass lockout). The lock is engaged inside the same statement the
+	// moment attempt_count reaches maxAttempts.
 	if rl.db != nil {
-		var count int
-		err := rl.db.QueryRow(`SELECT attempt_count FROM login_rate_limits WHERE key = ?`, key).Scan(&count)
-		if err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("querying rate limit: %w", err)
-		}
-
-		count++
-		var execErr error
-		if count >= rl.maxAttempts {
-			lockedUntil := time.Now().Add(rl.lockDuration).Format(time.RFC3339)
-			_, execErr = rl.db.Exec(`
-				INSERT INTO login_rate_limits (key, attempt_count, locked_until, updated_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(key) DO UPDATE SET attempt_count = ?, locked_until = ?, updated_at = ?`,
-				key, count, lockedUntil, time.Now().Format(time.RFC3339),
-				count, lockedUntil, time.Now().Format(time.RFC3339),
-			)
-		} else {
-			_, execErr = rl.db.Exec(`
-				INSERT INTO login_rate_limits (key, attempt_count, updated_at)
-				VALUES (?, ?, ?)
-				ON CONFLICT(key) DO UPDATE SET attempt_count = ?, updated_at = ?`,
-				key, count, time.Now().Format(time.RFC3339),
-				count, time.Now().Format(time.RFC3339),
-			)
-		}
+		now := time.Now().Format(time.RFC3339)
+		lockedUntil := time.Now().Add(rl.lockDuration).Format(time.RFC3339)
+		_, execErr := rl.db.Exec(`
+			INSERT INTO login_rate_limits (key, attempt_count, locked_until, updated_at)
+			VALUES (?, 1, NULL, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				attempt_count = attempt_count + 1,
+				locked_until = CASE
+					WHEN locked_until IS NOT NULL AND julianday(locked_until) > julianday('now') THEN locked_until
+					WHEN attempt_count + 1 >= ? THEN ?
+					ELSE locked_until
+				END,
+				updated_at = ?`,
+			key, now, rl.maxAttempts, lockedUntil, now,
+		)
 		if execErr != nil {
 			return fmt.Errorf("updating rate limit: %w", execErr)
 		}
@@ -189,12 +185,14 @@ func (rl *RateLimiter) RecordFailedLogin(username, ip string) error {
 	// Fallback to in-memory
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	rl.cleanupExpiredMemory()
 	rec, exists := rl.memoryAttempts[key]
 	if !exists {
 		rec = &attemptRecord{}
 		rl.memoryAttempts[key] = rec
 	}
 	rec.count++
+	rec.lastSeen = time.Now()
 	if rec.count >= rl.maxAttempts {
 		rec.lockedUntil = time.Now().Add(rl.lockDuration)
 	}
@@ -222,12 +220,19 @@ func (rl *RateLimiter) key(username, ip string) string {
 	return fmt.Sprintf("%s:%s", username, ip)
 }
 
-// cleanupExpiredMemory removes expired entries from the in-memory fallback map.
-// Must be called with rl.mu held.
+// cleanupExpiredMemory removes expired entries from the in-memory fallback map:
+// records whose lockout has passed, and records idle long enough that they can
+// never contribute to a fresh lockout. Must be called with rl.mu held.
 func (rl *RateLimiter) cleanupExpiredMemory() {
 	now := time.Now()
 	for k, rec := range rl.memoryAttempts {
 		if !rec.lockedUntil.IsZero() && now.After(rec.lockedUntil) {
+			delete(rl.memoryAttempts, k)
+			continue
+		}
+		// Idle entries: no activity for 2x the lock window means the
+		// attempt series has ended; drop it to bound memory usage.
+		if now.Sub(rec.lastSeen) > 2*rl.lockDuration {
 			delete(rl.memoryAttempts, k)
 		}
 	}

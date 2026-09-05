@@ -75,7 +75,7 @@ func (ie *ImportExport) ImportAddressesCSV(subnetID string, data []byte) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("CSV parse error at line %d: %w", lineNum, err)
+			return fmt.Errorf("CSV parse error at line %d: %w", lineNum+1, err)
 		}
 		lineNum++
 
@@ -221,7 +221,7 @@ func (ie *ImportExport) ImportSubnetsCSV(spaceID string, data []byte) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("CSV parse error at line %d: %w", lineNum, err)
+			return fmt.Errorf("CSV parse error at line %d: %w", lineNum+1, err)
 		}
 		lineNum++
 
@@ -231,6 +231,13 @@ func (ie *ImportExport) ImportSubnetsCSV(spaceID string, data []byte) error {
 
 		name := record[0]
 		cidr := record[1]
+
+		// Validate the CIDR before touching the database; an invalid subnet
+		// in the store breaks usage stats and DHCP scope generation later.
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("line %d: invalid CIDR %q for subnet %q", lineNum, cidr, name)
+		}
+
 		vlanID := ""
 		if len(record) > 2 {
 			vlanID = record[2]
@@ -249,18 +256,16 @@ func (ie *ImportExport) ImportSubnetsCSV(spaceID string, data []byte) error {
 		if vlanID != "" {
 			vlanInt, err := strconv.Atoi(vlanID)
 			if err != nil {
-				slogImport("invalid VLAN ID for subnet", name, err)
-				continue
+				return fmt.Errorf("line %d: invalid VLAN ID %q for subnet %q", lineNum, vlanID, name)
 			}
 			vlanIDVal = vlanInt
 		}
 
-		_, err = ie.db.Exec(`
+		if _, err = ie.db.Exec(`
 			INSERT OR IGNORE INTO ipam_subnets (id, space_id, name, cidr, vlan_id, location, description, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-			id, spaceID, name, cidr, vlanIDVal, location, description)
-		if err != nil {
-			slogImport("failed to import subnet", name, err)
+			id, spaceID, name, cidr, vlanIDVal, location, description); err != nil {
+			return fmt.Errorf("line %d: failed to import subnet %q: %w", lineNum, name, err)
 		}
 	}
 

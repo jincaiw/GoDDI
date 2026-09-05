@@ -101,7 +101,10 @@ func (m *JWTManager) CSRFKey() []byte {
 // ParseToken parses and validates a JWT token string.
 func (m *JWTManager) ParseToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		// Pin the exact algorithm: accepting the whole HMAC family would let
+		// HS384/HS512 tokens signed with the same key pass validation even
+		// though they are never issued by this server.
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return m.secretKey, nil

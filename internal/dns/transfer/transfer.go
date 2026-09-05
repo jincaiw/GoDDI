@@ -186,10 +186,11 @@ func SendNotifyWithTSIG(zoneName string, targets []string, tsigKey, tsigSecret, 
 
 	var lastErr error
 	for _, target := range targets {
-		// Parse host:port.
+		// Parse host:port. strings.Contains(addr, ":") would misclassify a
+		// bare IPv6 literal (e.g. "2001:db8::1") as already having a port.
 		addr := target
-		if !strings.Contains(addr, ":") {
-			addr = addr + ":53"
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			addr = net.JoinHostPort(addr, "53")
 		}
 
 		notify := new(dns.Msg)

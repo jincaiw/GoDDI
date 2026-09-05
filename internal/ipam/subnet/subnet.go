@@ -613,12 +613,14 @@ func (m *Manager) autoCreateAddresses(subnetID string, ipNet *net.IPNet) {
 		if !ipNet.Contains(ip) {
 			break
 		}
+		// Never create an address row for the broadcast address: appending
+		// before the check made it allocatable via AllocateIP.
+		if ip.Equal(broadcast) {
+			break
+		}
 		batch = append(batch, ip.String())
 		if len(batch) >= autoCreateBatchSize {
 			flush()
-		}
-		if ip.Equal(broadcast) {
-			break
 		}
 		// Increment IP.
 		for i := len(ip) - 1; i >= 0; i-- {

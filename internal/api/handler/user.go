@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -149,7 +150,14 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		id, req.Username, req.Email, hash, req.DisplayName, enabled, mustChange,
 	)
 	if err != nil {
-		response.Conflict(w, "用户名已存在")
+		// Distinguish duplicate-username (409) from other insert failures
+		// (500) so operators are not misled by a generic conflict message.
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "unique") {
+			response.Conflict(w, "用户名或邮箱已存在")
+			return
+		}
+		slog.Error("creating user failed", "error", err)
+		response.InternalError(w, "创建用户失败")
 		return
 	}
 
