@@ -46,7 +46,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.1.2"
+	Version   = "0.1.3"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
