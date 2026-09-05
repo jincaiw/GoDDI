@@ -167,15 +167,38 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		slog.Error("zone_store: failed to iterate records", "error", err)
 	}
 
-	// Build in-memory zone data.
-	newZones := make(map[string]*zoneData)
-	for zoneID, z := range zoneMap {
+		// Build in-memory zone data.
+		newZones := make(map[string]*zoneData)
+		for zoneID, z := range zoneMap {
 		zd := &zoneData{
 			zone:    z,
 			records: make(map[string][]dns.RR),
 		}
 
 		zoneName := dns.Fqdn(strings.ToLower(z.Name))
+
+		// A zone created via the API stores its SOA fields as zone columns
+		// (soa_mname, soa_rname, serial, ...) and does not necessarily have
+		// an SOA row in dns_records. Synthesize the SOA from the zone
+		// metadata so apex SOA queries and negative answers work; an explicit
+		// SOA record row still takes precedence.
+		if z.SOA_MName != "" && z.SOA_RName != "" {
+			zd.soa = &dns.SOA{
+				Hdr: dns.RR_Header{
+					Name:   zoneName,
+					Rrtype: dns.TypeSOA,
+					Class:  dns.ClassINET,
+					Ttl:    uint32(z.Minimum),
+				},
+				Ns:      dns.Fqdn(z.SOA_MName),
+				Mbox:    dns.Fqdn(z.SOA_RName),
+				Serial:  uint32(z.Serial),
+				Refresh: uint32(z.Refresh),
+				Retry:   uint32(z.Retry),
+				Expire:  uint32(z.Expire),
+				Minttl:  uint32(z.Minimum),
+			}
+		}
 
 		for _, r := range zoneRecords[zoneID] {
 			rr := buildRR(r, zoneName)

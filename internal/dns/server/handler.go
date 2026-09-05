@@ -50,8 +50,12 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	// Step 1: Check local authoritative zones first.
 	// Authoritative answers bypass recursion ACL checks.
 	if resp, found := h.server.lookupAuthoritative(qname, qtype); found {
+		// SetReply resets Rcode to NOERROR; preserve the authoritative
+		// negative-answer code (NXDOMAIN) computed by the zone lookup.
+		rcode := resp.Rcode
 		resp.SetReply(req)
-		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "NOERROR", start, "", false, false)
+		resp.Rcode = rcode
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
 		if err := w.WriteMsg(resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
