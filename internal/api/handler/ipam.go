@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -162,6 +163,10 @@ func DeleteIPAMSpace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := IPAMServices.SpaceMgr.DeleteSpace(id); err != nil {
+		if errors.Is(err, space.ErrSpaceInUse) {
+			response.Conflict(w, "删除失败: "+err.Error())
+			return
+		}
 		response.InternalError(w, "删除失败: "+err.Error())
 		return
 	}

@@ -123,6 +123,21 @@ func CreateDHCPScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate subnet CIDR and range membership here so that user input
+	// errors are reported as 400 instead of bubbling up as a 500 from the
+	// storage layer.
+	if opts.Subnet != "" {
+		_, ipNet, err := net.ParseCIDR(opts.Subnet)
+		if err != nil {
+			response.BadRequest(w, "子网格式无效，应为CIDR格式如 192.168.1.0/24")
+			return
+		}
+		if !ipNet.Contains(startIP) || !ipNet.Contains(endIP) {
+			response.BadRequest(w, "起始/结束IP必须位于子网范围内")
+			return
+		}
+	}
+
 	sc, err := DHCPServices.ScopeMgr.CreateScope(opts)
 	if err != nil {
 		response.InternalError(w, "创建失败: "+err.Error())
@@ -171,6 +186,28 @@ func UpdateDHCPScope(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
+	}
+
+	// Validate subnet CIDR and range membership so user input errors are
+	// reported as 400 instead of a 500 from the storage layer.
+	if opts.Subnet != "" {
+		_, ipNet, err := net.ParseCIDR(opts.Subnet)
+		if err != nil {
+			response.BadRequest(w, "子网格式无效，应为CIDR格式如 192.168.1.0/24")
+			return
+		}
+		if opts.StartIP != "" && opts.EndIP != "" {
+			startIP := net.ParseIP(opts.StartIP)
+			endIP := net.ParseIP(opts.EndIP)
+			if startIP == nil || endIP == nil {
+				response.BadRequest(w, "起始/结束IP地址格式无效")
+				return
+			}
+			if !ipNet.Contains(startIP) || !ipNet.Contains(endIP) {
+				response.BadRequest(w, "起始/结束IP必须位于子网范围内")
+				return
+			}
+		}
 	}
 
 	sc, err := DHCPServices.ScopeMgr.UpdateScope(id, opts)

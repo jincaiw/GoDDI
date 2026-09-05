@@ -162,10 +162,13 @@ func (sm *SessionManager) DeleteSessionByToken(token string) error {
 }
 
 // ListUserSessions returns all active sessions for a user.
+// expires_at is stored as RFC3339 ("T" separator); julianday() is required for
+// a correct comparison against the current time (plain string comparison
+// against datetime('now') output yields wrong results).
 func (sm *SessionManager) ListUserSessions(userID string) ([]Session, error) {
 	rows, err := sm.db.Query(`
 		SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at
-		FROM sessions WHERE user_id = ? AND expires_at > datetime('now') ORDER BY created_at DESC`,
+		FROM sessions WHERE user_id = ? AND julianday(expires_at) > julianday('now') ORDER BY created_at DESC`,
 		userID,
 	)
 	if err != nil {

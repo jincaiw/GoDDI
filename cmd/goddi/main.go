@@ -398,24 +398,44 @@ func runServer(configPath string) error {
 		slog.Info("received shutdown signal", "signal", sig.String())
 	}
 
-	// Graceful shutdown with timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Graceful shutdown with a per-step timeout so an earlier slow step
+	// cannot exhaust the budget of the later ones (a shared context would
+	// already be expired by the time the next Shutdown call runs).
+	newCtx := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 30*time.Second)
+	}
 
-	// Stop DNS server first.
+	// Stop the HTTP server FIRST: while it is running, in-flight requests can
+	// still call taskMgr.SubmitTask. Shutting down the task manager before
+	// HTTP closes its submission channel, and a SubmitTask on a closed channel
+	// panics (send on closed channel).
+	slog.Info("shutting down HTTP server...")
+	{
+		ctx, cancel := newCtx()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Error("HTTP server shutdown error", "error", err)
+		}
+		cancel()
+	}
+
+	// Stop DNS server.
 	if dnsSrv != nil {
 		slog.Info("shutting down DNS server...")
+		ctx, cancel := newCtx()
 		if err := dnsSrv.Shutdown(ctx); err != nil {
 			slog.Error("DNS server shutdown error", "error", err)
 		}
+		cancel()
 	}
 
 	// Stop DHCP server.
 	if dhcpSrv != nil {
 		slog.Info("shutting down DHCP server...")
+		ctx, cancel := newCtx()
 		if err := dhcpSrv.Shutdown(ctx); err != nil {
 			slog.Error("DHCP server shutdown error", "error", err)
 		}
+		cancel()
 	}
 
 	// Close DHCP event logger.
@@ -442,18 +462,14 @@ func runServer(configPath string) error {
 		dnsCache.CleanExpired()
 	}
 
-	// Stop task manager.
+	// Stop task manager (after HTTP so no requests can submit new tasks).
 	if taskMgr != nil {
 		slog.Info("shutting down task manager...")
+		ctx, cancel := newCtx()
 		if err := taskMgr.Shutdown(ctx); err != nil {
 			slog.Error("task manager shutdown error", "error", err)
 		}
-	}
-
-	// Shutdown HTTP server.
-	slog.Info("shutting down HTTP server...")
-	if err := srv.Shutdown(ctx); err != nil {
-		return fmt.Errorf("server shutdown: %w", err)
+		cancel()
 	}
 
 	slog.Info("GoDDI stopped gracefully")

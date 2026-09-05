@@ -1,7 +1,9 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,8 +31,12 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	// Create audit manager for middleware.
 	auditMgr := audit.NewAuditManager(db.DB)
 
-	// Create JWT manager for middleware.
-	jwtMgr, _ := auth.NewJWTManager(cfg.Security.JWTSecret)
+	// Create JWT manager for middleware. Config validation already enforces a
+	// sane secret, but never continue silently if creation fails.
+	jwtMgr, jwtErr := auth.NewJWTManager(cfg.Security.JWTSecret)
+	if jwtErr != nil {
+		slog.Error("invalid JWT secret; authentication will reject all tokens", "error", jwtErr)
+	}
 
 	// Create session manager for JWT session validation.
 	sessMgr := auth.NewSessionManager(db.DB)
@@ -391,6 +397,14 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	// files from ./web/dist (or the equivalent install path) directly.
 	staticHandler := newStaticHandler()
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		// Unknown API routes must return a JSON 404 — falling through to the
+		// SPA would answer "200 OK text/html" and silently break API clients.
+		if strings.HasPrefix(req.URL.Path, "/api/") {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":404,"message":"接口不存在"}`))
+			return
+		}
 		staticHandler.ServeHTTP(w, req)
 	})
 

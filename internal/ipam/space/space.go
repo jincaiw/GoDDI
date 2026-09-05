@@ -2,11 +2,16 @@ package space
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+// ErrSpaceInUse is returned when deleting a space that still has subnets.
+// Handlers map it to HTTP 409 instead of a misleading 500.
+var ErrSpaceInUse = errors.New("space in use")
 
 // Space represents an IPAM address space.
 type Space struct {
@@ -168,7 +173,7 @@ func (m *Manager) DeleteSpace(id string) error {
 	var subnetCount int64
 	m.db.QueryRow("SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ?", id).Scan(&subnetCount)
 	if subnetCount > 0 {
-		return fmt.Errorf("cannot delete space with subnets (%d subnets exist)", subnetCount)
+		return fmt.Errorf("%w: cannot delete space with subnets (%d subnets exist)", ErrSpaceInUse, subnetCount)
 	}
 
 	result, err := m.db.Exec("DELETE FROM ipam_spaces WHERE id = ?", id)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -39,7 +40,10 @@ type Handlers struct {
 // loginRateWindowSec is the lockout window in seconds; pass 0 for the
 // default (15 minutes).
 func NewHandlers(db *sql.DB, jwtSecret string, totpEncryptionKey string, loginRateLimit int, loginRateWindowSec int) *Handlers {
-	jwtMgr, _ := auth.NewJWTManager(jwtSecret)
+	jwtMgr, jwtErr := auth.NewJWTManager(jwtSecret)
+	if jwtErr != nil {
+		slog.Error("invalid JWT secret; authentication will reject all tokens", "error", jwtErr)
+	}
 	sessMgr := auth.NewSessionManager(db)
 	rateLimit := auth.NewRateLimiter(db, loginRateLimit, time.Duration(loginRateWindowSec)*time.Second)
 	if totpEncryptionKey == "" {
@@ -797,5 +801,16 @@ func getClientIP(r *http.Request) string {
 		)
 	}
 
-	return remoteAddr
+	// Strip the port from RemoteAddr (e.g. "192.168.1.10:52344") so that
+	// per-IP rate limiting keys are stable across connections. Without this,
+	// every new TCP connection gets a different key and brute-force locking
+	// never triggers.
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// RemoteAddr may already be a bare IP (or a malformed address);
+		// fall back to the raw value.
+		host = remoteAddr
+	}
+
+	return host
 }

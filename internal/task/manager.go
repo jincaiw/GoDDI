@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -92,11 +93,33 @@ func (m *Manager) executeTask(sub *taskSubmission) {
 	te.status.StartedAt = &now
 	te.mu.Unlock()
 
+	// A panicking task must not take down the whole process: recover,
+	// mark the task as failed, and let the worker pick up the next one.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("task panicked", "id", sub.id, "name", sub.name, "panic", r, "stack", string(debug.Stack()))
+			completedAt := time.Now()
+			te.mu.Lock()
+			te.status.CompletedAt = &completedAt
+			te.status.Status = "failed"
+			te.status.Error = fmt.Sprintf("internal panic: %v", r)
+			te.mu.Unlock()
+		}
+	}()
+
 	// Execute the task function.
 	err := sub.fn(sub.ctx)
 
-	completedAt := time.Now()
 	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	// Do not overwrite a terminal status already recorded (e.g. the task was
+	// cancelled while running and CancelTask set "cancelled").
+	if te.status.Status == "cancelled" {
+		return
+	}
+
+	completedAt := time.Now()
 	te.status.CompletedAt = &completedAt
 
 	if err != nil {
@@ -110,7 +133,6 @@ func (m *Manager) executeTask(sub *taskSubmission) {
 		te.status.Status = "completed"
 		te.status.Progress = 100
 	}
-	te.mu.Unlock()
 }
 
 // cleanupLoop periodically removes old completed tasks.
@@ -195,9 +217,15 @@ func (m *Manager) SubmitTaskWithTimeout(name string, fn TaskFunc, timeout time.D
 	}:
 		slog.Info("task submitted", "id", id, "name", name)
 	default:
-		// Worker pool is full, mark as failed.
-		status.Status = "failed"
-		status.Error = "task queue is full"
+		// Worker pool is full, mark as failed (under the entry lock so this
+		// cannot race with GetTaskStatus or the worker's status updates).
+		te := entry
+		te.mu.Lock()
+		te.status.Status = "failed"
+		te.status.Error = "task queue is full"
+		now := time.Now()
+		te.status.CompletedAt = &now
+		te.mu.Unlock()
 		cancel()
 		return id, fmt.Errorf("task queue is full")
 	}

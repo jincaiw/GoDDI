@@ -354,7 +354,9 @@ func (m *Manager) DeleteScope(id string) error {
 	}
 
 	// Delete expired and released leases for this scope.
-	if _, err := tx.Exec("DELETE FROM dhcp_leases WHERE scope_id = ? AND (lease_end < datetime('now') OR status = 'released')", id); err != nil {
+	// julianday() comparison: lease_end is stored as RFC3339 ("T" separator)
+	// which is not lexicographically comparable to datetime('now') output.
+	if _, err := tx.Exec("DELETE FROM dhcp_leases WHERE scope_id = ? AND (julianday(lease_end) <= julianday('now') OR status = 'released')", id); err != nil {
 		return fmt.Errorf("failed to delete leases: %w", err)
 	}
 

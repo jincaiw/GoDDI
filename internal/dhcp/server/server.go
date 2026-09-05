@@ -70,10 +70,10 @@ func (s *Server) Start(ctx context.Context) error {
 		slog.Warn("DHCP server: failed to expire leases on startup", "error", err)
 	}
 
-	// Determine which interfaces to listen on.
+	// Determine which interfaces to serve.
 	ifaces := s.interfaces
 	if len(ifaces) == 0 {
-		// Listen on all interfaces.
+		// Serve on all interfaces.
 		allIfaces, err := net.Interfaces()
 		if err != nil {
 			return fmt.Errorf("failed to list interfaces: %w", err)
@@ -85,28 +85,51 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start UDP listeners.
+	// Bind the DHCP socket exactly once. Binding 0.0.0.0:67 once per
+	// interface is impossible (EADDRINUSE from the second bind on) — the
+	// single socket receives broadcasts arriving on any interface, and each
+	// served interface only contributes its IPv4 address for DHCP option
+	// fields (giaddr, sname, etc.).
+	conn, err := net.ListenPacket("udp4", "0.0.0.0:67")
+	if err != nil {
+		return fmt.Errorf("failed to listen on :67: %w", err)
+	}
+	s.listeners = append(s.listeners, conn)
+
+	// Register per-interface server IPs and start a receive loop per
+	// interface over the shared socket. Concurrent ReadFrom on the same
+	// UDP socket is safe; each loop uses its interface's server IP when
+	// building replies.
+	primaryIP := net.IPv4zero
 	for _, ifaceName := range ifaces {
-		if err := s.listenOnInterface(ifaceName); err != nil {
-			slog.Error("DHCP server: failed to listen on interface", "interface", ifaceName, "error", err)
+		if err := s.registerInterfaceServerIP(ifaceName); err != nil {
+			slog.Error("DHCP server: skipping interface", "interface", ifaceName, "error", err)
 			continue
 		}
-		slog.Info("DHCP server: listening on interface", "interface", ifaceName)
+		serverIP := s.serverIPs[ifaceName]
+		if primaryIP.IsUnspecified() {
+			primaryIP = serverIP
+		}
+		s.wg.Add(1)
+		go s.receiveLoop(conn, ifaceName, serverIP)
+		slog.Info("DHCP server: serving interface", "interface", ifaceName, "server_ip", serverIP)
 	}
 
-	if len(s.listeners) == 0 {
+	if primaryIP.IsUnspecified() {
+		conn.Close()
 		return fmt.Errorf("no interfaces available for DHCP listening")
 	}
 
 	// Start lease expiry goroutine.
 	go s.leaseExpiryLoop()
 
-	slog.Info("DHCP server started", "listeners", len(s.listeners))
+	slog.Info("DHCP server started", "listeners", len(s.listeners), "interfaces", len(s.serverIPs))
 	return nil
 }
 
-// listenOnInterface starts a UDP listener on the given interface.
-func (s *Server) listenOnInterface(ifaceName string) error {
+// registerInterfaceServerIP resolves the interface's primary IPv4 address and
+// records it for DHCP option fields.
+func (s *Server) registerInterfaceServerIP(ifaceName string) error {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return fmt.Errorf("interface %s not found: %w", ifaceName, err)
@@ -136,24 +159,6 @@ func (s *Server) listenOnInterface(ifaceName string) error {
 	}
 
 	s.serverIPs[ifaceName] = serverIP
-
-	// Listen on port 67 (DHCP server port).
-	// Note: requires root/CAP_NET_RAW for broadcast.
-	// Bind to 0.0.0.0:67 so we receive broadcasts that arrive on any
-	// interface, not just the interface's own IP. We keep serverIP
-	// separately for use in DHCP option fields (giaddr, sname, etc.).
-	listenAddr := "0.0.0.0:67"
-	conn, err := net.ListenPacket("udp4", listenAddr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on :67: %w", err)
-	}
-
-	s.listeners = append(s.listeners, conn)
-
-	// Start receiving packets.
-	s.wg.Add(1)
-	go s.receiveLoop(conn, ifaceName, serverIP)
-
 	return nil
 }
 

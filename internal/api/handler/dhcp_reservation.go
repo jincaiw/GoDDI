@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 
@@ -92,7 +93,14 @@ func CreateDHCPReservation(w http.ResponseWriter, r *http.Request) {
 
 	res, err := DHCPServices.ReservMgr.CreateReservation(req.ScopeID, req.IPAddress, req.MACAddress, req.Hostname, opts)
 	if err != nil {
-		response.InternalError(w, "创建保留失败: "+err.Error())
+		switch {
+		case errors.Is(err, reservation.ErrDuplicate):
+			response.Conflict(w, "保留冲突: "+err.Error())
+		case errors.Is(err, reservation.ErrOutOfRange), errors.Is(err, reservation.ErrInvalidData):
+			response.BadRequest(w, err.Error())
+		default:
+			response.InternalError(w, "创建保留失败: "+err.Error())
+		}
 		return
 	}
 
@@ -142,7 +150,14 @@ func UpdateDHCPReservation(w http.ResponseWriter, r *http.Request) {
 
 	res, err := DHCPServices.ReservMgr.UpdateReservation(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新保留失败: "+err.Error())
+		switch {
+		case errors.Is(err, reservation.ErrDuplicate):
+			response.Conflict(w, "保留冲突: "+err.Error())
+		case errors.Is(err, reservation.ErrOutOfRange), errors.Is(err, reservation.ErrInvalidData):
+			response.BadRequest(w, err.Error())
+		default:
+			response.InternalError(w, "更新保留失败: "+err.Error())
+		}
 		return
 	}
 

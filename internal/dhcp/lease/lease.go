@@ -303,10 +303,17 @@ func (m *Manager) MarkLeaseConflict(id string) error {
 }
 
 // ExpireLeases marks all expired leases as expired.
+// Uses julianday() for the comparison because lease_end is stored in RFC3339
+// format ("2006-01-02T15:04:05Z", note the "T") which cannot be compared
+// lexicographically against datetime('now') output ("2006-01-02 15:04:05").
+// With a plain string compare, leases expiring on the current day never match
+// (byte 'T' > ' ') and are only reclaimed a day late, exhausting pools.
+// julianday() parses both ISO8601 variants; invalid values yield NULL and are
+// skipped (fail-safe).
 func (m *Manager) ExpireLeases() error {
 	_, err := m.db.Exec(`
 		UPDATE dhcp_leases SET status=?
-		WHERE status=? AND lease_end < datetime('now')`,
+		WHERE status=? AND julianday(lease_end) <= julianday('now')`,
 		string(LeaseStatusExpired), string(LeaseStatusActive))
 	if err != nil {
 		return fmt.Errorf("failed to expire leases: %w", err)
