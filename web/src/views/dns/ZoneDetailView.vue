@@ -3,7 +3,7 @@
     <page-header :title="zone?.name || ''" :subtitle="t('dns.zones.title')">
       <n-space>
         <n-button @click="router.push('/dns/zones')">{{ t('common.cancel') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" type="primary" @click="showAddRecord = true">{{ t('dns.records.createRecord') }}</n-button>
+        <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateRecord">{{ t('dns.records.createRecord') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleSync" :disabled="zone?.type !== 'slave'">{{ t('dns.zones.syncZone') }}</n-button>
       </n-space>
@@ -50,7 +50,7 @@
         :columns="recordColumns"
         :data="records"
         :loading="recordsLoading"
-        :pagination="recordPagination"
+        remote :pagination="recordPagination"
         :row-key="(row: DNSRecord) => row.id"
         @update:page="handleRecordPageChange"
         @update:page-size="handleRecordPageSizeChange"
@@ -155,12 +155,12 @@ const recordForm = reactive<CreateDNSRecordRequest & { enabled: boolean }>({
 })
 
 const recordColumns = [
-  { title: t('dns.records.recordName'), key: 'name', ellipsis: { tooltip: true } },
-  { title: t('dns.records.recordType'), key: 'type', width: 80, render: (row: DNSRecord) => h(NTag, { size: 'small' }, { default: () => row.type }) },
-  { title: t('dns.records.recordValue'), key: 'value', ellipsis: { tooltip: true } },
-  { title: t('dns.zones.ttl'), key: 'ttl', width: 80 },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSRecord) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleRecordEnabled(row) }) },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: DNSRecord) => h(NSpace, null, {
+  { title: () => t('dns.records.recordName'), key: 'name', ellipsis: { tooltip: true } },
+  { title: () => t('dns.records.recordType'), key: 'type', width: 80, render: (row: DNSRecord) => h(NTag, { size: 'small' }, { default: () => row.type }) },
+  { title: () => t('dns.records.recordValue'), key: 'value', ellipsis: { tooltip: true } },
+  { title: () => t('dns.zones.ttl'), key: 'ttl', width: 80 },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSRecord) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleRecordEnabled(row) }) },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSRecord) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
@@ -180,7 +180,7 @@ async function loadRecords() {
   recordsLoading.value = true
   try {
     const params: Record<string, unknown> = { page: recordPagination.page, page_size: recordPagination.pageSize }
-    if (recordSearch.value) params.search = recordSearch.value
+    if (recordSearch.value) params.name = recordSearch.value
     if (recordTypeFilter.value) params.type = recordTypeFilter.value
     const result = await listDNSRecords(zoneId, params)
     records.value = result.data
@@ -232,6 +232,12 @@ function editRecord(record: DNSRecord) {
   recordForm.ttl = record.ttl
   recordForm.priority = record.priority
   recordForm.enabled = record.enabled
+  showAddRecord.value = true
+}
+
+function openCreateRecord() {
+  editingRecord.value = null
+  resetRecordForm()
   showAddRecord.value = true
 }
 

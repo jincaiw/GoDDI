@@ -16,7 +16,7 @@
       :columns="columns"
       :data="logs"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DNSQueryLog) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -41,15 +41,15 @@ const filters = reactive({ query_name: '', client_ip: '' })
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
 const columns = [
-  { title: t('logs.dns.queryName'), key: 'query_name', ellipsis: { tooltip: true } },
-  { title: t('logs.dns.queryType'), key: 'query_type', width: 80 },
-  { title: t('logs.dns.clientIp'), key: 'client_ip', width: 130 },
-  { title: t('logs.dns.responseCode'), key: 'response_code', width: 100 },
-  { title: t('logs.dns.responseTime'), key: 'response_time', width: 100, render: (row: DNSQueryLog) => `${row.response_time}ms` },
-  { title: t('logs.dns.cached'), key: 'cached', width: 80, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.cached ? 'success' : 'default' }, { default: () => row.cached ? 'Yes' : 'No' }) },
-  { title: t('logs.dns.blocked'), key: 'blocked', width: 80, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.blocked ? 'error' : 'default' }, { default: () => row.blocked ? 'Yes' : 'No' }) },
-  { title: t('logs.dns.upstream'), key: 'upstream', width: 140 },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
+  { title: () => t('logs.dns.queryName'), key: 'query_name', ellipsis: { tooltip: true } },
+  { title: () => t('logs.dns.queryType'), key: 'query_type', width: 80 },
+  { title: () => t('logs.dns.clientIp'), key: 'client_ip', width: 130 },
+  { title: () => t('logs.dns.responseCode'), key: 'response_code', width: 100 },
+  { title: () => t('logs.dns.responseTime'), key: 'response_time', width: 100, render: (row: DNSQueryLog) => `${row.response_time}ms` },
+  { title: () => t('logs.dns.cached'), key: 'cached', width: 80, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.cached ? 'success' : 'default' }, { default: () => row.cached ? 'Yes' : 'No' }) },
+  { title: () => t('logs.dns.blocked'), key: 'blocked', width: 80, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.blocked ? 'error' : 'default' }, { default: () => row.blocked ? 'Yes' : 'No' }) },
+  { title: () => t('logs.dns.upstream'), key: 'upstream', width: 140 },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
 ]
 
 async function loadData() {

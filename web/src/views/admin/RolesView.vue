@@ -8,7 +8,7 @@
       :columns="columns"
       :data="roles"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: Role) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -90,11 +90,11 @@ const permissionGroups = computed(() => {
 })
 
 const columns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: t('admin.roles.isSystem'), key: 'is_system', width: 90, render: (row: Role) => h(NTag, { size: 'small', type: row.is_system ? 'info' : 'default' }, { default: () => row.is_system ? 'Yes' : 'No' }) },
-  { title: t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small' }, { default: () => `${p.resource}:${p.action}` })) }) },
-  { title: t('common.actions'), key: 'actions', width: 220, render: (row: Role) => h(NSpace, null, {
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+  { title: () => t('admin.roles.isSystem'), key: 'is_system', width: 90, render: (row: Role) => h(NTag, { size: 'small', type: row.is_system ? 'info' : 'default' }, { default: () => row.is_system ? 'Yes' : 'No' }) },
+  { title: () => t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small' }, { default: () => `${p.resource}:${p.action}` })) }) },
+  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Role) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', disabled: row.is_system || !perm.canWrite('role'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', disabled: !perm.canWrite('role'), onClick: () => { assigningRoleId.value = row.id; selectedPerms.value = (row.permissions || []).map(p => p.id); showPermModal.value = true } }, { default: () => t('admin.roles.assignPermissions') }),

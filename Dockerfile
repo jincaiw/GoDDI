@@ -25,7 +25,7 @@ COPY . .
 COPY --from=web-builder /app/web/dist/ /app/web/dist/
 
 # Build binary with version info
-ARG VERSION=0.1.1
+ARG VERSION=0.1.2
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 

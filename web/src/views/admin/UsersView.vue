@@ -8,7 +8,7 @@
       :columns="columns"
       :data="users"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: User) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -80,13 +80,20 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const formData = reactive<CreateUserRequest & { enabled: boolean }>({ username: '', email: '', password: '', display_name: '', enabled: true })
 
 const columns = [
-  { title: t('admin.users.username'), key: 'username' },
-  { title: t('admin.users.displayName'), key: 'display_name' },
-  { title: t('admin.users.email'), key: 'email' },
-  { title: t('admin.users.roles'), key: 'roles', render: (row: User) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: User) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('user') }) },
-  { title: t('admin.users.totpEnabled'), key: 'totp_enabled', width: 80, render: (row: User) => h(NTag, { size: 'small', type: row.totp_enabled ? 'success' : 'default' }, { default: () => row.totp_enabled ? 'ON' : 'OFF' }) },
-  { title: t('common.actions'), key: 'actions', width: 220, render: (row: User) => h(NSpace, null, {
+  { title: () => t('admin.users.username'), key: 'username' },
+  { title: () => t('admin.users.displayName'), key: 'display_name' },
+  { title: () => t('admin.users.email'), key: 'email' },
+  { title: () => t('admin.users.roles'), key: 'roles', render: (row: User) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: User) => h(NSwitch, {
+    value: row.enabled,
+    disabled: !perm.canWrite('user'),
+    onUpdateValue: async (enabled: boolean) => {
+      try { await updateUser(row.id, { enabled }); await loadData() }
+      catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    },
+  }) },
+  { title: () => t('admin.users.totpEnabled'), key: 'totp_enabled', width: 80, render: (row: User) => h(NTag, { size: 'small', type: row.totp_enabled ? 'success' : 'default' }, { default: () => row.totp_enabled ? 'ON' : 'OFF' }) },
+  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: User) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, { username: row.username, email: row.email, display_name: row.display_name, enabled: row.enabled }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', disabled: !perm.canWrite('user'), onClick: () => { assigningUserId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.users.assignRoles') }),

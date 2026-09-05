@@ -11,7 +11,7 @@
       :columns="columns"
       :data="subnets"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: IPAMSubnet) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -69,11 +69,11 @@ const formData = reactive<CreateIPAMSubnetRequest>({ name: '', space_id: '', cid
 const spaceOptions = ref<Array<{ label: string; value: string }>>([])
 
 const columns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('ipam.subnets.cidr'), key: 'cidr' },
-  { title: t('ipam.subnets.vlanId'), key: 'vlan_id', width: 100 },
-  { title: t('ipam.subnets.location'), key: 'location' },
-  { title: t('common.actions'), key: 'actions', width: 240, render: (row: IPAMSubnet) => h(NSpace, null, {
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('ipam.subnets.cidr'), key: 'cidr' },
+  { title: () => t('ipam.subnets.vlanId'), key: 'vlan_id', width: 100 },
+  { title: () => t('ipam.subnets.location'), key: 'location' },
+  { title: () => t('common.actions'), key: 'actions', width: 240, render: (row: IPAMSubnet) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', disabled: !perm.canWrite('ipam'), onClick: () => handleGenerateDhcp(row.id) }, { default: () => t('ipam.subnets.generateDhcpScope') }),

@@ -10,6 +10,7 @@
         <n-form-item path="username" :label="t('auth.username')">
           <n-input
             v-model:value="formData.username"
+            :input-props="{ autocomplete: 'username', 'aria-label': t('auth.username') }"
             @keydown.enter="handleLogin"
           >
             <template #prefix>
@@ -20,6 +21,7 @@
         <n-form-item path="password" :label="t('auth.password')">
           <n-input
             v-model:value="formData.password"
+            :input-props="{ autocomplete: 'current-password', 'aria-label': t('auth.password') }"
             type="password"
             show-password-on="click"
             @keydown.enter="handleLogin"
@@ -100,6 +102,7 @@ const rules = {
 }
 
 async function handleLogin() {
+  if (loading.value) return
   if (formRef.value) {
     try {
       await formRef.value.validate()
@@ -146,17 +149,18 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: radial-gradient(ellipse at 50% 0%, #007aff0c, transparent 65%), var(--app-page-background);
 }
 
 .login-card {
-  width: 400px;
+  width: 420px;
   max-width: 100%;
   box-sizing: border-box;
   padding: 40px;
-  background: var(--n-color);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 24px;
+  box-shadow: 0 20px 70px rgb(0 0 0 / 6%);
 }
 
 .login-header {
@@ -172,19 +176,23 @@ async function handleLogin() {
   font-size: 32px;
   font-weight: 700;
   color: #fff;
-  background: #18a058;
-  border-radius: 12px;
-  margin-bottom: 12px;
+  background: linear-gradient(155deg, #49a3ff, #007aff);
+  border-radius: 16px;
+  margin-bottom: 20px;
 }
 
 .login-header h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -1px;
 }
 
 .login-header p {
-  margin: 4px 0 0;
-  color: var(--n-text-color-3);
-  font-size: 14px;
+  margin: 8px 0 0;
+  color: var(--app-muted);
+  font-size: 13px;
 }
+
+@media (max-width: 480px) { .login-card { padding: 32px 24px; } }
 </style>

@@ -1,14 +1,14 @@
 <template>
   <div>
     <page-header :title="t('admin.groups.title')">
-      <n-button v-if="perm.canWrite('role')" type="primary" @click="openCreate">{{ t('admin.groups.createGroup') }}</n-button>
+      <n-button v-if="perm.canWrite('group')" type="primary" @click="openCreate">{{ t('admin.groups.createGroup') }}</n-button>
     </page-header>
 
     <n-data-table
       :columns="columns"
       :data="groups"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: Group) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -76,14 +76,14 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const formData = reactive<CreateGroupRequest>({ name: '', description: '' })
 
 const columns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: t('admin.users.roles'), key: 'roles', render: (row: Group) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
-  { title: t('common.actions'), key: 'actions', width: 220, render: (row: Group) => h(NSpace, null, {
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+  { title: () => t('admin.users.roles'), key: 'roles', render: (row: Group) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
+  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Group) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', disabled: !perm.canWrite('role'), onClick: () => { assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
-      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('role'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', disabled: !perm.canWrite('group'), onClick: () => { assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
+      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('group'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

@@ -6,7 +6,7 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.dnsQueriesToday')">
             <template #prefix>
-              <n-icon color="#18a058"><globe-outline /></n-icon>
+              <n-icon color="#007aff"><globe-outline /></n-icon>
             </template>
             {{ stats.dnsQueries }}
           </n-statistic>
@@ -16,7 +16,7 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.cacheHitRate')">
             <template #prefix>
-              <n-icon color="#2080f0"><server-outline /></n-icon>
+              <n-icon color="#af52de"><server-outline /></n-icon>
             </template>
             {{ stats.cacheHitRate }}%
           </n-statistic>
@@ -26,7 +26,7 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.activeLeases')">
             <template #prefix>
-              <n-icon color="#f0a020"><desktop-outline /></n-icon>
+              <n-icon color="#ff9500"><desktop-outline /></n-icon>
             </template>
             {{ stats.activeLeases }}
           </n-statistic>
@@ -36,7 +36,7 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.ipamUsage')">
             <template #prefix>
-              <n-icon color="#d03050"><grid-outline /></n-icon>
+              <n-icon color="#007aff"><grid-outline /></n-icon>
             </template>
             {{ stats.ipamUsage }}%
           </n-statistic>
@@ -83,10 +83,10 @@ const chartReady = ref(false)
 const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queries: [] })
 
 const eventColumns = computed(() => [
-  { title: t('logs.audit.user'), key: 'username', width: 100 },
-  { title: t('logs.audit.action'), key: 'action', width: 100 },
-  { title: t('logs.audit.resource'), key: 'resource_type', width: 120 },
-  { title: t('common.createdAt'), key: 'created_at', width: 160,
+  { title: () => t('logs.audit.user'), key: 'username', width: 100 },
+  { title: () => t('logs.audit.action'), key: 'action', width: 100 },
+  { title: () => t('logs.audit.resource'), key: 'resource_type', width: 120 },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160,
     render: (row: { created_at: string }) => {
       const date = new Date(row.created_at)
       return Number.isNaN(date.getTime()) ? row.created_at : date.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -136,12 +136,13 @@ onMounted(async () => {
 <style scoped>
 .metric-card {
   height: 100%;
-  border-radius: 12px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  min-height: 128px;
+  position: relative;
+  border-radius: 16px;
 }
 
-.metric-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-}
+.metric-card :deep(.n-statistic__label), .metric-card :deep(.n-statistic-value) { margin-left: 56px; }
+.metric-card :deep(.n-statistic__label) { font-size: 13px; min-height: 40px; margin-bottom: 0; }
+.metric-card :deep(.n-statistic-value__content) { font-size: 28px; font-weight: 600; letter-spacing: -0.8px; }
+.metric-card :deep(.n-statistic-value__prefix) { position: absolute; left: 20px; top: 40px; margin: 0; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #007aff0c; }
 </style>

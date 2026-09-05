@@ -22,9 +22,9 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.1.1 功能边界
+## v0.1.2 功能边界
 
-GoDDI v0.1.1 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HTTPS/QUIC 配置、DHCP 高可用、SSO、集群和应用扩展运行时为预留 API，本版本会返回 `501 Not Implemented`。
+GoDDI v0.1.2 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HTTPS/QUIC 配置、DHCP 高可用、SSO、集群和应用扩展运行时为预留 API，本版本会返回 `501 Not Implemented`。
 
 ## 快速开始
 
@@ -34,7 +34,7 @@ GoDDI v0.1.1 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HT
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.1/goddi-v0.1.1-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.1.2/goddi-v0.1.2-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
@@ -158,7 +158,7 @@ go build ./cmd/goddi
 - 控制台的“完整备份”包含 DNS、DHCP、IPAM、DNS 安全策略及数据库设置，不包含用户、令牌、审计日志、外部配置和加密密钥。灾难恢复备份应停服后备份整个数据目录、配置和密钥；运行中的 SQLite 数据库应采用支持 SQLite 的一致性备份方式，不要单独复制主数据库文件。
 
 - 两个安全密钥应安全持久保存并单独备份，重启和升级时不要重新生成。更改加密密钥会导致已有 TOTP 密文无法解密。
-- 已验证的测试范围和仍需现场验证的部署场景见 [v0.1.1 生产评审](docs/production-review-v0.1.1.md)。
+- 基线测试范围和仍需现场验证的部署场景见 [v0.1.1 生产评审](docs/production-review-v0.1.1.md)。
 
 - 内置 HTTP 服务不负责 TLS 终止，请部署在 HTTPS 反向代理后或可信内网中。
 - 通过防火墙或反向代理限制 `/metrics` 与管理控制台访问范围。

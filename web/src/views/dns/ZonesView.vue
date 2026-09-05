@@ -1,17 +1,17 @@
 <template>
   <div>
     <page-header :title="t('dns.zones.title')">
-      <n-button v-if="perm.canWrite('dns')" type="primary" @click="showCreateModal = true">
+      <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateZone">
         {{ t('dns.zones.createZone') }}
       </n-button>
     </page-header>
 
     <n-card style="margin-bottom: 16px;">
       <n-space>
-        <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="loadData">
+        <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
           <template #prefix><n-icon><search-outline /></n-icon></template>
         </n-input>
-        <n-select v-model:value="filterType" :options="typeOptions" :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="loadData" />
+        <n-select v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
         <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
       </n-space>
     </n-card>
@@ -20,7 +20,7 @@
       :columns="columns"
       :data="zones"
       :loading="loading"
-      :pagination="zones.length > 0 ? pagination : false"
+      remote :pagination="zones.length > 0 ? pagination : false"
       :row-key="(row: DNSZone) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -134,12 +134,12 @@ const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
 })
 
 const columns = [
-  { title: t('dns.zones.zoneName'), key: 'name' },
-  { title: t('dns.zones.zoneType'), key: 'type', width: 100, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.type === 'primary' ? 'success' : 'info' }, { default: () => row.type }) },
-  { title: t('dns.zones.records'), key: 'records_count', width: 80 },
-  { title: t('dns.zones.dnssec'), key: 'dnssec_enabled', width: 90, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.dnssec_enabled ? 'success' : 'default' }, { default: () => row.dnssec_enabled ? 'ON' : 'OFF' }) },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSZone) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleEnabled(row) }) },
-  { title: t('common.actions'), key: 'actions', width: 200, render: (row: DNSZone) => h(NSpace, null, {
+  { title: () => t('dns.zones.zoneName'), key: 'name' },
+  { title: () => t('dns.zones.zoneType'), key: 'type', width: 100, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.type === 'primary' ? 'success' : 'info' }, { default: () => row.type }) },
+  { title: () => t('dns.zones.records'), key: 'records_count', width: 80 },
+  { title: () => t('dns.zones.dnssec'), key: 'dnssec_enabled', width: 90, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.dnssec_enabled ? 'success' : 'default' }, { default: () => row.dnssec_enabled ? 'ON' : 'OFF' }) },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSZone) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleEnabled(row) }) },
+  { title: () => t('common.actions'), key: 'actions', width: 200, render: (row: DNSZone) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => router.push(`/dns/zones/${row.id}`) }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
@@ -161,6 +161,17 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+function applyFilters() {
+  pagination.page = 1
+  loadData()
+}
+
+function openCreateZone() {
+  editingZone.value = null
+  Object.assign(formData, { name: '', type: 'primary', default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
+  showCreateModal.value = true
 }
 
 function handlePageChange(page: number) {

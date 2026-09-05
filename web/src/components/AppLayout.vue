@@ -5,7 +5,7 @@
       bordered
       collapse-mode="width"
       :collapsed-width="64"
-      :width="240"
+      :width="232"
       :collapsed="collapsed"
       show-trigger
       @collapse="collapsed = true"
@@ -64,7 +64,7 @@
               <template #icon><n-icon><language-outline /></n-icon></template>
             </n-button>
           </n-dropdown>
-          <n-switch size="small" :value="isDark" @update:value="toggleDark">
+          <n-switch size="small" :aria-label="t('common.appearance')" :value="isDark" @update:value="toggleDark">
             <template #checked>
               <n-icon><sunny-outline /></n-icon>
             </template>
@@ -83,7 +83,7 @@
         </div>
       </n-layout-header>
       <n-layout-content
-        :content-style="isMobile ? 'padding: 16px;' : 'padding: 24px 28px;'"
+        :content-style="isMobile ? 'padding: 24px 16px;' : 'padding: 32px;'"
         :native-scrollbar="false"
         class="app-content"
         :class="{ 'app-content-dark': isDark }"
@@ -354,11 +354,10 @@ async function handleUserAction(key: string) {
 .logo {
   display: flex;
   align-items: center;
-  justify-content: center;
-  height: 56px;
+  justify-content: flex-start;
+  height: 88px;
   padding: 0 20px;
-  gap: 8px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: 12px;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -366,20 +365,26 @@ async function handleUserAction(key: string) {
 .app-shell,
 .desktop-sider {
   height: 100vh;
+  height: 100dvh;
 }
+
+.desktop-sider :deep(.n-menu) { padding: 8px; }
+.desktop-sider :deep(.n-menu-item-content) { padding-left: 16px !important; }
+.desktop-sider :deep(.n-submenu-children .n-menu-item-content) { padding-left: 28px !important; }
+.desktop-sider :deep(.n-menu-item-content__icon) { font-size: 19px !important; }
 
 .main-layout {
   min-width: 0;
 }
 
 .app-header {
-  height: 60px;
+  height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  background: color-mix(in srgb, var(--n-color) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--app-surface) 86%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
 }
 
 .header-left,
@@ -395,12 +400,13 @@ async function handleUserAction(key: string) {
 }
 
 .app-content {
-  height: calc(100vh - 60px);
+  height: calc(100vh - 64px);
+  height: calc(100dvh - 64px);
   background: var(--app-page-background);
 }
 
 .app-content-dark {
-  --app-page-background: #101014;
+  --app-page-background: #1c1c1e;
 }
 
 .content-container {
@@ -415,19 +421,28 @@ async function handleUserAction(key: string) {
 
 .logo-collapsed {
   padding: 0;
+  justify-content: center;
 }
 
 .logo-icon {
-  font-size: 24px;
-  font-weight: 700;
-  color: #18a058;
+  font-size: 22px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(155deg, #49a3ff, #007aff);
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  box-shadow: 0 3px 8px #007aff20;
   flex-shrink: 0;
 }
 
 .logo-text {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--n-text-color);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  color: var(--app-text);
 }
 
 @media (max-width: 899px) {
@@ -438,5 +453,6 @@ async function handleUserAction(key: string) {
   .header-actions {
     gap: 4px;
   }
+  .header-left .n-breadcrumb { overflow: hidden; white-space: nowrap; }
 }
 </style>

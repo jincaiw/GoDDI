@@ -8,7 +8,7 @@
       :columns="columns"
       :data="reservations"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DHCPReservation) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -19,7 +19,7 @@
         <n-form-item :label="t('dhcp.leases.ip')"><n-input v-model:value="formData.ip_address" /></n-form-item>
         <n-form-item :label="t('dhcp.leases.mac')"><n-input v-model:value="formData.mac_address" /></n-form-item>
         <n-form-item :label="t('dhcp.leases.hostname')"><n-input v-model:value="formData.hostname" /></n-form-item>
-        <n-form-item :label="t('dhcp.leases.scope')"><n-input v-model:value="formData.scope_id" /></n-form-item>
+        <n-form-item :label="t('dhcp.leases.scope')" required><n-select v-model:value="formData.scope_id" :options="scopeOptions" filterable /></n-form-item>
         <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
         <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" /></n-form-item>
       </n-form>
@@ -42,11 +42,18 @@ import { NButton, NSwitch, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
+import { listDHCPScopes } from '@/api/dhcp'
 import { listDHCPReservations, createDHCPReservation, updateDHCPReservation, deleteDHCPReservation, type DHCPReservation, type CreateDHCPReservationRequest } from '@/api/dhcp'
 
 const { t } = useI18n()
 const message = useMessage()
 const perm = usePermission()
+const scopeOptions = ref<Array<{ label: string; value: string }>>([])
+
+async function loadScopes() {
+  try { scopeOptions.value = (await listDHCPScopes({ page_size: 100 })).data.map(s => ({ label: `${s.name} (${s.subnet})`, value: s.id })) }
+  catch (err) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+}
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -60,12 +67,12 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const formData = reactive<CreateDHCPReservationRequest & { description: string }>({ ip_address: '', mac_address: '', hostname: '', scope_id: '', enabled: true, description: '' })
 
 const columns = [
-  { title: t('dhcp.leases.ip'), key: 'ip_address' },
-  { title: t('dhcp.leases.mac'), key: 'mac_address' },
-  { title: t('dhcp.leases.hostname'), key: 'hostname' },
-  { title: t('dhcp.leases.scope'), key: 'scope_name' },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPReservation) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: DHCPReservation) => h(NSpace, null, {
+  { title: () => t('dhcp.leases.ip'), key: 'ip_address' },
+  { title: () => t('dhcp.leases.mac'), key: 'mac_address' },
+  { title: () => t('dhcp.leases.hostname'), key: 'hostname' },
+  { title: () => t('dhcp.leases.scope'), key: 'scope_name' },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPReservation) => h(NSwitch, { value: row.enabled, disabled: true }) },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPReservation) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
@@ -92,6 +99,7 @@ function openCreate() {
 }
 
 async function handleSubmit() {
+  if (!formData.scope_id) { message.error(t('dhcp.options.scopeRequired')); return }
   submitting.value = true
   try {
     if (editing.value) { await updateDHCPReservation(editing.value.id, formData); message.success(t('common.updateSuccess')) }
@@ -105,5 +113,5 @@ async function handleDelete() {
   showDeleteConfirm.value = false
 }
 
-onMounted(loadData)
+onMounted(() => { loadData(); loadScopes() })
 </script>

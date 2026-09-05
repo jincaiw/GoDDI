@@ -16,7 +16,7 @@
       :columns="columns"
       :data="logs"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DHCPLog) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -41,13 +41,13 @@ const filters = reactive({ client_mac: '', event_type: '' })
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
 const columns = [
-  { title: t('logs.dhcp.eventType'), key: 'event_type', width: 120 },
-  { title: t('logs.dhcp.clientMac'), key: 'client_mac', width: 150 },
-  { title: t('logs.dhcp.clientIp'), key: 'client_ip', width: 130 },
-  { title: t('logs.dhcp.hostname'), key: 'hostname', width: 130 },
-  { title: t('logs.dhcp.scope'), key: 'scope_name', width: 130 },
-  { title: t('logs.dhcp.message'), key: 'message', ellipsis: { tooltip: true } },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
+  { title: () => t('logs.dhcp.eventType'), key: 'event_type', width: 120 },
+  { title: () => t('logs.dhcp.clientMac'), key: 'client_mac', width: 150 },
+  { title: () => t('logs.dhcp.clientIp'), key: 'client_ip', width: 130 },
+  { title: () => t('logs.dhcp.hostname'), key: 'hostname', width: 130 },
+  { title: () => t('logs.dhcp.scope'), key: 'scope_name', width: 130 },
+  { title: () => t('logs.dhcp.message'), key: 'message', ellipsis: { tooltip: true } },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
 ]
 
 async function loadData() {

@@ -22,9 +22,9 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ![Backup management](docs/images/backup.png)
 
-## Version 0.1.1 Scope
+## Version 0.1.2 Scope
 
-GoDDI v0.1.1 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
+GoDDI v0.1.2 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
 
 ## Quick Start
 
@@ -34,7 +34,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.1/goddi-v0.1.1-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.1.2/goddi-v0.1.2-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
@@ -158,7 +158,7 @@ The frontend must be built before the Go binary because `web/dist` is embedded a
 - Console "full" backups cover DNS, DHCP, IPAM, DNS security policies, and database settings, not users, tokens, audit logs, external configuration, or encryption keys. For disaster recovery, stop the service and back up the complete data directory plus configuration and secrets. Do not copy a live SQLite database without its WAL or a SQLite-aware backup procedure.
 
 - Persist both security keys securely across restarts and back them up separately. Changing the encryption key makes existing encrypted TOTP secrets unreadable. Do not regenerate keys during routine upgrades.
-- See the [v0.1.1 production review](docs/production-review-v0.1.1.md) for verified coverage and remaining deployment qualification requirements.
+- See the [v0.1.1 production review](docs/production-review-v0.1.1.md) for the baseline verified coverage and remaining deployment qualification requirements.
 
 - Put GoDDI behind HTTPS or a trusted private network; the built-in HTTP listener does not terminate TLS.
 - Restrict `/metrics` and the management console with firewall or reverse-proxy policy.

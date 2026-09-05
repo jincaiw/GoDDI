@@ -21,11 +21,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:6080',
+        target: process.env.GODDI_DEV_API_URL || 'http://127.0.0.1:6080',
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://localhost:6080',
+        target: process.env.GODDI_DEV_API_URL || 'http://127.0.0.1:6080',
         changeOrigin: true,
       },
     },

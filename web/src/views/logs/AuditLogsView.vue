@@ -17,7 +17,7 @@
       :columns="columns"
       :data="logs"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: AuditLog) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -42,13 +42,13 @@ const filters = reactive({ username: '', action: '', resource: '' })
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
 const columns = [
-  { title: t('logs.audit.user'), key: 'username', width: 120 },
-  { title: t('logs.audit.action'), key: 'action', width: 120 },
-  { title: t('logs.audit.resource'), key: 'resource', width: 120 },
-  { title: t('logs.audit.resourceId'), key: 'resource_id', width: 120 },
-  { title: t('logs.audit.details'), key: 'details', ellipsis: { tooltip: true } },
-  { title: t('logs.audit.ip'), key: 'ip', width: 130 },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
+  { title: () => t('logs.audit.user'), key: 'username', width: 120 },
+  { title: () => t('logs.audit.action'), key: 'action', width: 120 },
+  { title: () => t('logs.audit.resource'), key: 'resource', width: 120 },
+  { title: () => t('logs.audit.resourceId'), key: 'resource_id', width: 120 },
+  { title: () => t('logs.audit.details'), key: 'details', ellipsis: { tooltip: true } },
+  { title: () => t('logs.audit.ip'), key: 'ip', width: 130 },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
 ]
 
 async function loadData() {

@@ -1,5 +1,6 @@
 export default {
   common: {
+    appearance: '深色外观',
     create: '新建',
     edit: '编辑',
     delete: '删除',
@@ -209,6 +210,7 @@ export default {
       code: '选项代码',
       optionName: '选项名称',
       optionValue: '选项值',
+      scopeRequired: '请先选择作用域再保存。',
       scope: '作用域',
       createOption: '新建选项',
       editOption: '编辑选项',

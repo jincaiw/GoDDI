@@ -57,10 +57,10 @@ const queryForm = reactive({
 const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(t => ({ label: t, value: t }))
 
 const answerColumns = [
-  { title: t('dns.records.recordName'), key: 'name' },
-  { title: t('dns.records.recordType'), key: 'type', width: 80 },
-  { title: t('dns.records.recordValue'), key: 'data' },
-  { title: t('dns.zones.ttl'), key: 'ttl', width: 80 },
+  { title: () => t('dns.records.recordName'), key: 'name' },
+  { title: () => t('dns.records.recordType'), key: 'type', width: 80 },
+  { title: () => t('dns.records.recordValue'), key: 'data' },
+  { title: () => t('dns.zones.ttl'), key: 'ttl', width: 80 },
 ]
 
 async function handleQuery() {

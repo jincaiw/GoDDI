@@ -8,7 +8,7 @@
       :columns="columns"
       :data="spaces"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: IPAMSpace) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -56,10 +56,10 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const formData = reactive<CreateIPAMSpaceRequest>({ name: '', description: '' })
 
 const columns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: IPAMSpace) => h(NSpace, null, {
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: IPAMSpace) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),

@@ -18,7 +18,7 @@
       :columns="columns"
       :data="addresses"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: IPAMAddress) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -79,25 +79,25 @@ const allocateForm = reactive<AllocateIPRequest>({ subnet_id: '', ip_address: ''
 
 const statusOptions = [
   { label: t('ipam.addresses.statusUsed'), value: 'used' },
-  { label: t('ipam.addresses.statusFree'), value: 'free' },
+  { label: t('ipam.addresses.statusFree'), value: 'available' },
   { label: t('ipam.addresses.statusReserved'), value: 'reserved' },
   { label: t('ipam.addresses.statusConflict'), value: 'conflict' },
 ]
 
 function statusTag(status: string) {
   const map: Record<string, 'success' | 'default' | 'warning' | 'error'> = {
-    used: 'success', free: 'default', reserved: 'warning', conflict: 'error',
+    used: 'success', available: 'default', reserved: 'warning', conflict: 'error',
   }
   return map[status] || 'default'
 }
 
 const columns = [
-  { title: t('ipam.addresses.ip'), key: 'ip_address' },
-  { title: t('common.status'), key: 'status', width: 100, render: (row: IPAMAddress) => h(NTag, { size: 'small', type: statusTag(row.status) }, { default: () => row.status }) },
-  { title: t('ipam.addresses.hostname'), key: 'hostname' },
-  { title: t('ipam.addresses.mac'), key: 'mac_address' },
-  { title: t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: t('common.actions'), key: 'actions', width: 100, render: (row: IPAMAddress) => row.status === 'used' ? h(NButton, { size: 'small', type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') }) : null },
+  { title: () => t('ipam.addresses.ip'), key: 'ip_address' },
+  { title: () => t('common.status'), key: 'status', width: 100, render: (row: IPAMAddress) => h(NTag, { size: 'small', type: statusTag(row.status) }, { default: () => row.status }) },
+  { title: () => t('ipam.addresses.hostname'), key: 'hostname' },
+  { title: () => t('ipam.addresses.mac'), key: 'mac_address' },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: IPAMAddress) => row.status === 'used' ? h(NButton, { size: 'small', type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') }) : null },
 ]
 
 async function loadData() {

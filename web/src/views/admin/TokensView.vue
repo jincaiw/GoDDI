@@ -8,7 +8,7 @@
       :columns="columns"
       :data="tokens"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: APIToken) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -71,12 +71,12 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const createForm = reactive<{ name: string; description: string; expires_at: number | null }>({ name: '', description: '', expires_at: null })
 
 const columns = [
-  { title: t('admin.tokens.tokenName'), key: 'name' },
-  { title: t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: t('admin.users.username'), key: 'username' },
-  { title: t('admin.tokens.expiresAt'), key: 'expires_at', width: 160 },
-  { title: t('admin.tokens.lastUsedAt'), key: 'last_used_at', width: 160 },
-  { title: t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('token'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
+  { title: () => t('admin.tokens.tokenName'), key: 'name' },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+  { title: () => t('admin.users.username'), key: 'username' },
+  { title: () => t('admin.tokens.expiresAt'), key: 'expires_at', width: 160 },
+  { title: () => t('admin.tokens.lastUsedAt'), key: 'last_used_at', width: 160 },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('token'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
 ]
 
 async function loadData() {

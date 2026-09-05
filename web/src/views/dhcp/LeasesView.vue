@@ -15,7 +15,7 @@
       :columns="columns"
       :data="leases"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DHCPLease) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -55,14 +55,14 @@ const statusOptions = [
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
 const columns = [
-  { title: t('dhcp.leases.ip'), key: 'ip' },
-  { title: t('dhcp.leases.mac'), key: 'mac' },
-  { title: t('dhcp.leases.hostname'), key: 'hostname', ellipsis: { tooltip: true } },
-  { title: t('dhcp.leases.scope'), key: 'scope_name' },
-  { title: t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: row.status === 'active' ? 'success' : 'default' }, { default: () => row.status }) },
-  { title: t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
-  { title: t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
-  { title: t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
+  { title: () => t('dhcp.leases.ip'), key: 'ip' },
+  { title: () => t('dhcp.leases.mac'), key: 'mac' },
+  { title: () => t('dhcp.leases.hostname'), key: 'hostname', ellipsis: { tooltip: true } },
+  { title: () => t('dhcp.leases.scope'), key: 'scope_name' },
+  { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: row.status === 'active' ? 'success' : 'default' }, { default: () => row.status }) },
+  { title: () => t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
+  { title: () => t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
 ]
 
 async function loadData() {

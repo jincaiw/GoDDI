@@ -131,11 +131,11 @@ const blockListForm = reactive({ name: '', type: 'custom', url: '', enabled: tru
 const blockRuleForm = reactive({ pattern: '', match_type: 'suffix', response_type: 'NXDOMAIN', response_data: '', enabled: true })
 
 const blockListColumns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('common.type'), key: 'type', render: (row: BlockList) => h(NTag, { size: 'small' }, { default: () => row.type }) },
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('common.type'), key: 'type', render: (row: BlockList) => h(NTag, { size: 'small' }, { default: () => row.type }) },
   { title: 'Rules', key: 'entry_count', width: 80 },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockList) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: BlockList) => h(NSpace, null, {
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockList) => h(NSwitch, { value: row.enabled, disabled: true }) },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: BlockList) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { selectedBlockList.value = row; loadBlockRules(row.id) } }, { default: () => 'Rules' }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockList(row.id) }, { default: () => t('common.delete') }),
@@ -148,11 +148,11 @@ const blockRuleLoading = ref(false)
 const blockRules = ref<BlockRule[]>([])
 
 const blockRuleColumns = [
-  { title: t('dns.security.pattern'), key: 'pattern' },
-  { title: t('dns.security.matchType'), key: 'match_type', render: (row: BlockRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
-  { title: t('dns.security.responseType'), key: 'response_type', render: (row: BlockRule) => h(NTag, { size: 'small', type: row.response_type === 'DROP' ? 'error' : 'warning' }, { default: () => row.response_type }) },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: t('common.actions'), key: 'actions', width: 80, render: (row: BlockRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockRule(row.list_id, row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('dns.security.pattern'), key: 'pattern' },
+  { title: () => t('dns.security.matchType'), key: 'match_type', render: (row: BlockRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
+  { title: () => t('dns.security.responseType'), key: 'response_type', render: (row: BlockRule) => h(NTag, { size: 'small', type: row.response_type === 'DROP' ? 'error' : 'warning' }, { default: () => row.response_type }) },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: BlockRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockRule(row.list_id, row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Allow Rules
@@ -162,10 +162,10 @@ const showAllowRuleModal = ref(false)
 const allowRuleForm = reactive({ pattern: '', match_type: 'exact', enabled: true })
 
 const allowRuleColumns = [
-  { title: t('dns.security.pattern'), key: 'pattern' },
-  { title: t('dns.security.matchType'), key: 'match_type', render: (row: AllowRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: AllowRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: t('common.actions'), key: 'actions', width: 80, render: (row: AllowRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteAllowRule(row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('dns.security.pattern'), key: 'pattern' },
+  { title: () => t('dns.security.matchType'), key: 'match_type', render: (row: AllowRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: AllowRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: AllowRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteAllowRule(row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Client Policies
@@ -175,12 +175,12 @@ const showPolicyModal = ref(false)
 const policyForm = reactive({ name: '', source_cidr: '', action: 'allow', block_list_ids: [] as string[], allow_rule_ids: [] as string[], enabled: true, priority: 0 })
 
 const policyColumns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('dns.security.sourceCidr'), key: 'source_cidr' },
-  { title: t('dns.security.action'), key: 'action', render: (row: ClientPolicy) => h(NTag, { size: 'small', type: row.action === 'allow' ? 'success' : 'error' }, { default: () => row.action }) },
-  { title: t('common.priority'), key: 'priority', width: 80 },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: ClientPolicy) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: t('common.actions'), key: 'actions', width: 80, render: (row: ClientPolicy) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeletePolicy(row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('dns.security.sourceCidr'), key: 'source_cidr' },
+  { title: () => t('dns.security.action'), key: 'action', render: (row: ClientPolicy) => h(NTag, { size: 'small', type: row.action === 'allow' ? 'success' : 'error' }, { default: () => row.action }) },
+  { title: () => t('common.priority'), key: 'priority', width: 80 },
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: ClientPolicy) => h(NSwitch, { value: row.enabled, disabled: true }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: ClientPolicy) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeletePolicy(row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Load functions

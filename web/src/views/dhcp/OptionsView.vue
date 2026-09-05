@@ -8,7 +8,7 @@
       :columns="columns"
       :data="options"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DHCPOption) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -19,7 +19,7 @@
         <n-form-item :label="t('dhcp.options.code')"><n-input-number v-model:value="formData.code" :min="1" :max="254" style="width: 100%;" /></n-form-item>
         <n-form-item :label="t('dhcp.options.optionValue')"><n-input v-model:value="formData.value" /></n-form-item>
         <n-form-item :label="t('common.priority')"><n-select v-model:value="formData.priority" :options="[{ label: 'Global', value: 'global' }, { label: 'Scope', value: 'scope' }, { label: 'Client Class', value: 'client_class' }, { label: 'Reservation', value: 'reservation' }]" clearable /></n-form-item>
-        <n-form-item :label="t('dhcp.options.scope')"><n-input v-model:value="formData.scope_id" placeholder="Optional scope ID" /></n-form-item>
+        <n-form-item :label="t('dhcp.options.scope')" required><n-select v-model:value="formData.scope_id" :options="scopeOptions" filterable :disabled="!!editing" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
@@ -40,11 +40,18 @@ import { NButton, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
+import { listDHCPScopes } from '@/api/dhcp'
 import { listDHCPOptions, createDHCPOption, updateDHCPOption, deleteDHCPOption, type DHCPOption, type CreateDHCPOptionRequest } from '@/api/dhcp'
 
 const { t } = useI18n()
 const message = useMessage()
 const perm = usePermission()
+const scopeOptions = ref<Array<{ label: string; value: string }>>([])
+
+async function loadScopes() {
+  try { scopeOptions.value = (await listDHCPScopes({ page_size: 100 })).data.map(s => ({ label: `${s.name} (${s.subnet})`, value: s.id })) }
+  catch (err) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+}
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -58,11 +65,11 @@ const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicke
 const formData = reactive<CreateDHCPOptionRequest>({ code: 1, value: '', priority: 'global', scope_id: '' })
 
 const columns = [
-  { title: t('dhcp.options.code'), key: 'code', width: 80 },
-  { title: t('dhcp.options.optionValue'), key: 'value', ellipsis: { tooltip: true } },
-  { title: t('dhcp.options.scope'), key: 'scope_id' },
-  { title: t('common.priority'), key: 'priority', width: 100 },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: DHCPOption) => h(NSpace, null, {
+  { title: () => t('dhcp.options.code'), key: 'code', width: 80 },
+  { title: () => t('dhcp.options.optionValue'), key: 'value', ellipsis: { tooltip: true } },
+  { title: () => t('dhcp.options.scope'), key: 'scope_id' },
+  { title: () => t('common.priority'), key: 'priority', width: 100 },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPOption) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editing.value = row; Object.assign(formData, { code: row.code, value: row.value, priority: row.priority, scope_id: row.scope_id }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
@@ -89,6 +96,7 @@ function openCreate() {
 }
 
 async function handleSubmit() {
+  if (!formData.scope_id) { message.error(t('dhcp.options.scopeRequired')); return }
   submitting.value = true
   try {
     if (editing.value) { await updateDHCPOption(editing.value.id, formData); message.success(t('common.updateSuccess')) }
@@ -102,5 +110,5 @@ async function handleDelete() {
   showDeleteConfirm.value = false
 }
 
-onMounted(loadData)
+onMounted(() => { loadData(); loadScopes() })
 </script>

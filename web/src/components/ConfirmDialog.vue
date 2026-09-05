@@ -1,6 +1,7 @@
 <template>
   <n-modal
     v-model:show="showModal"
+    @update:show="handleVisibilityChange"
     preset="card"
     :title="title"
     type="warning"
@@ -44,7 +45,13 @@ const confirmLabel = computed(() => props.confirmText || t('common.confirm'))
 const cancelLabel = computed(() => props.cancelText || t('common.cancel'))
 
 watch(() => props.show, (val) => { showModal.value = val })
-watch(showModal, (val) => { emit('update:show', val) })
+watch(showModal, (val) => {
+  emit('update:show', val)
+})
+
+function handleVisibilityChange(visible: boolean) {
+  if (!visible) emit('cancel')
+}
 
 function handleConfirm() {
   emit('confirm')
@@ -52,7 +59,7 @@ function handleConfirm() {
 }
 
 function handleCancel() {
-  emit('cancel')
   showModal.value = false
+  emit('cancel')
 }
 </script>

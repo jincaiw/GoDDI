@@ -1,5 +1,6 @@
 export default {
   common: {
+    appearance: 'Dark appearance',
     create: 'Create',
     edit: 'Edit',
     delete: 'Delete',
@@ -209,6 +210,7 @@ export default {
       code: 'Option Code',
       optionName: 'Option Name',
       optionValue: 'Option Value',
+      scopeRequired: 'Choose a scope before saving.',
       scope: 'Scope',
       createOption: 'Create Option',
       editOption: 'Edit Option',

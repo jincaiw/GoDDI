@@ -46,12 +46,12 @@ const actionId = ref('')
 const restoreTarget = ref<Backup | null>(null)
 
 const columns = [
-  { title: t('settings.backup.backupName'), key: 'description', render: (row: Backup) => backupName(row) },
-  { title: t('settings.backup.backupSize'), key: 'size_bytes', render: (row: Backup) => formatSize(row.size_bytes) },
-  { title: t('settings.backup.backupType'), key: 'type', render: (row: Backup) => h(NTag, { size: 'small' }, { default: () => row.type }) },
-  { title: t('settings.backup.backupStatus'), key: 'status', render: (row: Backup) => h(NTag, { size: 'small', type: row.status === 'completed' ? 'success' : row.status === 'failed' ? 'error' : 'warning' }, { default: () => row.status }) },
-  { title: t('common.createdAt'), key: 'created_at', width: 160 },
-  { title: t('common.actions'), key: 'actions', width: 260, render: (row: Backup) => h(NSpace, null, {
+  { title: () => t('settings.backup.backupName'), key: 'description', render: (row: Backup) => backupName(row) },
+  { title: () => t('settings.backup.backupSize'), key: 'size_bytes', render: (row: Backup) => formatSize(row.size_bytes) },
+  { title: () => t('settings.backup.backupType'), key: 'type', render: (row: Backup) => h(NTag, { size: 'small' }, { default: () => row.type }) },
+  { title: () => t('settings.backup.backupStatus'), key: 'status', render: (row: Backup) => h(NTag, { size: 'small', type: row.status === 'completed' ? 'success' : row.status === 'failed' ? 'error' : 'warning' }, { default: () => row.status }) },
+  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
+  { title: () => t('common.actions'), key: 'actions', width: 260, render: (row: Backup) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', disabled: row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
       h(NButton, { size: 'small', type: 'warning', onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),

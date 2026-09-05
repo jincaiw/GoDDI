@@ -8,7 +8,7 @@
       :columns="columns"
       :data="scopes"
       :loading="loading"
-      :pagination="pagination"
+      remote :pagination="pagination"
       :row-key="(row: DHCPScope) => row.id"
       @update:page="handlePageChange"
       @update:page-size="handlePageSizeChange"
@@ -65,21 +65,21 @@ const formData = reactive<CreateDHCPScopeRequest & { enabled: boolean; descripti
 })
 
 const columns = [
-  { title: t('common.name'), key: 'name' },
-  { title: t('dhcp.scopes.subnet'), key: 'subnet' },
-  { title: t('dhcp.scopes.startIp'), key: 'start_ip', width: 130 },
-  { title: t('dhcp.scopes.endIp'), key: 'end_ip', width: 130 },
-  { title: t('dhcp.scopes.leaseTime'), key: 'lease_time', width: 100 },
-  { title: t('dhcp.scopes.activeLeases'), key: 'active_leases', width: 100 },
+  { title: () => t('common.name'), key: 'name' },
+  { title: () => t('dhcp.scopes.subnet'), key: 'subnet' },
+  { title: () => t('dhcp.scopes.startIp'), key: 'start_ip', width: 130 },
+  { title: () => t('dhcp.scopes.endIp'), key: 'end_ip', width: 130 },
+  { title: () => t('dhcp.scopes.leaseTime'), key: 'lease_time', width: 100 },
+  { title: () => t('dhcp.scopes.activeLeases'), key: 'active_leases', width: 100 },
   {
-    title: t('dhcp.scopes.usage'), key: 'usage', width: 120,
+    title: () => t('dhcp.scopes.usage'), key: 'usage', width: 120,
     render: (row: DHCPScope) => {
       const pct = row.total_addresses > 0 ? Math.round((row.active_leases / row.total_addresses) * 100) : 0
       return h(NProgress, { type: 'line', percentage: pct, indicatorPlacement: 'inside', status: pct > 90 ? 'error' : pct > 70 ? 'warning' : 'success' })
     },
   },
-  { title: t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPScope) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dhcp'), onUpdateValue: () => toggleEnabled(row) }) },
-  { title: t('common.actions'), key: 'actions', width: 160, render: (row: DHCPScope) => h(NSpace, null, {
+  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPScope) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dhcp'), onUpdateValue: () => toggleEnabled(row) }) },
+  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPScope) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { editingScope.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
