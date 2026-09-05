@@ -24,7 +24,7 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ## Version 0.1.2 Scope
 
-GoDDI v0.1.2 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
+GoDDI v0.1.3 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
 
 ## Quick Start
 
@@ -34,7 +34,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.2/goddi-v0.1.2-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.1.3/goddi-v0.1.3-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
