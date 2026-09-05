@@ -55,3 +55,4 @@ config.prod.yaml
 
 # Temporary files
 /tmp/
+web/dist-ci/
