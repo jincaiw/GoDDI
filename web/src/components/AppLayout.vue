@@ -214,7 +214,7 @@ const breadcrumbs = computed(() => {
     if (path.includes('/dns')) items.push({ label: t('nav.logsDns'), path: '/logs/dns' })
     if (path.includes('/dhcp')) items.push({ label: t('nav.logsDhcp'), path: '/logs/dhcp' })
   } else if (path.startsWith('/settings')) {
-    items.push({ label: t('nav.system'), path: '/settings' })
+    items.push({ label: t('nav.administration'), path: '/admin' })
     if (path.includes('/backup')) items.push({ label: t('nav.settingsBackup'), path: '/settings/backup' })
     else items.push({ label: t('settings.title'), path: '/settings' })
   }
@@ -278,12 +278,11 @@ const menuOptionList: MenuOption[] = [
     ],
   },
   {
-    key: 'system-group',
-    label: () => t('nav.system'),
-    icon: renderIcon(SettingsOutline),
+    key: '/tools',
+    label: () => t('nav.tools'),
+    icon: renderIcon(TerminalOutline),
     children: [
-      { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
-      { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
+      { key: '/tools/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
     ],
   },
   {
@@ -296,6 +295,8 @@ const menuOptionList: MenuOption[] = [
       { key: '/admin/roles', label: () => t('nav.adminRoles'), icon: renderIcon(KeyOutline) },
       { key: '/admin/tokens', label: () => t('nav.adminTokens'), icon: renderIcon(KeyOutline) },
       { key: '/admin/sessions', label: () => t('nav.adminSessions'), icon: renderIcon(TimeOutline) },
+      { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
+      { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
     ],
   },
 ]

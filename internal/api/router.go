@@ -67,8 +67,11 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	r.Get("/api/v1/openapi.json", OpenAPIHandler)
 
 	// Prometheus metrics endpoint.
+	// Authenticated: the payload exposes request volumes, route patterns and
+	// status distributions, which is useful reconnaissance for an attacker.
 	if cfg.Metrics.Enabled {
-		r.Handle(cfg.Metrics.Path, metrics.PrometheusHandler())
+		r.With(middleware.Authentication(jwtMgr, sessMgr, tokenMgr, db.DB)).
+			Handle(cfg.Metrics.Path, metrics.PrometheusHandler())
 	}
 
 	// API v1 routes.

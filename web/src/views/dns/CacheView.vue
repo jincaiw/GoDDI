@@ -18,14 +18,14 @@
       <n-gi span="4 m:2 l:1">
         <n-card>
           <n-statistic :label="t('dns.cache.hitRate')">
-            <template #default>{{ ((stats.hit_rate ?? 0) * 100).toFixed(1) }}%</template>
+            <template #default>{{ (stats.hit_rate ?? 0).toFixed(1) }}%</template>
           </n-statistic>
         </n-card>
       </n-gi>
       <n-gi span="4 m:2 l:1">
         <n-card>
           <n-statistic :label="t('dns.cache.missRate')">
-            <template #default>{{ (((stats.miss_rate ?? 0)) * 100).toFixed(1) }}%</template>
+            <template #default>{{ (stats.miss_rate ?? 0).toFixed(1) }}%</template>
           </n-statistic>
         </n-card>
       </n-gi>
@@ -71,7 +71,7 @@ const { t } = useI18n()
 const message = useMessage()
 const perm = usePermission()
 
-const stats = ref<CacheStats>({ entries: 0, max_entries: 0, hit_rate: 0, miss_rate: 0 })
+const stats = ref<CacheStats>({ entries: 0, max_entries: 0, hits: 0, misses: 0, hit_rate: 0, miss_rate: 0, size_bytes: 0 })
 const showFlushConfirm = ref(false)
 
 const entries = ref<CacheEntry[]>([])

@@ -39,12 +39,16 @@ type entry struct {
 }
 
 // Stats holds cache statistics.
+// HitRate/MissRate are percentages (0-100) to match the console and the
+// /metrics payload.
 type Stats struct {
-	Entries   int64   `json:"entries"`
-	Hits      int64   `json:"hits"`
-	Misses    int64   `json:"misses"`
-	HitRate   float64 `json:"hit_rate"`
-	SizeBytes int64   `json:"size_bytes"`
+	Entries    int64   `json:"entries"`
+	MaxEntries int64   `json:"max_entries"`
+	Hits       int64   `json:"hits"`
+	Misses     int64   `json:"misses"`
+	HitRate    float64 `json:"hit_rate"`
+	MissRate   float64 `json:"miss_rate"`
+	SizeBytes  int64   `json:"size_bytes"`
 }
 
 // lruItem is the value stored in the LRU list. Holding a pointer to
@@ -249,6 +253,24 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 		return nil, false, false
 	}
 
+	// RFC 2181 §8: a cache must hand out the *remaining* TTL, not the
+	// TTL it observed when the answer was stored. Without this, every
+	// cache hit renews the original TTL and a client can pin the record
+	// forever by re-querying before expiry.
+	// insertedAt is derived from ExpiresAt - OriginalTTL (see Set).
+	if origTTL > 0 {
+		insertedAt := e.ExpiresAt.Add(-origTTL)
+		elapsed := now.Sub(insertedAt)
+		if elapsed > 0 {
+			remainingSec := uint32((origTTL - elapsed) / time.Second)
+			// Never advertise a TTL past the entry's own expiry.
+			if maxSec := uint32(remaining.Seconds()); remainingSec > maxSec {
+				remainingSec = maxSec
+			}
+			adjustTTL(msg, remainingSec)
+		}
+	}
+
 	if shouldPrefetch {
 		// Claim the prefetch slot atomically. If two goroutines reach
 		// this point at the same time, exactly one of them wins the
@@ -314,6 +336,24 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 
 	elem := c.lru.PushFront(&lruItem{key: key, entry: e})
 	c.entries[key] = elem
+}
+
+// adjustTTL rewrites the TTL of every cached RR (all sections) to the
+// remaining lifetime of the cache entry. OPT pseudo-records are skipped:
+// their TTL field carries EDNS flags, not a lifetime.
+func adjustTTL(msg *dns.Msg, remaining uint32) {
+	for _, rr := range msg.Answer {
+		rr.Header().Ttl = remaining
+	}
+	for _, rr := range msg.Ns {
+		rr.Header().Ttl = remaining
+	}
+	for _, rr := range msg.Extra {
+		if rr.Header().Rrtype == dns.TypeOPT {
+			continue
+		}
+		rr.Header().Ttl = remaining
+	}
 }
 
 // effectiveTTL computes the effective TTL for a DNS response.
@@ -412,11 +452,13 @@ func (c *Cache) Stats() Stats {
 	}
 
 	return Stats{
-		Entries:   int64(len(c.entries)),
-		Hits:      c.hits,
-		Misses:    c.misses,
-		HitRate:   math.Round(hitRate*100) / 100,
-		SizeBytes: sizeBytes,
+		Entries:    int64(len(c.entries)),
+		MaxEntries: int64(c.maxEntries),
+		Hits:       c.hits,
+		Misses:     c.misses,
+		HitRate:    math.Round(hitRate*100) / 100,
+		MissRate:   math.Round((100-hitRate)*100) / 100,
+		SizeBytes:  sizeBytes,
 	}
 }
 

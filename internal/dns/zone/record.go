@@ -901,25 +901,35 @@ func ipv6ToPTR(ipStr string) (string, error) {
 }
 
 // normalizeRecordName normalizes a record name relative to a zone.
+//
+// The stored zone name is an FQDN (trailing dot), so all comparisons strip the
+// trailing dot first; otherwise a fully qualified input such as
+// "www.example.com." for zone "example.com." would fail the suffix test and be
+// treated as a relative name, producing "www.example.com.example.com.".
 func normalizeRecordName(name, zoneName string) string {
 	if name == "" || name == "@" {
 		return zoneName
 	}
-	// If the name is already an FQDN matching the zone, return as-is.
-	if strings.EqualFold(name, zoneName) || strings.EqualFold(name+".", zoneName) {
+	zone := strings.TrimSuffix(strings.ToLower(zoneName), ".")
+	// Compare without a single trailing dot, but remember whether the caller
+	// supplied an absolute name so the stored value stays absolute.
+	trimmed := strings.TrimSuffix(name, ".")
+	lower := strings.ToLower(trimmed)
+	if lower == zone {
 		return zoneName
 	}
-	// If the name ends with the zone name, it's already fully qualified.
-	if strings.HasSuffix(strings.ToLower(name), strings.ToLower(zoneName)) {
-		if !strings.HasSuffix(name, ".") {
-			return name + "."
+	// Already fully qualified inside this zone (e.g. "www.example.com").
+	if strings.HasSuffix(lower, "."+zone) {
+		if strings.HasSuffix(name, ".") {
+			return name
 		}
-		return name
+		return name + "."
 	}
-	// Relative name: append zone name.
+	// Absolute name outside of this zone is stored verbatim.
 	if strings.HasSuffix(name, ".") {
 		return name
 	}
+	// Relative name: append zone name.
 	return name + "." + zoneName
 }
 

@@ -6,9 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "0.1.9"
-        GIT_COMMIT: "6f185bf"
-        BUILD_DATE: "2026-09-06"
+        VERSION: "0.1.10"
+        GIT_COMMIT: "8999171"
+        BUILD_DATE: "2026-09-07"
     container_name: goddi
     restart: unless-stopped
     # DHCP broadcast traffic requires the Linux host network. This also makes

@@ -85,6 +85,13 @@ func (ql *QueryLogger) processLoop() {
 	ticker := time.NewTicker(ql.flushInterval)
 	defer ticker.Stop()
 
+	// Retention cleanup runs a full-table DELETE, which is far too expensive
+	// to repeat on every flush tick (especially with a single-writer SQLite
+	// pool). Run it on its own hourly cadence instead.
+	cleanupTicker := time.NewTicker(time.Hour)
+	defer cleanupTicker.Stop()
+	ql.cleanup()
+
 	for {
 		select {
 		case entry := <-ql.entries:
@@ -99,6 +106,8 @@ func (ql *QueryLogger) processLoop() {
 				ql.flush(batch)
 				batch = batch[:0]
 			}
+
+		case <-cleanupTicker.C:
 			// Periodic cleanup of old entries.
 			ql.cleanup()
 

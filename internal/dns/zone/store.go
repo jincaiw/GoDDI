@@ -459,6 +459,20 @@ func (s *Store) lookupInZone(zd *zoneData, qname string, qtype uint16) []dns.RR 
 	// Look up records by name.
 	rrs, ok := zd.records[qname]
 	if !ok {
+		// RFC 4592 wildcard match: try the closest enclosing wildcard first
+		// ("*.b.example.com." before "*.example.com.").
+		for _, wild := range wildcardCandidates(zoneName, qname) {
+			if wrrs, wok := zd.records[wild]; wok {
+				rrs = wrrs
+				ok = true
+				// Present the answer under the queried name, not under the
+				// wildcard name that produced it.
+				rrs = rewriteRRName(rrs, qname)
+				break
+			}
+		}
+	}
+	if !ok {
 		return nil
 	}
 
@@ -480,6 +494,44 @@ func (s *Store) lookupInZone(zd *zoneData, qname string, qtype uint16) []dns.RR 
 	}
 
 	return answers
+}
+
+// wildcardCandidates returns the wildcard names to try for qname inside
+// zoneName, ordered from the closest enclosing wildcard to the zone apex
+// wildcard (e.g. "a.b.example.com." yields "*.b.example.com." then
+// "*.example.com."). Both arguments are FQDNs. Returns nil when qname is not
+// inside the zone.
+func wildcardCandidates(zoneName, qname string) []string {
+	if !strings.HasSuffix(strings.ToLower(qname), strings.ToLower(zoneName)) {
+		return nil
+	}
+	prefix := strings.TrimSuffix(qname, zoneName)
+	if prefix == "" {
+		return nil
+	}
+	labels := strings.Split(strings.TrimSuffix(prefix, "."), ".")
+	candidates := make([]string, 0, len(labels))
+	for i := 0; i < len(labels); i++ {
+		rest := strings.Join(labels[i+1:], ".")
+		if rest == "" {
+			candidates = append(candidates, "*."+zoneName)
+			continue
+		}
+		candidates = append(candidates, "*."+rest+"."+zoneName)
+	}
+	return candidates
+}
+
+// rewriteRRName returns copies of rrs with their owner name set to name, so a
+// wildcard answer is presented under the name that was actually queried.
+func rewriteRRName(rrs []dns.RR, name string) []dns.RR {
+	out := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		clone := dns.Copy(rr)
+		clone.Header().Name = name
+		out = append(out, clone)
+	}
+	return out
 }
 
 // GetZoneSOA returns the SOA record for a zone.

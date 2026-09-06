@@ -336,25 +336,16 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 
 	mgr := getDNSSECManager()
 
-	// Use a transaction to keep the DB key table consistent with the
-	// dnssec_enabled flag. If any step fails we roll back the entire
-	// operation so we never end up with a half-configured zone.
-	tx, err := DNSServices.DB.Begin()
-	if err != nil {
-		response.InternalError(w, "启用DNSSEC失败: "+err.Error())
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
+	// NOTE: no surrounding transaction here on purpose. The pool is
+	// configured with SetMaxOpenConns(1) (see internal/database), and
+	// DNSSECManager calls use the pool directly rather than a tx handle;
+	// opening a transaction would hold that single connection and every
+	// subsequent query would block forever. Failure paths below still
+	// roll back the zone state via DisableDNSSEC.
 
 	// Generate KSK and ZSK with rollback on failure.
 	ksk, err := mgr.GenerateKSK(zoneID, req.Algorithm)
 	if err != nil {
-		_ = tx.Rollback()
 		response.InternalError(w, "生成KSK失败: "+err.Error())
 		return
 	}
@@ -364,11 +355,8 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 
 	zsk, err := mgr.GenerateZSK(zoneID, req.Algorithm)
 	if err != nil {
-		// Roll back the entire transaction so neither the KSK nor the
-		// zone's dnssec_enabled flag is left in a half-configured state.
-		_ = tx.Rollback()
-		// Also clean up the KSK row that was just inserted, since it
-		// lives outside the transaction.
+		// Clean up the KSK row that was just inserted so the zone is not
+		// left half-configured.
 		_ = mgr.DisableDNSSEC(zoneID)
 		response.InternalError(w, "生成ZSK失败: "+err.Error())
 		return
@@ -378,20 +366,10 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 	// Sign the zone. On failure roll back the transaction AND disable
 	// the keys we just generated.
 	if err := mgr.SignZone(zoneID); err != nil {
-		_ = tx.Rollback()
 		_ = mgr.DisableDNSSEC(zoneID)
 		response.InternalError(w, "签名区域失败: "+err.Error())
 		return
 	}
-
-	if err := tx.Commit(); err != nil {
-		// If commit fails, also disable DNSSEC to avoid a state where
-		// keys exist in the DB but the zone is not flagged enabled.
-		_ = mgr.DisableDNSSEC(zoneID)
-		response.InternalError(w, "启用DNSSEC失败: "+err.Error())
-		return
-	}
-	committed = true
 
 	response.OKWithMessage(w, "DNSSEC enabled", map[string]string{"zone_id": zoneID})
 }

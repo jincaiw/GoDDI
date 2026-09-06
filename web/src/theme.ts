@@ -70,7 +70,7 @@ export function appleTheme(dark: boolean): GlobalThemeOverrides {
       borderRadius: t.radiusControl,
     },
     Menu: {
-      itemHeight: '38px',
+      itemHeight: '28px',
       borderRadius: t.radiusControl,
       itemColorActive: 'rgba(10, 132, 255, 0.12)',
       itemColorActiveHover: dark ? 'rgba(10, 132, 255, 0.2)' : 'rgba(10, 132, 255, 0.16)',

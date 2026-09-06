@@ -414,22 +414,31 @@ func (h *Handlers) AssignUserRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The console posts the full role selection as role_ids; role_id is
+	// accepted for backwards compatibility with single-value callers.
 	var req struct {
-		RoleID string `json:"role_id"`
+		RoleID  string   `json:"role_id"`
+		RoleIDs []string `json:"role_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
 	}
 
-	if req.RoleID == "" {
+	roleIDs := req.RoleIDs
+	if len(roleIDs) == 0 && req.RoleID != "" {
+		roleIDs = []string{req.RoleID}
+	}
+	if len(roleIDs) == 0 {
 		response.BadRequest(w, "角色ID不能为空")
 		return
 	}
 
-	if err := h.rbacMgr.AssignRole(userID, req.RoleID); err != nil {
-		response.InternalError(w, "分配角色失败")
-		return
+	for _, roleID := range roleIDs {
+		if err := h.rbacMgr.AssignRole(userID, roleID); err != nil {
+			response.InternalError(w, "分配角色失败")
+			return
+		}
 	}
 
 	_ = h.auditMgr.Log(audit.LogEntry{

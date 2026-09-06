@@ -260,8 +260,13 @@ export function deleteClientPolicy(id: string) {
 export interface CacheStats {
   entries: number
   max_entries: number
+  hits: number
+  misses: number
+  /** Percentage, 0-100. */
   hit_rate: number
+  /** Percentage, 0-100. */
   miss_rate: number
+  size_bytes: number
 }
 
 export function getDNSCacheStats() {

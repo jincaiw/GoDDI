@@ -258,5 +258,16 @@ func (m *Manager) BatchUpdateSettings(settings []Setting) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing settings: %w", err)
+	}
+
+	// Notify observers (DNS engine, blocking, cache TTL, ...) only after the
+	// transaction is durable, mirroring SetSetting. Without this the console
+	// batch save writes the rows but nothing is applied until a restart.
+	for _, s := range settings {
+		m.notify(s.Key, s.Value)
+	}
+
+	return nil
 }

@@ -89,6 +89,12 @@ type CheckResult struct {
 // Check performs the full filter pipeline for a DNS query.
 // Order: client policy -> allow list -> block list.
 func (fe *FilterEngine) Check(qname string, clientIP string) CheckResult {
+	// Step 0: honour the global blocking switch. When blocking is disabled
+	// (or temporarily paused from the console) no list is consulted at all.
+	if enabled, _ := fe.BlockingStatus(); !enabled {
+		return CheckResult{Blocked: false, Reason: "blocking_disabled"}
+	}
+
 	// Step 1: Match client policy.
 	policy := fe.PolicyMgr.MatchClientPolicy(clientIP)
 	if policy != nil {

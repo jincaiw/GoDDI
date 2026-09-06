@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,23 @@ type DNSHandler struct {
 // ServeDNS handles incoming DNS requests through the full processing pipeline.
 func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	start := time.Now()
+
+	// miekg/dns does not install a recover() around handler invocations, so a
+	// single malformed message would otherwise take down the whole process.
+	// Convert panics into SERVFAIL instead.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("dns_handler: panic recovered",
+				"panic", rec,
+				"stack", string(debug.Stack()),
+			)
+			if req != nil && len(req.Question) > 0 {
+				resp := new(dns.Msg)
+				resp.SetRcode(req, dns.RcodeServerFailure)
+				_ = w.WriteMsg(resp)
+			}
+		}
+	}()
 
 	// Extract client IP and protocol.
 	clientIP, clientPort := extractClientAddr(w)
@@ -110,17 +128,6 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		"protocol", proto,
 	)
 
-	// Step 0: RFC 6303 / RFC 6761 locally served zones. Queries inside
-	// special-use namespaces never reach the internet.
-	if h.server.specialZonesEnabled() && isLocallyServed(qname) {
-		resp := answerLocallyServed(req)
-		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
-		if err := w.WriteMsg(resp); err != nil {
-			slog.Debug("dns_handler: write failed", "error", err)
-		}
-		return
-	}
-
 	// Step 1: Check local authoritative zones first.
 	// Authoritative answers bypass recursion ACL checks. A zone-level query
 	// ACL may refuse the client.
@@ -139,6 +146,20 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		rcode := resp.Rcode
 		resp.SetReply(req)
 		resp.Rcode = rcode
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
+		if err := w.WriteMsg(resp); err != nil {
+			slog.Debug("dns_handler: write failed", "error", err)
+		}
+		return
+	}
+
+	// Step 1b: RFC 6303 / RFC 6761 locally served zones. Queries inside
+	// special-use namespaces never reach the internet. This runs after the
+	// authoritative lookup so that an operator-hosted zone (e.g. example.com
+	// or a .test lab zone) is served from the local zone data instead of being
+	// shadowed by the reserved-namespace behaviour.
+	if h.server.specialZonesEnabled() && isLocallyServed(qname) {
+		resp := answerLocallyServed(req)
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
 		if err := w.WriteMsg(resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
@@ -215,7 +236,11 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if h.server.cache != nil && !h.server.ecsCacheBypass() && !reqHasDO(req) {
 		cachedMsg, hit, _ := h.server.cache.Get(qname, qtype)
 		if hit {
+			// SetReply forces Rcode to NOERROR, which would silently turn a
+			// cached NXDOMAIN/SERVFAIL into a success answer.
+			rcode := cachedMsg.Rcode
 			cachedMsg.SetReply(req)
+			cachedMsg.Rcode = rcode
 			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[cachedMsg.Rcode], start, "", true, false)
 			if err := w.WriteMsg(cachedMsg); err != nil {
 				slog.Debug("dns_handler: write failed", "error", err)
@@ -417,10 +442,20 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		return
 	}
 
-	// TSIG key name from the request, if signed.
+	// TSIG: verify the signature itself. miekg/dns validates the MAC against
+	// the raw request bytes and exposes the outcome via w.TsigStatus(); the
+	// key name in the request is attacker-controlled and proves nothing.
 	tsigKeyName := ""
-	if t := req.IsTsig(); t != nil {
-		tsigKeyName = t.Hdr.Name
+	if req.IsTsig() != nil {
+		if err := w.TsigStatus(); err != nil {
+			slog.Warn("dns_handler: zone transfer rejected, TSIG verification failed",
+				"zone", zoneName, "client", clientIP, "error", err)
+			resp := new(dns.Msg)
+			resp.SetRcode(req, dns.RcodeRefused)
+			_ = w.WriteMsg(resp)
+			return
+		}
+		tsigKeyName = dns.Fqdn(req.IsTsig().Hdr.Name)
 	}
 
 	var (
@@ -429,8 +464,10 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 	)
 	if ixfr {
 		var clientSerial uint32
-		if soa, ok := req.Ns[0].(*dns.SOA); ok {
-			clientSerial = soa.Serial
+		if len(req.Ns) > 0 {
+			if soa, ok := req.Ns[0].(*dns.SOA); ok {
+				clientSerial = soa.Serial
+			}
 		}
 		rrs, err = h.server.axfrHandler.HandleIXFR(zoneName, clientSerial, tsigKeyName)
 	} else {
