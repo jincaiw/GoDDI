@@ -36,14 +36,15 @@ var dnsInitOnce sync.Once
 
 // DNSServiceContainer holds references to all DNS service components.
 type DNSServiceContainer struct {
-	DB          *sql.DB
-	Cache       *cache.Cache
-	Filter      *filter.FilterEngine
-	Forwarder   *forwarder.ForwarderGroup
-	Conditional *forwarder.ConditionalForwarderManager
-	DNSClient   *client.DNSClient
-	ZoneStore   *zone.Store
-	JWTSecret   string
+	DB               *sql.DB
+	Cache            *cache.Cache
+	Filter           *filter.FilterEngine
+	Forwarder        *forwarder.ForwarderGroup
+	Conditional      *forwarder.ConditionalForwarderManager
+	DNSClient        *client.DNSClient
+	ZoneStore        *zone.Store
+	BlockListFetcher *filter.BlockListFetcher
+	JWTSecret        string
 }
 
 // InitDNSServices initializes the DNS service container for API handlers.

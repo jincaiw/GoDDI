@@ -295,6 +295,9 @@ export interface BlockList {
   url: string
   enabled: boolean
   entry_count: number
+  last_fetch_at: string | null
+  last_fetch_status: string | null // ok, error
+  last_fetch_error: string | null
   created_at: string
   updated_at: string
 }
@@ -402,4 +405,58 @@ export interface DashboardStats {
 
 export function getDashboardStats() {
   return get<DashboardStats>('/dashboard')
+}
+
+// --- Dashboard Top-N Statistics ---
+
+export interface TopEntry {
+  name: string
+  count: number
+}
+
+export interface TopStats {
+  range: string
+  top_clients: TopEntry[]
+  top_domains: TopEntry[]
+  top_blocked: TopEntry[]
+}
+
+export function getDashboardTop(range: 'hour' | 'day' | 'week', limit = 10) {
+  return get<TopStats>('/dashboard/top', { range, limit })
+}
+
+// --- DNS Cache Entries ---
+
+export interface CacheEntry {
+  qname: string
+  qtype: string
+  ttl_left: number
+  expires_at: string
+  stale_until: string
+  hit_count: number
+  last_access: string
+  size_bytes: number
+}
+
+export function listCacheEntries(params?: Record<string, unknown>) {
+  return getList<CacheEntry>('/dns/cache/entries', params)
+}
+
+// --- DNS Security: Blocking Switch / Temporary Disable ---
+
+export interface BlockingStatus {
+  blocking_enabled: boolean
+  disabled_until: string | null
+}
+
+export function getBlockingStatus() {
+  return get<BlockingStatus>('/dns/security/blocking-status')
+}
+
+export function temporaryDisableBlocking(minutes: number) {
+  return post<BlockingStatus>('/dns/security/temporary-disable', { minutes })
+}
+
+export function refreshBlockList(id: string) {
+  return post<BlockList>(`/dns/security/blocklists/${id}/refresh`)
 }

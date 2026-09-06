@@ -1,1 +1,0 @@
-import{a as e}from"./auth-HLqHmhVH.js";function t(t){return e(`/logs/audit`,t)}export{t};

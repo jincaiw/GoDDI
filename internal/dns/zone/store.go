@@ -122,10 +122,12 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		slog.Error("zone_store: failed to iterate zones", "error", err)
 	}
 
-	// Load records.
+	// Load records. Records whose expiry is in the past are skipped so an
+	// aged-out record never answers queries even before the cleanup task runs.
 	recordRows, err := s.db.Query(`
 		SELECT id, zone_id, name, type, ttl, value, priority, port, weight, tag, flag, enabled
-		FROM dns_records WHERE enabled = 1
+		FROM dns_records
+		WHERE enabled = 1 AND (expires_at IS NULL OR expires_at > datetime('now'))
 	`)
 	if err != nil {
 		slog.Error("zone_store: failed to load records", "error", err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,8 +28,11 @@ var defaultSettings = map[string]settingDefault{
 	"server_name":          {Value: "GoDDI", Description: "服务器名称", Type: "string"},
 	"server_language":      {Value: "zh-CN", Description: "界面语言", Type: "string"},
 	"server_dark_mode":     {Value: "false", Description: "暗黑模式", Type: "bool"},
-	"dns_default_ttl":      {Value: "3600", Description: "DNS 默认 TTL", Type: "int"},
-	"dns_recursion":        {Value: "true", Description: "允许递归查询", Type: "bool"},
+	"dns_default_ttl":          {Value: "3600", Description: "DNS 默认 TTL", Type: "int"},
+	"dns_recursion":            {Value: "true", Description: "允许递归查询", Type: "bool"},
+	"dns_blocking_enabled":     {Value: "true", Description: "DNS 阻断总开关", Type: "bool"},
+	"dns_rate_limit_qps":       {Value: "0", Description: "客户端查询限速（QPS，0 为不限）", Type: "int"},
+	"dns_blocklist_refresh_hours": {Value: "24", Description: "外部阻断列表刷新间隔（小时）", Type: "int"},
 	"dhcp_lease_time":      {Value: "86400", Description: "DHCP 默认租约时间（秒）", Type: "int"},
 	"ipam_ping_check":      {Value: "true", Description: "IPAM Ping 检测", Type: "bool"},
 	"ipam_auto_scan":       {Value: "false", Description: "IPAM 自动扫描", Type: "bool"},
@@ -48,6 +52,32 @@ type settingDefault struct {
 // Manager manages system settings.
 type Manager struct {
 	db *sql.DB
+
+	// mu guards the subscriber list.
+	mu       sync.RWMutex
+	watchers []func(key, value string)
+}
+
+// Subscribe registers a callback invoked (asynchronously) after every
+// successful setting change. Used by the DNS engine to hot-apply settings
+// such as recursion, rebinding protection and rate limits.
+func (m *Manager) Subscribe(fn func(key, value string)) {
+	m.mu.Lock()
+	m.watchers = append(m.watchers, fn)
+	m.mu.Unlock()
+}
+
+// notify dispatches a changed key to all subscribers. Callbacks run in
+// their own goroutine so a slow consumer cannot block the settings API.
+func (m *Manager) notify(key, value string) {
+	m.mu.RLock()
+	watchers := make([]func(key, value string), len(m.watchers))
+	copy(watchers, m.watchers)
+	m.mu.RUnlock()
+
+	for _, fn := range watchers {
+		go fn(key, value)
+	}
 }
 
 // NewManager creates a new system settings manager.
@@ -140,6 +170,7 @@ func (m *Manager) SetSetting(key, value, description string) error {
 		return fmt.Errorf("upserting setting %s: %w", key, err)
 	}
 
+	m.notify(key, value)
 	return nil
 }
 

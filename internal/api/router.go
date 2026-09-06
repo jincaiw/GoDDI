@@ -61,6 +61,9 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	// Health check.
 	r.Get("/health", handler.Health)
 
+	// OpenAPI documentation (public, no sensitive data).
+	r.Get("/api/v1/openapi.json", OpenAPIHandler)
+
 	// Prometheus metrics endpoint.
 	if cfg.Metrics.Enabled {
 		r.Handle(cfg.Metrics.Path, metrics.PrometheusHandler())
@@ -209,10 +212,15 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/{id}", handler.GetBlockList)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/{id}", handler.UpdateBlockList)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteBlockList)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/{id}/refresh", handler.RefreshBlockList)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/{id}/rules", handler.ListBlockRules)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/{id}/rules", handler.AddBlockRule)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{listId}/rules/{ruleId}", handler.DeleteBlockRule)
 			})
+
+			// DNS Security - Blocking master switch / temporary disable.
+			r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/dns/security/blocking-status", handler.GetBlockingStatus)
+			r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dns/security/temporary-disable", handler.TemporaryDisableBlocking)
 
 			// DNS Security - Allow Lists.
 			r.Route("/dns/security/allowlists", func(r chi.Router) {

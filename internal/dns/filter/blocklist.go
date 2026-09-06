@@ -14,6 +14,11 @@ type BlockList struct {
 	URL        string `json:"url,omitempty"`
 	Enabled    bool   `json:"enabled"`
 	EntryCount int    `json:"entry_count"`
+	// Subscription fetch status (external lists only).
+	LastUpdated     string `json:"last_updated,omitempty"`
+	LastFetchAt     string `json:"last_fetch_at,omitempty"`
+	LastFetchStatus string `json:"last_fetch_status,omitempty"` // success, failed, never
+	LastFetchError  string `json:"last_fetch_error,omitempty"`
 }
 
 // BlockListManager manages block lists and their rules.

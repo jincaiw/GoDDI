@@ -2,6 +2,21 @@
   <div>
     <page-header :title="t('dns.security.title')" />
 
+    <!-- Temporary disable blocking banner -->
+    <n-alert v-if="blockingStatus && blockingStatus.disabled_until" type="warning" style="margin-bottom: 12px;" closable>
+      <n-space align="center">
+        <span>{{ t('dns.security.blockingDisabledUntil') }} <strong>{{ formatTime(blockingStatus.disabled_until) }}</strong></span>
+        <n-button v-if="perm.canWrite('dns')" size="small" @click="handleResumeBlocking">{{ t('dns.security.resumeBlocking') }}</n-button>
+      </n-space>
+    </n-alert>
+    <n-card v-else size="small" style="margin-bottom: 12px;">
+      <n-space align="center">
+        <span>{{ t('dns.security.temporaryDisable') }}</span>
+        <n-select v-model:value="disableMinutes" :options="disableMinutesOptions" style="width: 140px;" />
+        <n-button v-if="perm.canWrite('dns')" size="small" type="warning" @click="handleTemporaryDisable">{{ t('dns.security.disableNow') }}</n-button>
+      </n-space>
+    </n-card>
+
     <n-tabs type="card">
       <!-- Block Lists Tab -->
       <n-tab-pane name="blocklists" :tab="t('dns.security.blockLists')">
@@ -104,16 +119,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, h, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
+import { NAlert, NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import { usePermission } from '@/composables/usePermission'
 import {
   listBlockLists, createBlockList, deleteBlockList, listBlockRules, addBlockRule, deleteBlockRule,
   listAllowRules, addAllowRule, deleteAllowRule,
   listClientPolicies, createClientPolicy, deleteClientPolicy,
-  type BlockList, type BlockRule, type AllowRule, type ClientPolicy,
+  getBlockingStatus, temporaryDisableBlocking, refreshBlockList,
+  type BlockList, type BlockRule, type AllowRule, type ClientPolicy, type BlockingStatus,
 } from '@/api/dns'
 
 const { t } = useI18n()
@@ -130,14 +146,66 @@ const showBlockRuleModal = ref(false)
 const blockListForm = reactive({ name: '', type: 'custom', url: '', enabled: true })
 const blockRuleForm = reactive({ pattern: '', match_type: 'suffix', response_type: 'NXDOMAIN', response_data: '', enabled: true })
 
+// Temporary disable blocking
+const blockingStatus = ref<BlockingStatus | null>(null)
+const disableMinutes = ref<number>(10)
+const disableMinutesOptions = [5, 10, 15, 30, 60, 120, 240].map(m => ({ label: `${m} min`, value: m }))
+const refreshingId = ref<string | null>(null)
+let statusTimer: ReturnType<typeof setInterval> | null = null
+
+function formatTime(value: string | null): string {
+  if (!value) return '-'
+  const d = new Date(value)
+  return isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+
+async function loadBlockingStatus() {
+  try { blockingStatus.value = await getBlockingStatus() } catch { /* ignore */ }
+}
+
+async function handleTemporaryDisable() {
+  try {
+    blockingStatus.value = await temporaryDisableBlocking(disableMinutes.value)
+    message.success(t('dns.security.disableSuccess'))
+  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+}
+
+async function handleResumeBlocking() {
+  try {
+    await temporaryDisableBlocking(0)
+    blockingStatus.value = await getBlockingStatus()
+    message.success(t('dns.security.resumeSuccess'))
+  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+}
+
+async function handleRefreshBlockList(id: string) {
+  refreshingId.value = id
+  try {
+    await refreshBlockList(id)
+    message.success(t('dns.security.refreshSuccess'))
+    loadBlockLists()
+  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { refreshingId.value = null }
+}
+
 const blockListColumns = [
   { title: () => t('common.name'), key: 'name' },
   { title: () => t('common.type'), key: 'type', render: (row: BlockList) => h(NTag, { size: 'small' }, { default: () => row.type }) },
   { title: 'Rules', key: 'entry_count', width: 80 },
+  { title: () => t('dns.security.lastFetch'), key: 'last_fetch', width: 140, render: (row: BlockList) => {
+    if (row.type !== 'external') return '-'
+    if (!row.last_fetch_at) return h(NTag, { size: 'small' }, { default: () => t('dns.security.neverFetched') })
+    const status = row.last_fetch_status === 'ok'
+      ? h(NTag, { size: 'small', type: 'success' }, { default: () => 'OK' })
+      : h(NTag, { size: 'small', type: 'error' }, { default: () => t('dns.security.fetchFailed') })
+    return h(NSpace, { size: 4, align: 'center' }, { default: () => [status, h('span', { style: 'font-size: 12px; color: var(--n-text-color-3, #888);' }, formatTime(row.last_fetch_at!))] })
+  } },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockList) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: BlockList) => h(NSpace, null, {
+  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: BlockList) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', onClick: () => { selectedBlockList.value = row; loadBlockRules(row.id) } }, { default: () => 'Rules' }),
+      ...(row.type === 'external' ? [
+        h(NButton, { size: 'small', type: 'primary', loading: refreshingId.value === row.id, disabled: !perm.canWrite('dns'), onClick: () => handleRefreshBlockList(row.id) }, { default: () => t('dns.security.refresh') }),
+      ] : []),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockList(row.id) }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -268,5 +336,11 @@ onMounted(() => {
   loadBlockLists()
   loadAllowRules()
   loadPolicies()
+  loadBlockingStatus()
+  statusTimer = setInterval(loadBlockingStatus, 30000)
+})
+
+onUnmounted(() => {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
 })
 </script>

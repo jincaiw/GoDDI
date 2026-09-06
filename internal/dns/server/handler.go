@@ -10,6 +10,7 @@ import (
 
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/filter"
+	"github.com/jasonwa/goddi/internal/metrics"
 	"github.com/miekg/dns"
 )
 
@@ -39,6 +40,41 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	q := req.Question[0]
 	qname := q.Name
 	qtype := q.Qtype
+
+	// Opcode dispatch: RFC 2136 dynamic updates are handled by their own
+	// module and never reach the query pipeline.
+	if req.Opcode == dns.OpcodeUpdate {
+		if h.server.updateHandler == nil {
+			resp := new(dns.Msg)
+			resp.SetRcode(req, dns.RcodeNotImplemented)
+			_ = w.WriteMsg(resp)
+			return
+		}
+		resp, err := h.server.updateHandler.HandleUpdateFrom(req, clientIP)
+		if err != nil {
+			slog.Error("dns_handler: dynamic update failed", "error", err)
+			resp = new(dns.Msg)
+			resp.SetRcode(req, dns.RcodeServerFailure)
+		}
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	// Zone transfer requests (AXFR/IXFR) are only meaningful over TCP.
+	if qtype == dns.TypeAXFR || qtype == dns.TypeIXFR {
+		h.serveZoneTransfer(w, req, qtype == dns.TypeIXFR, clientIP)
+		return
+	}
+
+	// Query rate limiting (per client). Authoritative and recursive traffic
+	// are both subject to it; disabled when no limiter is attached.
+	if h.server.rateLimiter != nil && !h.server.rateLimiter.AllowQuery(normalizeClientIP(clientIP)) {
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "RATE_LIMITED", start, "", false, false)
+		_ = w.WriteMsg(resp)
+		return
+	}
 
 	slog.Debug("dns_handler: received query",
 		"client_ip", clientIP,
@@ -140,14 +176,18 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	// Step 9: CNAME Cloaking protection.
-	if h.server.filter.CheckCNAMECloaking(resp) {
-		blockedResp := filter.GenerateBlockedResponse(req, "NXDOMAIN", "")
-		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "CNAME_CLOAKING", start, "", false, true)
-		if err := w.WriteMsg(blockedResp); err != nil {
-			slog.Debug("dns_handler: write failed", "error", err)
+	// Step 9: CNAME Cloaking protection. Skipped while blocking is
+	// temporarily disabled — cloaking detection is part of the blocking
+	// pipeline.
+	if blockingEnabled, _ := h.server.filter.BlockingStatus(); blockingEnabled {
+		if h.server.filter.CheckCNAMECloaking(resp) {
+			blockedResp := filter.GenerateBlockedResponse(req, "NXDOMAIN", "")
+			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "CNAME_CLOAKING", start, "", false, true)
+			if err := w.WriteMsg(blockedResp); err != nil {
+				slog.Debug("dns_handler: write failed", "error", err)
+			}
+			return
 		}
-		return
 	}
 
 	// Step 10: Cache the response.
@@ -205,6 +245,10 @@ func (h *DNSHandler) writeQueryLog(
 	qname string, qtype uint16, rcode string,
 	start time.Time, upstream string, cached bool, blocked bool,
 ) {
+	// Feed the in-memory Top-N statistics (dashboard) regardless of whether
+	// persistent query logging is enabled. Cheap enough for the hot path.
+	metrics.TopStatsGlobal.Record(clientIP, qname, blocked)
+
 	if h.server.queryLog == nil {
 		return
 	}
@@ -236,4 +280,85 @@ func mustAtoi(s string) int {
 		return 0
 	}
 	return n
+}
+
+// serveZoneTransfer answers inbound AXFR/IXFR requests. Transfers are only
+// served over TCP (RFC 5936 §4.2), require the transfer ACL to match the
+// client address, and use TSIG when the request carries a signed query.
+func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr bool, clientIP string) {
+	if proto := w.RemoteAddr().Network(); proto != "tcp" {
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	if h.server.axfrHandler == nil || len(req.Question) == 0 {
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	zoneName := req.Question[0].Name
+
+	// ACL check by client address; deny by default.
+	if !h.server.axfrHandler.CheckTransferACL(zoneName, clientIP) {
+		slog.Warn("dns_handler: zone transfer denied by ACL", "zone", zoneName, "client", clientIP)
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	// TSIG key name from the request, if signed.
+	tsigKeyName := ""
+	if t := req.IsTsig(); t != nil {
+		tsigKeyName = t.Hdr.Name
+	}
+
+	var (
+		rrs []dns.RR
+		err error
+	)
+	if ixfr {
+		var clientSerial uint32
+		if soa, ok := req.Ns[0].(*dns.SOA); ok {
+			clientSerial = soa.Serial
+		}
+		rrs, err = h.server.axfrHandler.HandleIXFR(zoneName, clientSerial, tsigKeyName)
+	} else {
+		rrs, err = h.server.axfrHandler.HandleAXFR(zoneName, tsigKeyName)
+	}
+
+	if err != nil {
+		slog.Warn("dns_handler: zone transfer failed", "zone", zoneName, "ixfr", ixfr, "error", err)
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	// Stream the transfer as multiple DNS messages, ~100 RRs each.
+	const chunk = 100
+	if len(rrs) == 0 {
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeServerFailure)
+		_ = w.WriteMsg(resp)
+		return
+	}
+	for start := 0; start < len(rrs); start += chunk {
+		end := start + chunk
+		if end > len(rrs) {
+			end = len(rrs)
+		}
+		msg := new(dns.Msg)
+		msg.SetReply(req)
+		msg.Authoritative = true
+		msg.Answer = rrs[start:end]
+		if err := w.WriteMsg(msg); err != nil {
+			slog.Debug("dns_handler: transfer write failed", "error", err)
+			return
+		}
+	}
 }

@@ -13,19 +13,22 @@ import (
 
 // validSettingKeys contains the set of valid setting keys.
 var validSettingKeys = map[string]bool{
-	"server_name":          true,
-	"server_language":      true,
-	"server_dark_mode":     true,
-	"dns_default_ttl":      true,
-	"dns_recursion":        true,
-	"dhcp_lease_time":      true,
-	"ipam_ping_check":      true,
-	"ipam_auto_scan":       true,
-	"security_rebinding":   true,
-	"log_retention_days":   true,
-	"backup_auto_enabled":  true,
-	"backup_auto_schedule": true,
-	"backup_retention":     true,
+	"server_name":                 true,
+	"server_language":             true,
+	"server_dark_mode":            true,
+	"dns_default_ttl":             true,
+	"dns_recursion":               true,
+	"dns_blocking_enabled":        true,
+	"dns_rate_limit_qps":          true,
+	"dns_blocklist_refresh_hours": true,
+	"dhcp_lease_time":             true,
+	"ipam_ping_check":             true,
+	"ipam_auto_scan":              true,
+	"security_rebinding":          true,
+	"log_retention_days":          true,
+	"backup_auto_enabled":         true,
+	"backup_auto_schedule":        true,
+	"backup_retention":            true,
 }
 
 // --- Settings API Handlers ---
@@ -110,6 +113,16 @@ func validateSettingValue(key, value string) error {
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {
 			return fmt.Errorf("log_retention_days 必须是正整数")
+		}
+	case "dns_rate_limit_qps":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 1000000 {
+			return fmt.Errorf("dns_rate_limit_qps 必须在 0-1000000 之间")
+		}
+	case "dns_blocklist_refresh_hours":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 720 {
+			return fmt.Errorf("dns_blocklist_refresh_hours 必须在 1-720 之间")
 		}
 	}
 	return nil

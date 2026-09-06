@@ -48,11 +48,33 @@ type DatabaseConfig struct {
 
 // DNSConfig holds DNS service configuration.
 type DNSConfig struct {
-	Enabled    bool               `yaml:"enabled"`
-	Domain     string             `yaml:"domain"`
-	DefaultTTL int                `yaml:"default_ttl"`
-	Recursion  DNSRecursionConfig `yaml:"recursion"`
-	Listeners  DNSListenersConfig `yaml:"listeners"`
+	Enabled       bool                   `yaml:"enabled"`
+	Domain        string                 `yaml:"domain"`
+	DefaultTTL    int                    `yaml:"default_ttl"`
+	Recursion     DNSRecursionConfig     `yaml:"recursion"`
+	Listeners     DNSListenersConfig     `yaml:"listeners"`
+	RateLimit     DNSRateLimitConfig     `yaml:"rate_limit"`
+	DynamicUpdate DNSDynamicUpdateConfig `yaml:"dynamic_update"`
+}
+
+// DNSRateLimitConfig holds DNS query/response rate limiting configuration.
+type DNSRateLimitConfig struct {
+	// Enabled switches the whole rate limiting module on/off.
+	Enabled bool `yaml:"enabled"`
+	// ClientQPS is the sustained per-client query limit (0 = unlimited).
+	ClientQPS int `yaml:"client_qps"`
+	// ClientBurst is the per-client token bucket capacity (0 = ClientQPS).
+	ClientBurst int `yaml:"client_burst"`
+	// RRLThreshold is the per-second identical-response threshold across
+	// all clients (0 = response rate limiting disabled).
+	RRLThreshold int `yaml:"rrl_threshold"`
+}
+
+// DNSDynamicUpdateConfig holds RFC 2136 dynamic update configuration.
+type DNSDynamicUpdateConfig struct {
+	// TSIGKeys maps TSIG key names to base64 shared secrets. Updates are
+	// only accepted when signed with a registered key.
+	TSIGKeys map[string]string `yaml:"tsig_keys"`
 }
 
 // DNSRecursionConfig holds DNS recursion settings.
@@ -187,6 +209,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvBool("GODDI_DNS_ENABLED", &cfg.DNS.Enabled)
 	setEnvString("GODDI_DNS_DOMAIN", &cfg.DNS.Domain)
 	setEnvInt("GODDI_DNS_DEFAULT_TTL", &cfg.DNS.DefaultTTL)
+	setEnvBool("GODDI_DNS_RATE_LIMIT_ENABLED", &cfg.DNS.RateLimit.Enabled)
+	setEnvInt("GODDI_DNS_RATE_LIMIT_CLIENT_QPS", &cfg.DNS.RateLimit.ClientQPS)
+	setEnvInt("GODDI_DNS_RATE_LIMIT_RRL_THRESHOLD", &cfg.DNS.RateLimit.RRLThreshold)
 
 	setEnvBool("GODDI_CACHE_ENABLED", &cfg.Cache.Enabled)
 	setEnvInt("GODDI_CACHE_MAX_ENTRIES", &cfg.Cache.MaxEntries)
@@ -266,11 +291,20 @@ func DefaultConfig() *Config {
 			Listeners: DNSListenersConfig{
 				UDP: DNSListenerConfig{Enabled: true, Address: ":53"},
 				TCP: DNSListenerConfig{Enabled: true, Address: ":53"},
-				DOT: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
-				DOH: DNSListenerTLSConfig{Enabled: false, Address: ":8443"},
-				DOQ: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
-			},
+			DOT: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
+			DOH: DNSListenerTLSConfig{Enabled: false, Address: ":8443"},
+			DOQ: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
 		},
+		RateLimit: DNSRateLimitConfig{
+			Enabled:      true,
+			ClientQPS:    0,
+			ClientBurst:  0,
+			RRLThreshold: 0,
+		},
+		DynamicUpdate: DNSDynamicUpdateConfig{
+			TSIGKeys: map[string]string{},
+		},
+	},
 		Cache: CacheConfig{
 			Enabled:        true,
 			MaxEntries:     10000,

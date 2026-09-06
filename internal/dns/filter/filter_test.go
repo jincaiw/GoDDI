@@ -15,7 +15,7 @@ func TestNewFilterEngine(t *testing.T) {
 	if fe == nil {
 		t.Fatal("NewFilterEngine() returned nil")
 	}
-	if !fe.rebindingProtection {
+	if !fe.rebindingProtection.Load() {
 		t.Error("rebindingProtection should be true")
 	}
 }

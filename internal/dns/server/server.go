@@ -12,8 +12,10 @@ import (
 	"github.com/jasonwa/goddi/internal/config"
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/cache"
+	"github.com/jasonwa/goddi/internal/dns/dynamic_update"
 	"github.com/jasonwa/goddi/internal/dns/filter"
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
+	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/miekg/dns"
 )
@@ -34,6 +36,11 @@ type Server struct {
 	queryLog    *dnsquerylog.QueryLogger
 	zoneStore   *zone.Store
 
+	// Optional modules wired by the bootstrap.
+	rateLimiter   *RateLimiter
+	axfrHandler   *transfer.AXFRHandler
+	updateHandler *dynamic_update.UpdateHandler
+
 	udpServer *dns.Server
 	tcpServer *dns.Server
 
@@ -42,6 +49,7 @@ type Server struct {
 	zones   map[string]*ZoneData // In-memory authoritative zones (legacy, kept for compatibility)
 
 	// Recursion ACL.
+	recursionMu   sync.RWMutex
 	recursionNets []*net.IPNet
 }
 
@@ -86,14 +94,40 @@ func (s *Server) parseRecursionACL() {
 		nets = defaultNets
 	}
 
+	parsed := make([]*net.IPNet, 0, len(nets))
 	for _, cidr := range nets {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			slog.Error("dns_server: invalid recursion ACL CIDR", "cidr", cidr, "error", err)
 			continue
 		}
-		s.recursionNets = append(s.recursionNets, ipNet)
+		parsed = append(parsed, ipNet)
 	}
+
+	s.recursionMu.Lock()
+	s.recursionNets = parsed
+	s.recursionMu.Unlock()
+}
+
+// SetRecursionEnabled hot-updates the recursion master switch.
+func (s *Server) SetRecursionEnabled(enabled bool) {
+	s.cfg.DNS.Recursion.Enabled = enabled
+	slog.Info("dns_server: recursion", "enabled", enabled)
+}
+
+// SetRateLimiter attaches a query rate limiter.
+func (s *Server) SetRateLimiter(rl *RateLimiter) {
+	s.rateLimiter = rl
+}
+
+// SetAXFRHandler attaches the zone transfer (AXFR/IXFR) handler.
+func (s *Server) SetAXFRHandler(h *transfer.AXFRHandler) {
+	s.axfrHandler = h
+}
+
+// SetUpdateHandler attaches the RFC 2136 dynamic update handler.
+func (s *Server) SetUpdateHandler(h *dynamic_update.UpdateHandler) {
+	s.updateHandler = h
 }
 
 // isRecursionAllowed checks if a client IP is allowed to use recursive resolution.
@@ -102,6 +136,8 @@ func (s *Server) isRecursionAllowed(clientIP net.IP) bool {
 		return false
 	}
 
+	s.recursionMu.RLock()
+	defer s.recursionMu.RUnlock()
 	for _, ipNet := range s.recursionNets {
 		if ipNet.Contains(clientIP) {
 			return true

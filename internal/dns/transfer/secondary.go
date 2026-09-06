@@ -113,6 +113,15 @@ func (s *SecondarySync) SyncFromPrimary(zoneID string) error {
 		return fmt.Errorf("AXFR from primary: %w", err)
 	}
 
+	// RFC 8976: verify the ZONEMD digest when the zone publishes one. A
+	// digest mismatch aborts the transfer so corrupted zone data never
+	// replaces the local copy.
+	if verified, zerr := VerifyZONEMD(zoneName, records); !verified {
+		return fmt.Errorf("ZONEMD verification failed for zone %s: %w", zoneName, zerr)
+	} else if zerr != nil {
+		slog.Warn("secondary_sync: ZONEMD verification skipped", "zone", zoneName, "reason", zerr)
+	}
+
 	// Extract serial from SOA record in the AXFR response.
 	var primarySerial uint32
 	for _, rr := range records {

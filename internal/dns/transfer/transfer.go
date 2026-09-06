@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,14 +105,13 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 	return records, nil
 }
 
-// HandleIXFR handles an incremental zone transfer (IXFR) request.
+// HandleIXFR handles an incremental zone transfer (IXFR, RFC 1995) request.
 //
-// The implementation is intentionally minimal: true IXFR diffing (computing
-// the SOA deltas between the requester's serial and the current serial) is
-// deferred. Until that is available, we require an authenticated request
-// (via TSIG) before we can serve the zone at all. If the requester supplies
-// a TSIG key, we fall back to a full AXFR; otherwise we return REFUSED, as
-// the security review requires authenticated zone transfers.
+// Deltas are served from the dns_zone_changes history table, which every
+// record mutation writes to. When the requester's serial is current, a
+// single SOA is returned; when the history does not reach back far enough
+// (client too old or history pruned), the request falls back to a full
+// AXFR. Both paths require TSIG authentication.
 func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName string) ([]dns.RR, error) {
 	if zoneName == "" {
 		return nil, fmt.Errorf("zone name is required")
@@ -121,9 +121,26 @@ func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName str
 		zoneName += "."
 	}
 
-	// Get current zone serial.
+	// IXFR (like AXFR) requires TSIG authentication.
+	if tsigKeyName == "" {
+		return nil, fmt.Errorf("IXFR for zone %s requires TSIG authentication", zoneName)
+	}
+	var count int
+	err := h.db.QueryRow(`
+		SELECT COUNT(*) FROM dns_zone_transfer zt
+		JOIN dns_zones z ON zt.zone_id = z.id
+		WHERE z.name = ? AND zt.tsig_key_name = ?
+	`, zoneName, tsigKeyName).Scan(&count)
+	if err != nil {
+		return nil, fmt.Errorf("checking transfer ACL: %w", err)
+	}
+	if count == 0 {
+		return nil, fmt.Errorf("transfer not authorized for zone %s with key %s", zoneName, tsigKeyName)
+	}
+
+	var zoneID string
 	var currentSerial uint32
-	err := h.db.QueryRow("SELECT serial FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&currentSerial)
+	err = h.db.QueryRow("SELECT id, serial FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&zoneID, &currentSerial)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", zoneName)
 	}
@@ -131,20 +148,124 @@ func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName str
 		return nil, fmt.Errorf("querying zone serial: %w", err)
 	}
 
-	// If serials match, no transfer needed.
-	if currentSerial == serial {
-		return nil, nil
+	currentSOA := h.getZoneSOA(zoneID, zoneName)
+	if currentSOA == nil {
+		return nil, fmt.Errorf("zone %s has no SOA", zoneName)
 	}
 
-	// We cannot serve a real IXFR diff yet, so either we sign the response
-	// (refuse) or we fall back to AXFR. The fallback must still go through
-	// the TSIG-authenticated path.
-	if tsigKeyName == "" {
-		return nil, fmt.Errorf("IXFR for zone %s requires TSIG authentication", zoneName)
+	// Client is already up to date: respond with just the current SOA.
+	if serial == currentSerial {
+		return []dns.RR{currentSOA}, nil
 	}
-	slog.Warn("transfer: true IXFR diffing not implemented; falling back to AXFR",
-		"zone", zoneName)
-	return h.HandleAXFR(zoneName, tsigKeyName)
+
+	// Collect change history newer than the client's serial, grouped by
+	// the serial that was in effect after the change was applied.
+	changes, err := h.loadChanges(zoneID, serial)
+	if err != nil {
+		return nil, err
+	}
+
+	// No usable history (e.g. pruned or brand-new history): fall back to
+	// a full AXFR rather than serving a wrong delta.
+	if len(changes) == 0 {
+		slog.Info("transfer: IXFR history unavailable; falling back to AXFR",
+			"zone", zoneName, "client_serial", serial)
+		return h.HandleAXFR(zoneName, tsigKeyName)
+	}
+
+	// RFC 1995 delta layout:
+	//   SOA(current)
+	//   for each version (ascending serial):
+	//     SOA(version)          — old SOA marking the start of the delta
+	//     deletions (CLASS NONE)
+	//     additions (CLASS IN)
+	//   SOA(current)
+	resp := []dns.RR{currentSOA}
+	for _, group := range changes {
+		oldSOA := h.soaWithSerial(currentSOA, group.serial)
+		resp = append(resp, oldSOA)
+		for _, ch := range group.deletions {
+			ch.Header().Class = dns.ClassNONE
+			ch.Header().Ttl = 0
+			resp = append(resp, ch)
+		}
+		resp = append(resp, group.additions...)
+	}
+	resp = append(resp, currentSOA)
+	return resp, nil
+}
+
+// ixfrGroup holds the mutations of one serial version.
+type ixfrGroup struct {
+	serial     uint32
+	deletions  []dns.RR
+	additions  []dns.RR
+}
+
+// loadChanges reads dns_zone_changes newer than clientSerial and converts
+// the rows into RR groups per serial version. It returns an empty slice
+// when no history covers the requested range.
+func (h *AXFRHandler) loadChanges(zoneID string, clientSerial uint32) ([]ixfrGroup, error) {
+	rows, err := h.db.Query(`
+		SELECT serial, change_type, name, type, value, ttl, priority, weight, port
+		FROM dns_zone_changes
+		WHERE zone_id = ? AND serial > ?
+		ORDER BY serial ASC, created_at ASC
+	`, zoneID, clientSerial)
+	if err != nil {
+		return nil, fmt.Errorf("querying zone changes: %w", err)
+	}
+	defer rows.Close()
+
+	// Need the zone name to normalize record names.
+	var zoneName string
+	if err := h.db.QueryRow("SELECT name FROM dns_zones WHERE id = ?", zoneID).Scan(&zoneName); err != nil {
+		return nil, fmt.Errorf("querying zone name: %w", err)
+	}
+
+	var groups []ixfrGroup
+	for rows.Next() {
+		var serial uint32
+		var changeType, name, rtype, value string
+		var ttl int
+		var priority, weight, port sql.NullInt64
+
+		if err := rows.Scan(&serial, &changeType, &name, &rtype, &value, &ttl, &priority, &weight, &port); err != nil {
+			continue
+		}
+
+		rr := buildTransferRR(name, rtype, ttl, value, priority, weight, port, sql.NullString{}, sql.NullInt64{}, zoneName)
+		if rr == nil {
+			continue
+		}
+
+		// Append to the group for this serial (rows arrive in order).
+		if len(groups) == 0 || groups[len(groups)-1].serial != serial {
+			groups = append(groups, ixfrGroup{serial: serial})
+		}
+		g := &groups[len(groups)-1]
+		if changeType == "delete" {
+			g.deletions = append(g.deletions, rr)
+		} else {
+			g.additions = append(g.additions, rr)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating zone changes: %w", err)
+	}
+	return groups, nil
+}
+
+// soaWithSerial returns a copy of soa with the given serial.
+func (h *AXFRHandler) soaWithSerial(soa dns.RR, serial uint32) dns.RR {
+	s, ok := soa.(*dns.SOA)
+	if !ok {
+		return soa
+	}
+	clone := *s
+	clone.Hdr = s.Hdr
+	clone.Serial = serial
+	return &clone
 }
 
 // SendNotify sends a DNS NOTIFY message to the specified targets.
@@ -367,9 +488,39 @@ func buildTransferRR(name, rtype string, ttl int, value string,
 		return &dns.NS{Hdr: hdr, Ns: dns.Fqdn(value)}
 	case "CAA":
 		return &dns.CAA{Hdr: hdr, Flag: uint8(f), Tag: t, Value: value}
+	case "ZONEMD":
+		// RFC 8976: value format "serial scheme algorithm digest".
+		parts := strings.Fields(value)
+		if len(parts) < 4 {
+			return nil
+		}
+		scheme := parseUint8(parts[1])
+		algo := parseUint8(parts[2])
+		if scheme == 0 || algo == 0 {
+			return nil
+		}
+		return &dns.ZONEMD{Hdr: hdr, Serial: parseUint32(parts[0]), Scheme: scheme, Hash: algo, Digest: parts[3]}
 	default:
 		return nil
 	}
+}
+
+// parseUint32 parses a decimal uint32, returning 0 on error.
+func parseUint32(s string) uint32 {
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(v)
+}
+
+// parseUint8 parses a decimal uint8, returning 0 on error.
+func parseUint8(s string) uint8 {
+	v, err := strconv.ParseUint(s, 10, 8)
+	if err != nil {
+		return 0
+	}
+	return uint8(v)
 }
 
 // splitTXTValue splits a TXT value into 255-byte chunks.

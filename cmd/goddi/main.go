@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -29,9 +30,11 @@ import (
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/cache"
 	"github.com/jasonwa/goddi/internal/dns/client"
+	"github.com/jasonwa/goddi/internal/dns/dynamic_update"
 	"github.com/jasonwa/goddi/internal/dns/filter"
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
 	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
+	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/jasonwa/goddi/internal/ipam/address"
 	"github.com/jasonwa/goddi/internal/ipam/space"
@@ -46,7 +49,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.1.3"
+	Version   = "0.1.4"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -213,6 +216,9 @@ func runServer(configPath string) error {
 		slog.Warn("failed to load filter data from database", "error", err)
 	}
 
+	// Block list URL subscription fetcher (periodic refresh + manual API).
+	blockListFetcher := filter.NewBlockListFetcher(db.DB, filterEngine.BlockListMgr)
+
 	// DNS Forwarder Group.
 	strategy := forwarder.SelectionStrategy(cfg.Forwarders.Mode)
 	fwdGroup := forwarder.NewForwarderGroup(strategy, 5*time.Second)
@@ -255,26 +261,51 @@ func runServer(configPath string) error {
 	// DNS Client (for debug queries).
 	dnsClient := client.NewDNSClient(5 * time.Second)
 
-	// Zone Store - load authoritative zones from database.
+	// DNS Zone Store - load authoritative zones from database.
 	zoneStore := zone.NewStore(db.DB)
 	slog.Info("DNS zone store initialized", "zones", len(zoneStore.ZoneNames()))
 
+	// Zone / record managers (dynamic updates + record aging + IXFR history).
+	zoneMgr := zone.NewZoneManager(db.DB, zoneStore)
+	recordMgr := zone.NewRecordManager(db.DB, zoneStore, zoneMgr)
+
 	// DNS Server.
 	var dnsSrv *dnsserver.Server
+	var rateLimiter *dnsserver.RateLimiter
 	if cfg.DNS.Enabled {
 		dnsSrv = dnsserver.New(cfg, dnsCache, filterEngine, fwdGroup, condManager, queryLog, zoneStore)
+
+		// Query rate limiting (QPS + RRL). Values can be hot-updated via
+		// the dns_rate_limit_qps setting.
+		if cfg.DNS.RateLimit.Enabled {
+			rateLimiter = dnsserver.NewRateLimiter(
+				int64(cfg.DNS.RateLimit.ClientQPS),
+				int64(cfg.DNS.RateLimit.ClientBurst),
+				int64(cfg.DNS.RateLimit.RRLThreshold),
+			)
+			dnsSrv.SetRateLimiter(rateLimiter)
+		}
+
+		// Zone transfer (AXFR/IXFR) serving.
+		dnsSrv.SetAXFRHandler(transfer.NewAXFRHandler(db.DB))
+
+		// RFC 2136 dynamic updates (TSIG-authenticated).
+		updateHandler := dynamic_update.NewUpdateHandler(db.DB, zoneStore, zoneMgr, recordMgr)
+		updateHandler.SetTSIGSecrets(cfg.DNS.DynamicUpdate.TSIGKeys)
+		dnsSrv.SetUpdateHandler(updateHandler)
 	}
 
 	// Initialize API handler services.
 	handler.InitDNSServices(&handler.DNSServiceContainer{
-		DB:          db.DB,
-		Cache:       dnsCache,
-		Filter:      filterEngine,
-		Forwarder:   fwdGroup,
-		Conditional: condManager,
-		DNSClient:   dnsClient,
-		ZoneStore:   zoneStore,
-		JWTSecret:   cfg.Security.JWTSecret,
+		DB:               db.DB,
+		Cache:            dnsCache,
+		Filter:           filterEngine,
+		Forwarder:        fwdGroup,
+		Conditional:      condManager,
+		DNSClient:        dnsClient,
+		ZoneStore:        zoneStore,
+		BlockListFetcher: blockListFetcher,
+		JWTSecret:        cfg.Security.JWTSecret,
 	})
 
 	// --- Initialize DHCP Components ---
@@ -344,6 +375,81 @@ func runServer(configPath string) error {
 	})
 
 	slog.Info("All services initialized (DNS, DHCP, IPAM, System)")
+
+	// --- Apply persisted settings at startup and hot-apply changes ---
+	applySetting := func(key, value string) {
+		switch key {
+		case "dns_recursion":
+			if dnsSrv != nil {
+				dnsSrv.SetRecursionEnabled(value == "true" || value == "1")
+			}
+		case "security_rebinding":
+			filterEngine.SetRebindingProtection(value == "true" || value == "1")
+		case "dns_blocking_enabled":
+			filterEngine.SetBlockingEnabled(value == "true" || value == "1")
+		case "dns_rate_limit_qps":
+			if rateLimiter != nil {
+				qps, _ := strconv.Atoi(value)
+				burst := qps * 2
+				if burst < 10 {
+					burst = 10
+				}
+				rateLimiter.Configure(int64(qps), int64(burst), int64(cfg.DNS.RateLimit.RRLThreshold))
+			}
+		case "dns_blocklist_refresh_hours":
+			if hours, err := strconv.Atoi(value); err == nil && hours > 0 {
+				blockListFetcher.SetInterval(time.Duration(hours) * time.Hour)
+			}
+		}
+	}
+	for _, key := range []string{
+		"dns_recursion", "security_rebinding", "dns_blocking_enabled",
+		"dns_rate_limit_qps", "dns_blocklist_refresh_hours",
+	} {
+		if v, err := settingsMgr.GetSetting(key); err == nil {
+			applySetting(key, v)
+		}
+	}
+	settingsMgr.Subscribe(applySetting)
+
+	// --- Background maintenance loops ---
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
+	defer backgroundCancel()
+
+	// Block list URL subscription refresh.
+	go blockListFetcher.Run(backgroundCtx)
+
+	// Record aging: delete expired records every 10 minutes.
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-backgroundCtx.Done():
+				return
+			case <-ticker.C:
+				if deleted, err := recordMgr.CleanupExpiredRecords(); err == nil && deleted > 0 {
+					zoneStore.Reload()
+				}
+			}
+		}
+	}()
+
+	// IXFR change history pruning (30-day window).
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-backgroundCtx.Done():
+				return
+			case <-ticker.C:
+				recordMgr.PruneZoneChangeHistory(30)
+			}
+		}
+	}()
+
+	slog.Info("Background maintenance loops started")
 
 	// Build HTTP router.
 	router := api.NewRouter(cfg, db)
@@ -443,6 +549,9 @@ func runServer(configPath string) error {
 		slog.Info("flushing DHCP event logs...")
 		dhcpEventLogger.Close()
 	}
+
+	// Stop background maintenance loops.
+	backgroundCancel()
 
 	// Flush persistent cache to disk.
 	if persistentCache != nil {

@@ -688,8 +688,13 @@ func DeleteClientPolicy(w http.ResponseWriter, r *http.Request) {
 
 // LoadBlockListsFromDB loads block lists and rules from the database into the filter engine.
 func LoadBlockListsFromDB(db *sql.DB, filterEngine *filter.FilterEngine) error {
-	// Load block lists.
-	rows, err := db.Query("SELECT id, name, type, url, enabled, entry_count FROM dns_block_lists")
+	// Load block lists (including URL subscription fetch status).
+	rows, err := db.Query(`
+		SELECT id, name, type, COALESCE(url, ''), enabled, entry_count,
+			COALESCE(last_updated, ''), COALESCE(last_fetch_at, ''),
+			COALESCE(last_fetch_status, ''), COALESCE(last_fetch_error, '')
+		FROM dns_block_lists
+	`)
 	if err != nil {
 		return err
 	}
@@ -700,7 +705,8 @@ func LoadBlockListsFromDB(db *sql.DB, filterEngine *filter.FilterEngine) error {
 
 	for rows.Next() {
 		var list filter.BlockList
-		if err := rows.Scan(&list.ID, &list.Name, &list.Type, &list.URL, &list.Enabled, &list.EntryCount); err != nil {
+		if err := rows.Scan(&list.ID, &list.Name, &list.Type, &list.URL, &list.Enabled, &list.EntryCount,
+			&list.LastUpdated, &list.LastFetchAt, &list.LastFetchStatus, &list.LastFetchError); err != nil {
 			slog.Error("load_block_lists: failed to scan block list row", "error", err)
 			continue
 		}

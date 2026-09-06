@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -425,6 +426,86 @@ func (c *Cache) Entries() []*entry {
 		result = append(result, item.entry)
 	}
 	return result
+}
+
+// EntryInfo is a JSON-friendly snapshot of one cache entry for the
+// management API.
+type EntryInfo struct {
+	QName      string    `json:"qname"`
+	QType      string    `json:"qtype"`
+	TTLLeft    int       `json:"ttl_left"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	StaleUntil time.Time `json:"stale_until"`
+	HitCount   int64     `json:"hit_count"`
+	LastAccess time.Time `json:"last_access"`
+	SizeBytes  int       `json:"size_bytes"`
+}
+
+// ListEntries returns a filtered, paginated snapshot of cache entries.
+// qnameFilter and qtypeFilter are substring/type-name filters ("" = all).
+// Entries are sorted by hit count descending so the hottest records come
+// first. The scan is bounded by maxScan to keep the O(n) walk cheap on
+// very large caches.
+func (c *Cache) ListEntries(qnameFilter, qtypeFilter string, limit, offset int) ([]EntryInfo, int) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	qnameFilter = strings.ToLower(qnameFilter)
+	qtypeFilter = strings.ToUpper(qtypeFilter)
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	const maxScan = 200000
+	scanned := 0
+
+	all := make([]EntryInfo, 0, 256)
+	for _, e := range c.entries {
+		item := e.Value.(*lruItem)
+		if scanned++; scanned > maxScan {
+			break
+		}
+		name := dns.TypeToString[item.entry.QType]
+		if qtypeFilter != "" && name != qtypeFilter {
+			continue
+		}
+		if qnameFilter != "" && !strings.Contains(strings.ToLower(item.entry.QName), qnameFilter) {
+			continue
+		}
+		all = append(all, EntryInfo{
+			QName:      strings.TrimSuffix(item.entry.QName, "."),
+			QType:      name,
+			TTLLeft:    int(time.Until(item.entry.ExpiresAt).Seconds()),
+			ExpiresAt:  item.entry.ExpiresAt,
+			StaleUntil: item.entry.StaleUntil,
+			HitCount:   item.entry.HitCount,
+			LastAccess: item.entry.LastAccess,
+			SizeBytes:  len(item.entry.Msg),
+		})
+	}
+
+	total := len(all)
+	// Selection sort by hit count is O(n^2) — too slow for large result
+	// sets. Sort the (already filtered, typically small) slice instead.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].HitCount != all[j].HitCount {
+			return all[i].HitCount > all[j].HitCount
+		}
+		return all[i].QName < all[j].QName
+	})
+
+	if offset >= total {
+		return []EntryInfo{}, total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total
 }
 
 // PopularEntries returns the most frequently accessed entries. The

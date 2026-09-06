@@ -3,6 +3,7 @@ package zone
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -58,6 +59,11 @@ type RecordOptions struct {
 	Owner    string `json:"owner,omitempty"`
 	// CreatePTR indicates that a PTR record should be auto-created for A/AAAA records.
 	CreatePTR bool `json:"create_ptr,omitempty"`
+	// ExpiresAt sets an expiry timestamp for record aging. When it passes,
+	// the record stops answering queries and a background task deletes it.
+	// nil leaves the value unchanged on update; ClearExpiresAt removes it.
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	ClearExpiresAt bool       `json:"clear_expires_at,omitempty"`
 }
 
 // RecordFilter contains filter options for listing records.
@@ -148,20 +154,19 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 
 	id := uuid.New().String()
 	_, err = m.db.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zoneID, name, opts.Type, opts.Value, ttl,
 		nullInt(opts.Priority), nullInt(opts.Weight), nullInt(opts.Port),
-		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner)
+		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, opts.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
 
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(zoneID); err != nil {
-		// Log but don't fail the record creation.
-		_ = err
-	}
+	// Increment zone serial and record the change for IXFR.
+	serial, _ := m.zoneMgr.IncrementSerial(zoneID)
+	m.logChange(zoneID, serial, "add", name, opts.Type, opts.Value, ttl,
+		intOrZero(opts.Priority), intOrZero(opts.Weight), intOrZero(opts.Port))
 
 	// Auto-create PTR record if requested for A/AAAA.
 	if opts.CreatePTR && (opts.Type == "A" || opts.Type == "AAAA") {
@@ -484,10 +489,10 @@ func (m *RecordManager) DeleteRecord(id string) error {
 		return fmt.Errorf("deleting record: %w", err)
 	}
 
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(record.ZoneID); err != nil {
-		_ = err
-	}
+	// Increment zone serial and record the change for IXFR.
+	serial, _ := m.zoneMgr.IncrementSerial(record.ZoneID)
+	m.logChange(record.ZoneID, serial, "delete", record.Name, record.Type,
+		record.Value, record.TTL, record.Priority, record.Weight, record.Port)
 
 	// Reload in-memory zone store.
 	if m.zoneStore != nil {
@@ -611,6 +616,17 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 		return fmt.Errorf("commit batch delete transaction: %w", err)
 	}
 
+	// Record one change-history batch per zone for IXFR.
+	zoneSerial := make(map[string]uint32, len(zoneBumped))
+	for zoneID := range zoneBumped {
+		serial, _ := m.zoneMgr.IncrementSerial(zoneID)
+		zoneSerial[zoneID] = serial
+	}
+	for _, rec := range deleted {
+		m.logChange(rec.ZoneID, zoneSerial[rec.ZoneID], "delete", rec.Name, rec.Type,
+			rec.Value, rec.TTL, rec.Priority, rec.Weight, rec.Port)
+	}
+
 	if m.zoneStore != nil {
 		m.zoneStore.Reload()
 	}
@@ -673,11 +689,11 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 
 	id := uuid.New().String()
 	_, err := tx.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zone.ID, name, opts.Type, opts.Value, ttl,
 		nullInt(opts.Priority), nullInt(opts.Weight), nullInt(opts.Port),
-		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner)
+		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, opts.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
@@ -709,6 +725,59 @@ func intOrZero(v *int) int {
 		return 0
 	}
 	return *v
+}
+
+// logChange records one RR mutation into dns_zone_changes for true IXFR
+// (RFC 1995) incremental transfer. Change history failure is logged but
+// never fails the mutation: IXFR clients fall back to AXFR when history
+// is incomplete.
+func (m *RecordManager) logChange(zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port int) {
+	if serial == 0 {
+		return
+	}
+	_, err := m.db.Exec(`
+		INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, uuid.New().String(), zoneID, serial, changeType, name, rtype, value, ttl,
+		nullInt(&priority), nullInt(&weight), nullInt(&port))
+	if err != nil {
+		slog.Warn("record: failed to write zone change history", "zone_id", zoneID, "error", err)
+	}
+}
+
+// PruneZoneChangeHistory removes change rows older than the given number of
+// days. IXFR clients older than the retained window fall back to AXFR.
+func (m *RecordManager) PruneZoneChangeHistory(days int) {
+	if days <= 0 {
+		return
+	}
+	res, err := m.db.Exec(
+		"DELETE FROM dns_zone_changes WHERE created_at < datetime('now', ?)",
+		fmt.Sprintf("-%d days", days),
+	)
+	if err != nil {
+		slog.Warn("record: failed to prune zone change history", "error", err)
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows > 0 {
+		slog.Debug("record: pruned zone change history", "deleted", rows)
+	}
+}
+
+// CleanupExpiredRecords deletes records whose expiry has passed and returns
+// how many were removed. Intended to run periodically (record aging).
+func (m *RecordManager) CleanupExpiredRecords() (int64, error) {
+	res, err := m.db.Exec(
+		"DELETE FROM dns_records WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')",
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting expired records: %w", err)
+	}
+	deleted, _ := res.RowsAffected()
+	if deleted > 0 {
+		slog.Info("record: expired records cleaned up", "deleted", deleted)
+	}
+	return deleted, nil
 }
 
 // autoCreatePTR automatically creates a PTR record in the reverse zone for an A/AAAA record.

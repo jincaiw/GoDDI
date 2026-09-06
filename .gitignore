@@ -59,3 +59,7 @@ web/dist-ci/
 
 # WorkBuddy session data
 .workbuddy/
+
+# npm local cache
+web/.npm-cache/
+node_modules/

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"sync/atomic"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -14,17 +16,66 @@ type FilterEngine struct {
 	AllowListMgr *AllowListManager
 	PolicyMgr    *ClientPolicyManager
 
-	rebindingProtection bool
+	rebindingProtection atomic.Bool
+	blockingEnabled     atomic.Bool
+
+	// blockingDisabledUntil is the deadline until which block lists and
+	// client policies are suspended (temporary disable, 0 = never).
+	blockingDisabledUntil atomic.Int64
 }
 
 // NewFilterEngine creates a new filter engine.
 func NewFilterEngine(rebindingProtection bool) *FilterEngine {
-	return &FilterEngine{
-		BlockListMgr:        NewBlockListManager(),
-		AllowListMgr:        NewAllowListManager(),
-		PolicyMgr:           NewClientPolicyManager(),
-		rebindingProtection: rebindingProtection,
+	fe := &FilterEngine{
+		BlockListMgr: NewBlockListManager(),
+		AllowListMgr: NewAllowListManager(),
+		PolicyMgr:    NewClientPolicyManager(),
 	}
+	fe.rebindingProtection.Store(rebindingProtection)
+	fe.blockingEnabled.Store(true)
+	return fe
+}
+
+// SetRebindingProtection enables or disables DNS rebinding protection at
+// runtime (hot setting).
+func (fe *FilterEngine) SetRebindingProtection(enabled bool) {
+	fe.rebindingProtection.Store(enabled)
+}
+
+// SetBlockingEnabled globally enables or disables the block list / client
+// policy pipeline (master switch, hot setting).
+func (fe *FilterEngine) SetBlockingEnabled(enabled bool) {
+	fe.blockingEnabled.Store(enabled)
+	slog.Info("filter: blocking pipeline", "enabled", enabled)
+}
+
+// TemporaryDisableBlocking suspends blocking for the given duration
+// (1 minute to 24 hours). A zero duration re-enables blocking immediately.
+func (fe *FilterEngine) TemporaryDisableBlocking(d time.Duration) {
+	if d <= 0 {
+		fe.blockingDisabledUntil.Store(0)
+		slog.Info("filter: temporary blocking suspension cleared")
+		return
+	}
+	fe.blockingDisabledUntil.Store(time.Now().Add(d).Unix())
+	slog.Info("filter: blocking temporarily disabled", "minutes", int(d.Minutes()))
+}
+
+// BlockingStatus reports whether blocking is currently active and, when
+// temporarily disabled, until when.
+func (fe *FilterEngine) BlockingStatus() (enabled bool, disabledUntil time.Time) {
+	if !fe.blockingEnabled.Load() {
+		return false, time.Time{}
+	}
+	untilUnix := fe.blockingDisabledUntil.Load()
+	if untilUnix == 0 {
+		return true, time.Time{}
+	}
+	until := time.Unix(untilUnix, 0)
+	if time.Now().After(until) {
+		return true, time.Time{}
+	}
+	return false, until
 }
 
 // CheckResult contains the result of a filter check.
@@ -132,7 +183,7 @@ func matchRulePattern(pattern, qname, matchType string, compiledRegex *regexp.Re
 // CheckRebindingProtection checks if DNS response contains private IPs
 // when the query came from a public client (DNS rebinding attack prevention).
 func (fe *FilterEngine) CheckRebindingProtection(msg *dns.Msg, clientIP string) bool {
-	if !fe.rebindingProtection {
+	if !fe.rebindingProtection.Load() {
 		return false // Not blocked.
 	}
 

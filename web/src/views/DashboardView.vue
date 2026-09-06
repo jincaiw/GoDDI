@@ -44,6 +44,48 @@
       </n-gi>
     </n-grid>
 
+    <n-card style="margin-top: 16px;" :title="t('dashboard.topStats')">
+      <template #header-extra>
+        <n-radio-group v-model:value="topRange" size="small" @update:value="loadTop">
+          <n-radio-button value="hour">{{ t('dashboard.rangeHour') }}</n-radio-button>
+          <n-radio-button value="day">{{ t('dashboard.rangeDay') }}</n-radio-button>
+          <n-radio-button value="week">{{ t('dashboard.rangeWeek') }}</n-radio-button>
+        </n-radio-group>
+      </template>
+      <n-grid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
+        <n-gi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topClients') }}</h4>
+          <n-empty v-if="topStats.top_clients.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_clients" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </n-gi>
+        <n-gi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topDomains') }}</h4>
+          <n-empty v-if="topStats.top_domains.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_domains" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </n-gi>
+        <n-gi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topBlocked') }}</h4>
+          <n-empty v-if="topStats.top_blocked.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_blocked" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </n-gi>
+      </n-grid>
+    </n-card>
+
     <n-grid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
       <n-gi span="2 l:1">
         <n-card :title="t('dashboard.queryChart')">
@@ -65,7 +107,7 @@ import { computed, defineAsyncComponent, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { GlobeOutline, ServerOutline, DesktopOutline, GridOutline } from '@vicons/ionicons5'
 import PageHeader from '@/components/PageHeader.vue'
-import { getDashboardStats, type HourlyDNSStats } from '@/api/dns'
+import { getDashboardStats, getDashboardTop, type HourlyDNSStats, type TopStats } from '@/api/dns'
 import { listAuditLogs } from '@/api/logs'
 
 const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
@@ -82,6 +124,14 @@ const stats = ref({
 const chartReady = ref(false)
 const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queries: [] })
 
+// Top statistics
+const topRange = ref<'hour' | 'day' | 'week'>('hour')
+const topStats = ref<TopStats>({ range: 'hour', top_clients: [], top_domains: [], top_blocked: [] })
+
+async function loadTop() {
+  try { topStats.value = await getDashboardTop(topRange.value, 10) } catch { /* ignore */ }
+}
+
 const eventColumns = computed(() => [
   { title: () => t('logs.audit.user'), key: 'username', width: 100 },
   { title: () => t('logs.audit.action'), key: 'action', width: 100 },
@@ -97,6 +147,7 @@ const eventColumns = computed(() => [
 const recentEvents = ref<unknown[]>([])
 
 onMounted(async () => {
+  loadTop()
   try {
     const [dashboardResult, auditResult] = await Promise.allSettled([
       getDashboardStats(),
@@ -145,4 +196,11 @@ onMounted(async () => {
 .metric-card :deep(.n-statistic__label) { font-size: 13px; min-height: 40px; margin-bottom: 0; }
 .metric-card :deep(.n-statistic-value__content) { font-size: 28px; font-weight: 600; letter-spacing: -0.8px; }
 .metric-card :deep(.n-statistic-value__prefix) { position: absolute; left: 20px; top: 40px; margin: 0; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #007aff0c; }
+
+.top-title { margin: 0 0 8px; font-size: 13px; color: #888; }
+.top-list { list-style: none; margin: 0; padding: 0; }
+.top-list li { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; border-bottom: 1px dashed rgba(128, 128, 128, 0.15); }
+.top-list li:last-child { border-bottom: none; }
+.top-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; }
+.top-count { font-weight: 600; }
 </style>
