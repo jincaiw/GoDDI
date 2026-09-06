@@ -210,6 +210,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// DNS Cache.
 			r.Route("/dns/cache", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.GetDNSCacheStats)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/entries", handler.ListDNSCacheEntries)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/", handler.FlushDNSCache)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{name}/{type}", handler.FlushDNSCacheEntry)
 			})
