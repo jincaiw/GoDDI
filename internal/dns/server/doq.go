@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -33,18 +34,27 @@ type DoQServer struct {
 	tlsConf *tls.Config
 	handler dns.Handler
 
+	// mu guards listener, which is assigned by the serve goroutine but
+	// read by Shutdown from the caller's goroutine.
+	mu       sync.Mutex
 	listener *quic.Listener
-	ctx      context.Context
-	cancel   context.CancelFunc
+	// ctx/cancel are created in the constructor so Shutdown never races
+	// with the serve loop's use of s.ctx (the accept loop runs on its own
+	// goroutine and Shutdown may be called from any goroutine).
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewDoQServer creates a DoQ server for the given address. The TLS config
 // must carry a certificate; the "doq" ALPN is applied here.
 func NewDoQServer(addr string, tlsConf *tls.Config, handler dns.Handler) *DoQServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &DoQServer{
 		addr:    addr,
 		tlsConf: tlsConf,
 		handler: handler,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
@@ -71,10 +81,12 @@ func (s *DoQServer) ListenAndServe() error {
 // serve runs the accept loop on an existing QUIC listener. Split from
 // ListenAndServe so tests can bind 127.0.0.1:0 and discover the port.
 func (s *DoQServer) serve(listener *quic.Listener) error {
+	s.mu.Lock()
 	s.listener = listener
-	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.mu.Unlock()
+	defer listener.Close()
 
-	slog.Info("doq: listener started", "addr", s.listener.Addr())
+	slog.Info("doq: listener started", "addr", listener.Addr())
 	for {
 		conn, err := listener.Accept(s.ctx)
 		if err != nil {
@@ -87,13 +99,17 @@ func (s *DoQServer) serve(listener *quic.Listener) error {
 	}
 }
 
-// Shutdown stops the listener and all in-flight streams.
+// Shutdown stops the listener and all in-flight streams. Safe to call
+// concurrently with the serve loop.
 func (s *DoQServer) Shutdown() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.listener != nil {
-		return s.listener.Close()
+	s.mu.Lock()
+	listener := s.listener
+	s.mu.Unlock()
+	if listener != nil {
+		return listener.Close()
 	}
 	return nil
 }
