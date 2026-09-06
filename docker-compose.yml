@@ -6,8 +6,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "0.1.8"
-        GIT_COMMIT: "81bf670"
+        VERSION: "0.1.9"
+        GIT_COMMIT: "6f185bf"
         BUILD_DATE: "2026-09-06"
     container_name: goddi
     restart: unless-stopped

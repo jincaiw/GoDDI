@@ -1,0 +1,1 @@
+import{s as e}from"./auth-DwdEH-Ys.js";function t(t){return e(`/logs/audit`,t)}export{t};
