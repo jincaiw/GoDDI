@@ -92,6 +92,7 @@ export default {
     logsDhcp: 'DHCP Logs',
     settings: 'Settings',
     settingsBackup: 'Backup',
+    system: 'System',
   },
   auth: {
     login: 'Login',

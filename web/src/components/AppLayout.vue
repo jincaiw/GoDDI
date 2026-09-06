@@ -177,11 +177,8 @@ const activeKey = computed(() => {
 const breadcrumbs = computed(() => {
   const items = [{ label: 'GoDDI', path: '/' }]
   const path = route.path
-  if (path.startsWith('/dns/client')) {
-    items.push({ label: t('nav.tools'), path: '/dns/client' })
-    items.push({ label: t('nav.dnsClient'), path: '/dns/client' })
-  } else if (path.startsWith('/dns')) {
-    items.push({ label: t('nav.dns'), path: '/dns' })
+  if (path.startsWith('/dns')) {
+    items.push({ label: t('nav.dns'), path: '/dns/zones' })
     if (path.includes('/zones')) items.push({ label: t('nav.dnsZones'), path: '/dns/zones' })
     if (path.includes('/forwarders')) items.push({ label: t('nav.dnsForwarders'), path: '/dns/forwarders' })
     if (path.includes('/security')) items.push({ label: t('nav.dnsSecurity'), path: '/dns/security' })
@@ -211,9 +208,8 @@ const breadcrumbs = computed(() => {
     if (path.includes('/dns')) items.push({ label: t('nav.logsDns'), path: '/logs/dns' })
     if (path.includes('/dhcp')) items.push({ label: t('nav.logsDhcp'), path: '/logs/dhcp' })
   } else if (path.startsWith('/settings')) {
-    items.push({ label: t('nav.administration'), path: '/admin' })
+    items.push({ label: t('nav.system'), path: '/settings' })
     if (path.includes('/backup')) items.push({ label: t('nav.settingsBackup'), path: '/settings/backup' })
-    else items.push({ label: t('nav.settings'), path: '/settings' })
   }
   return items
 })
@@ -241,6 +237,7 @@ const menuOptionList: MenuOption[] = [
       { key: '/dns/forwarders', label: () => t('nav.dnsForwarders'), icon: renderIcon(SwapHorizontalOutline) },
       { key: '/dns/security', label: () => t('nav.dnsSecurity'), icon: renderIcon(ShieldCheckmarkOutline) },
       { key: '/dns/cache', label: () => t('nav.dnsCache'), icon: renderIcon(ServerOutline) },
+      { key: '/dns/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
     ],
   },
   {
@@ -265,14 +262,6 @@ const menuOptionList: MenuOption[] = [
     ],
   },
   {
-    key: '/tools',
-    label: () => t('nav.tools'),
-    icon: renderIcon(TerminalOutline),
-    children: [
-      { key: '/dns/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
-    ],
-  },
-  {
     key: '/logs',
     label: () => t('nav.logs'),
     icon: renderIcon(SearchOutline),
@@ -280,6 +269,15 @@ const menuOptionList: MenuOption[] = [
       { key: '/logs/audit', label: () => t('nav.logsAudit'), icon: renderIcon(DocumentTextOutline) },
       { key: '/logs/dns', label: () => t('nav.logsDns'), icon: renderIcon(GlobeOutline) },
       { key: '/logs/dhcp', label: () => t('nav.logsDhcp'), icon: renderIcon(DesktopOutline) },
+    ],
+  },
+  {
+    key: 'system-group',
+    label: () => t('nav.system'),
+    icon: renderIcon(SettingsOutline),
+    children: [
+      { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
+      { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
     ],
   },
   {
@@ -292,8 +290,6 @@ const menuOptionList: MenuOption[] = [
       { key: '/admin/roles', label: () => t('nav.adminRoles'), icon: renderIcon(KeyOutline) },
       { key: '/admin/tokens', label: () => t('nav.adminTokens'), icon: renderIcon(KeyOutline) },
       { key: '/admin/sessions', label: () => t('nav.adminSessions'), icon: renderIcon(TimeOutline) },
-      { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
-      { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
     ],
   },
 ]

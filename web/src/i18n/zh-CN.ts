@@ -92,6 +92,7 @@ export default {
     logsDhcp: 'DHCP 日志',
     settings: '系统设置',
     settingsBackup: '备份管理',
+    system: '系统',
   },
   auth: {
     login: '登录',
