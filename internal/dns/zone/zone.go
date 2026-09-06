@@ -746,3 +746,164 @@ func generateSerial(db *sql.DB) uint32 {
 	}
 	return maxSerial + 1
 }
+
+// CloneZone copies a zone (including all its records) under a new name.
+// Technitium v13.5 parity. DNSSEC signing state is intentionally not
+// copied: the clone starts unsigned and can be signed independently.
+func (m *ZoneManager) CloneZone(id, newName string) (*Zone, error) {
+	src, err := m.GetZone(id)
+	if err != nil {
+		return nil, err
+	}
+	if newName == "" {
+		return nil, fmt.Errorf("new zone name is required")
+	}
+
+	newName = strings.TrimSuffix(strings.ToLower(newName), ".") + "."
+
+	// Copy SOA/records with the new origin substituted for record names
+	// that referenced the old zone apex.
+	oldOrigin := strings.TrimSuffix(strings.ToLower(src.Name), ".")
+	rewrite := func(name string) string {
+		n := strings.ToLower(name)
+		if oldOrigin != "" && n == oldOrigin {
+			return newName
+		}
+		return name
+	}
+
+	clone, err := m.CreateZone(ZoneOptions{
+		Name:           newName,
+		Type:           src.Type,
+		Enabled:        &src.Enabled,
+		DefaultTTL:     &src.DefaultTTL,
+		SOA_MName:      src.SOA_MName,
+		SOA_RName:      src.SOA_RName,
+		Refresh:        &src.Refresh,
+		Retry:          &src.Retry,
+		Expire:         &src.Expire,
+		Minimum:        &src.Minimum,
+		TransferPolicy: src.TransferPolicy,
+		UpdatePolicy:   src.UpdatePolicy,
+		ACL:            src.ACL,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Copy records in bulk.
+	records, _, err := m.recordsForClone(id)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) > 0 {
+		if rm := m.recordManagerForClone(); rm != nil {
+			opts := make([]RecordOptions, 0, len(records))
+			for _, r := range records {
+				enabled := r.Enabled
+				ttl := r.TTL
+				opts = append(opts, RecordOptions{
+					Name:    rewrite(r.Name),
+					Type:    r.Type,
+					Value:   r.Value,
+					TTL:     &ttl,
+					Enabled: &enabled,
+					Comment: r.Comment,
+					Tags:    r.Tags,
+					Owner:   r.Owner,
+				})
+			}
+			if _, err := rm.BatchCreateRecords(clone.ID, opts); err != nil {
+				return nil, fmt.Errorf("cloning records: %w", err)
+			}
+		}
+	}
+
+	if m.zoneStore != nil {
+		m.zoneStore.Reload()
+	}
+	return clone, nil
+}
+
+// recordsForClone loads every record of a zone without pagination.
+func (m *ZoneManager) recordsForClone(zoneID string) ([]Record, int64, error) {
+	return m.listAllRecords(zoneID)
+}
+
+// recordManagerForClone resolves the RecordManager singleton from the
+// package-level registry (set at bootstrap) to avoid a circular
+// dependency between ZoneManager and RecordManager constructors.
+func (m *ZoneManager) recordManagerForClone() *RecordManager {
+	return sharedRecordManager
+}
+
+// ConvertZoneType changes the zone's type in place. Only conversions
+// between standard authoritative types (primary/secondary/stub/forward)
+// are permitted; special allowed/blocked zones are fixed.
+func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
+	if !isValidZoneType(newType) {
+		return nil, fmt.Errorf("invalid zone type: %s", newType)
+	}
+	if newType == "allowed" || newType == "blocked" {
+		return nil, fmt.Errorf("cannot convert to special zone type: %s", newType)
+	}
+
+	z, err := m.GetZone(id)
+	if err != nil {
+		return nil, err
+	}
+	if z.Type == "allowed" || z.Type == "blocked" {
+		return nil, fmt.Errorf("special zone types cannot be converted")
+	}
+	if z.Type == newType {
+		return z, nil
+	}
+
+	if _, err := m.db.Exec(`UPDATE dns_zones SET type = ?, updated_at = datetime('now') WHERE id = ?`, newType, id); err != nil {
+		return nil, fmt.Errorf("converting zone: %w", err)
+	}
+
+	if m.zoneStore != nil {
+		m.zoneStore.Reload()
+	}
+	return m.GetZone(id)
+}
+
+// sharedRecordManager is registered at bootstrap so ZoneManager.CloneZone
+// can copy records without a constructor dependency cycle.
+var sharedRecordManager *RecordManager
+
+// RegisterSharedRecordManager records the process-wide RecordManager.
+func RegisterSharedRecordManager(rm *RecordManager) {
+	sharedRecordManager = rm
+}
+
+// listAllRecords loads every record of a zone without pagination.
+func (m *ZoneManager) listAllRecords(zoneID string) ([]Record, int64, error) {
+	rows, err := m.db.Query(`
+		SELECT id, zone_id, name, type, value, ttl, priority, weight, port,
+			COALESCE(tag, ''), COALESCE(flag, 0), enabled, COALESCE(comment, ''),
+			COALESCE(tags, ''), COALESCE(owner, ''), expires_at, created_at, updated_at
+		FROM dns_records WHERE zone_id = ? ORDER BY name`, zoneID)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []Record
+	for rows.Next() {
+		var r Record
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.Value, &r.TTL,
+			&r.Priority, &r.Weight, &r.Port, &r.Tag, &r.Flag, &r.Enabled,
+			&r.Comment, &r.Tags, &r.Owner, &expiresAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			continue
+		}
+		if expiresAt.Valid {
+			t := expiresAt.Time
+			r.ExpiresAt = &t
+		}
+		records = append(records, r)
+	}
+	return records, int64(len(records)), nil
+}

@@ -19,9 +19,9 @@ import (
 type ECSMode string
 
 const (
-	ECSStrip      ECSMode = "strip"
+	ECSStrip       ECSMode = "strip"
 	ECSPassthrough ECSMode = "passthrough"
-	ECSAdd        ECSMode = "add"
+	ECSAdd         ECSMode = "add"
 )
 
 // DefaultECS prefix lengths. /24 for IPv4 and /56 for IPv6 follow the RFC

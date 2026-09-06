@@ -197,9 +197,9 @@ func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName str
 
 // ixfrGroup holds the mutations of one serial version.
 type ixfrGroup struct {
-	serial     uint32
-	deletions  []dns.RR
-	additions  []dns.RR
+	serial    uint32
+	deletions []dns.RR
+	additions []dns.RR
 }
 
 // loadChanges reads dns_zone_changes newer than clientSerial and converts

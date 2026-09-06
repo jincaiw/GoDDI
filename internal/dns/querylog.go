@@ -24,6 +24,7 @@ type QueryLogEntry struct {
 	Upstream       string  `json:"upstream"`
 	Cached         bool    `json:"cached"`
 	Blocked        bool    `json:"blocked"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // QueryLogger handles async DNS query logging.
@@ -252,7 +253,7 @@ func QueryLogs(db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]Query
 	// Fetch page.
 	offset := (page - 1) * pageSize
 	querySQL := "SELECT id, client_ip, client_port, protocol, query_name, query_type, " +
-		"response_code, response_time_ms, upstream, cached, blocked " +
+		"response_code, response_time_ms, upstream, cached, blocked, created_at " +
 		"FROM dns_query_logs " + whereClause +
 		" ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, pageSize, offset)
@@ -269,7 +270,7 @@ func QueryLogs(db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]Query
 		if err := rows.Scan(
 			&e.ID, &e.ClientIP, &e.ClientPort, &e.Protocol,
 			&e.QueryName, &e.QueryType, &e.ResponseCode,
-			&e.ResponseTimeMs, &e.Upstream, &e.Cached, &e.Blocked,
+			&e.ResponseTimeMs, &e.Upstream, &e.Cached, &e.Blocked, &e.CreatedAt,
 		); err != nil {
 			return nil, 0, err
 		}

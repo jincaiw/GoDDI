@@ -24,8 +24,15 @@ var validSettingKeys = map[string]bool{
 	"dns_ecs_mode":                true,
 	"dns_ecs_ipv4_prefix_length":  true,
 	"dns_ecs_ipv6_prefix_length":  true,
+	"dns_cache_serve_stale":       true,
+	"dns_cache_stale_ttl":         true,
+	"dns_cache_prefetch":          true,
+	"dns_cache_min_ttl":           true,
+	"dns_cache_max_ttl":           true,
+	"dns_special_zones":           true,
 	"dns_dot_config":              true,
 	"dns_doh_config":              true,
+	"dns_doq_config":              true,
 	"dhcp_lease_time":             true,
 	"ipam_ping_check":             true,
 	"ipam_auto_scan":              true,
@@ -128,6 +135,27 @@ func validateSettingValue(key, value string) error {
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 || n > 720 {
 			return fmt.Errorf("dns_blocklist_refresh_hours 必须在 1-720 之间")
+		}
+	case "dns_ecs_mode":
+		switch value {
+		case "strip", "passthrough", "add":
+		default:
+			return fmt.Errorf("dns_ecs_mode 必须是 strip、passthrough 或 add")
+		}
+	case "dns_ecs_ipv4_prefix_length":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 32 {
+			return fmt.Errorf("dns_ecs_ipv4_prefix_length 必须在 0-32 之间")
+		}
+	case "dns_ecs_ipv6_prefix_length":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 128 {
+			return fmt.Errorf("dns_ecs_ipv6_prefix_length 必须在 0-128 之间")
+		}
+	case "dns_cache_stale_ttl", "dns_cache_min_ttl", "dns_cache_max_ttl":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 604800 {
+			return fmt.Errorf("%s 必须在 0-604800 之间", key)
 		}
 	}
 	return nil

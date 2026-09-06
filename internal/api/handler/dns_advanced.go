@@ -38,8 +38,8 @@ func TemporaryDisableBlocking(w http.ResponseWriter, r *http.Request) {
 
 	enabled, until := DNSServices.Filter.BlockingStatus()
 	response.OK(w, map[string]interface{}{
-		"blocking_enabled":    enabled,
-		"disabled_until":      until,
+		"blocking_enabled":     enabled,
+		"disabled_until":       until,
 		"disabled_for_minutes": req.Minutes,
 	})
 }

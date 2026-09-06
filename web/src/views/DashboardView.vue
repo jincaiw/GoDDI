@@ -86,6 +86,24 @@
       </n-grid>
     </n-card>
 
+    <n-card style="margin-top: 16px;" :title="t('dashboard.longTermStats')">
+      <template #header-extra>
+        <n-radio-group v-model:value="statsRange" size="small" @update:value="loadLongTermStats">
+          <n-radio-button value="hour">{{ t('dashboard.rangeHour') }}</n-radio-button>
+          <n-radio-button value="day">{{ t('dashboard.rangeDay') }}</n-radio-button>
+          <n-radio-button value="week">{{ t('dashboard.rangeWeek') }}</n-radio-button>
+        </n-radio-group>
+      </template>
+      <n-space v-if="ltStats" :size="24" style="margin-bottom: 8px;" :wrap="true">
+        <n-statistic :label="t('dashboard.statsTotal')" :value="ltStats.summary.total" />
+        <n-statistic :label="t('dashboard.statsBlocked')" :value="ltStats.summary.blocked" />
+        <n-statistic :label="t('dashboard.statsCached')" :value="ltStats.summary.cached" />
+        <n-statistic :label="t('dashboard.statsClients')" :value="ltStats.summary.clients" />
+        <n-statistic :label="t('dashboard.statsAvgLatency')" :value="ltStats.summary.avg_response_ms.toFixed(1) + 'ms'" />
+      </n-space>
+      <stats-trend-chart :stats="ltStats" />
+    </n-card>
+
     <n-grid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
       <n-gi span="2 l:1">
         <n-card :title="t('dashboard.queryChart')">
@@ -107,11 +125,12 @@ import { computed, defineAsyncComponent, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { GlobeOutline, ServerOutline, DesktopOutline, GridOutline } from '@vicons/ionicons5'
 import PageHeader from '@/components/PageHeader.vue'
-import { getDashboardStats, getDashboardTop, type HourlyDNSStats, type TopStats } from '@/api/dns'
+import { getDashboardStats, getDashboardTop, getDNSStats, type HourlyDNSStats, type TopStats, type StatsResponse } from '@/api/dns'
 import { listAuditLogs } from '@/api/logs'
 
 const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
 const RcodeDonut = defineAsyncComponent(() => import('@/components/RcodeDonut.vue'))
+const StatsTrendChart = defineAsyncComponent(() => import('@/components/StatsTrendChart.vue'))
 
 const { t, locale } = useI18n()
 
@@ -133,6 +152,14 @@ async function loadTop() {
   try { topStats.value = await getDashboardTop(topRange.value, 10) } catch { /* ignore */ }
 }
 
+// Long-term statistics (GET /stats, Technitium parity A2).
+const statsRange = ref<'hour' | 'day' | 'week'>('day')
+const ltStats = ref<StatsResponse | null>(null)
+
+async function loadLongTermStats() {
+  try { ltStats.value = await getDNSStats({ range: statsRange.value }) } catch { /* ignore */ }
+}
+
 const eventColumns = computed(() => [
   { title: () => t('logs.audit.user'), key: 'username', width: 100 },
   { title: () => t('logs.audit.action'), key: 'action', width: 100 },
@@ -149,6 +176,7 @@ const recentEvents = ref<unknown[]>([])
 
 onMounted(async () => {
   loadTop()
+  loadLongTermStats()
   try {
     const [dashboardResult, auditResult] = await Promise.allSettled([
       getDashboardStats(),

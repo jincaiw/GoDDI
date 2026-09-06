@@ -49,6 +49,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Timeout(60 * time.Second))
 	r.Use(middleware.CORS(cfg))
+	// Record API request metrics (method/route-pattern/status labels).
+	r.Use(metrics.MetricsMiddleware)
 
 	// Limit request body size to 10MB to prevent OOM attacks.
 	r.Use(func(next http.Handler) http.Handler {
@@ -150,6 +152,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.Route("/dns/zones", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.ListDNSZones)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.CreateDNSZone)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Post("/batch-delete", handler.BatchDeleteDNSZones)
 				r.Route("/{id}", func(r chi.Router) {
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.GetDNSZone)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/", handler.UpdateDNSZone)
@@ -157,6 +160,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/import", handler.ImportZoneFile)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/export", handler.ExportZoneFile)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/sync", handler.SyncSecondaryZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/clone", handler.CloneDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/convert", handler.ConvertDNSZone)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/dnssec", handler.GetDNSSECStatus)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dnssec/enable", handler.EnableDNSSEC)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dnssec/disable", handler.DisableDNSSEC)
@@ -171,6 +176,13 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/{id}", handler.GetDNSRecord)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/{id}", handler.UpdateDNSRecord)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteDNSRecord)
+			})
+
+			// TSIG keys (RFC 8945).
+			r.Route("/dns/tsig/keys", func(r chi.Router) {
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.ListTSIGKeysHandler)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.CreateTSIGKeyHandler)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteTSIGKeyHandler)
 			})
 
 			// DNS Records batch operations.
@@ -239,6 +251,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 
 			// DNS Query Logs (new API).
 			r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/logs/dns", handler.ListDNSQueryLogs)
+			r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/logs/dns/export", handler.ExportDNSQueryLogs)
 
 			// DNS Extension Points (501 Not Implemented).
 			r.Route("/dns/listeners", func(r chi.Router) {
@@ -338,6 +351,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// Dashboard.
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard", handler.GetDashboard)
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard/top", handler.GetDashboardTop)
+			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/stats", handler.GetStats)
 
 			// Backup.
 			r.Route("/backup", func(r chi.Router) {

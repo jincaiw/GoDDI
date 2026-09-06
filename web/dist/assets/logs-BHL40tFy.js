@@ -1,1 +1,0 @@
-import{s as e}from"./auth-BTeG-_sB.js";function t(t){return e(`/logs/audit`,t)}export{t};

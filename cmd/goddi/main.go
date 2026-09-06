@@ -49,7 +49,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.1.6"
+	Version   = "0.1.7"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -307,6 +307,21 @@ func runServer(configPath string) error {
 		})
 	}
 
+	// Cache prefetch: hot entries whose remaining TTL drops below the
+	// threshold trigger a background re-resolution through the server's
+	// normal forwarding path.
+	if dnsCache != nil && dnsSrv != nil {
+		dnsCache.SetPrefetchCallback(dnsSrv.Prefetch)
+	}
+
+	// RFC 8945 TSIG keys for signed zone transfers on TCP listeners.
+	if dnsSrv != nil {
+		if secrets := transfer.TSIGSecretMap(db.DB); secrets != nil {
+			dnsSrv.SetTSIGSecretMap(secrets)
+			slog.Info("TSIG keys loaded", "count", len(secrets))
+		}
+	}
+
 	// Initialize API handler services.
 	handler.InitDNSServices(&handler.DNSServiceContainer{
 		DB:               db.DB,
@@ -428,11 +443,14 @@ func runServer(configPath string) error {
 				}
 				dnsSrv.SetECSConfig(mode, v4, v6)
 			}
-		case "dns_dot_config", "dns_doh_config":
+		case "dns_dot_config", "dns_doh_config", "dns_doq_config":
 			if dnsSrv != nil {
 				kind := "dot"
-				if key == "dns_doh_config" {
+				switch key {
+				case "dns_doh_config":
 					kind = "doh"
+				case "dns_doq_config":
+					kind = "doq"
 				}
 				var lc config.DNSListenerTLSConfig
 				if err := json.Unmarshal([]byte(value), &lc); err == nil {
@@ -443,12 +461,37 @@ func runServer(configPath string) error {
 					}
 				}
 			}
+		case "dns_cache_serve_stale", "dns_cache_stale_ttl", "dns_cache_prefetch",
+			"dns_cache_min_ttl", "dns_cache_max_ttl":
+			if dnsCache != nil {
+				// The cache keys form one config unit; re-read them all so a
+				// single-key update cannot clobber the others.
+				get := func(k, def string) string {
+					if v, err := settingsMgr.GetSetting(k); err == nil && v != "" {
+						return v
+					}
+					return def
+				}
+				serveStale := get("dns_cache_serve_stale", "true") == "true" || get("dns_cache_serve_stale", "true") == "1"
+				prefetch := get("dns_cache_prefetch", "false") == "true" || get("dns_cache_prefetch", "false") == "1"
+				staleTTL := parseIntOr(get("dns_cache_stale_ttl", "86400"), 86400)
+				minTTL := parseIntOr(get("dns_cache_min_ttl", "60"), 60)
+				maxTTL := parseIntOr(get("dns_cache_max_ttl", "86400"), 86400)
+				dnsCache.Configure(&serveStale, staleTTL, minTTL, maxTTL, &prefetch)
+			}
+		case "dns_special_zones":
+			if dnsSrv != nil {
+				dnsSrv.SetSpecialZonesEnabled(value == "true" || value == "1")
+			}
 		}
 	}
 	for _, key := range []string{
 		"dns_recursion", "security_rebinding", "dns_blocking_enabled",
 		"dns_rate_limit_qps", "dns_blocklist_refresh_hours",
 		"dns_ecs_mode", "dns_ecs_ipv4_prefix_length", "dns_ecs_ipv6_prefix_length",
+		"dns_dot_config", "dns_doh_config", "dns_doq_config",
+		"dns_cache_serve_stale", "dns_cache_stale_ttl", "dns_cache_prefetch",
+		"dns_cache_min_ttl", "dns_cache_max_ttl", "dns_special_zones",
 	} {
 		if v, err := settingsMgr.GetSetting(key); err == nil {
 			applySetting(key, v)

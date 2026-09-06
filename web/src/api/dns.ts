@@ -63,6 +63,18 @@ export function deleteDNSZone(id: string) {
   return del(`/dns/zones/${id}`)
 }
 
+export function cloneDNSZone(id: string, name: string) {
+  return post<DNSZone>(`/dns/zones/${id}/clone`, { name })
+}
+
+export function convertDNSZone(id: string, type: string) {
+  return post<DNSZone>(`/dns/zones/${id}/convert`, { type })
+}
+
+export function batchDeleteDNSZones(ids: string[]) {
+  return post<{ deleted: number; failed: string[] }>('/dns/zones/batch-delete', { ids })
+}
+
 export function importZoneFile(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
@@ -391,6 +403,43 @@ export interface DNSQueryLog {
 
 export function listDNSQueryLogs(params?: Record<string, unknown>) {
   return getList<DNSQueryLog>('/logs/dns', params)
+}
+
+export function exportDNSQueryLogs(params?: Record<string, unknown>) {
+  return client.get('/logs/dns/export', { responseType: 'blob', params })
+}
+
+// --- Time-series Stats (Technitium parity A2) ---
+
+export interface StatsPoint {
+  bucket: string
+  total: number
+  blocked: number
+  cached: number
+}
+
+export interface StatsSummary {
+  total: number
+  noerror: number
+  nxdomain: number
+  servfail: number
+  refused: number
+  blocked: number
+  cached: number
+  clients: number
+  avg_response_ms: number
+}
+
+export interface StatsResponse {
+  range: string
+  start: string
+  end: string
+  summary: StatsSummary
+  series: StatsPoint[]
+}
+
+export function getDNSStats(params?: Record<string, unknown>) {
+  return get<StatsResponse>('/stats', params)
 }
 
 // --- Dashboard Stats ---

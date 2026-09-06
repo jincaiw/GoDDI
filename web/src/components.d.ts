@@ -65,5 +65,6 @@ declare module 'vue' {
     RcodeDonut: typeof import('./components/RcodeDonut.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StatsTrendChart: typeof import('./components/StatsTrendChart.vue')['default']
   }
 }

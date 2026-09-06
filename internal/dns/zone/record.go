@@ -17,7 +17,8 @@ var SupportedRecordTypes = map[string]bool{
 	"DNAME": true, "MX": true, "TXT": true, "PTR": true, "SRV": true,
 	"CAA": true, "TLSA": true, "SVCB": true, "HTTPS": true, "URI": true,
 	"SSHFP": true, "NAPTR": true, "DS": true, "DNSKEY": true, "RRSIG": true,
-	"NSEC": true, "NSEC3": true, "NSEC3PARAM": true, "APL": true,
+	"NSEC": true, "NSEC3": true, "NSEC3PARAM": true, "APL": true, "RP": true,
+	"HINFO": true, "LOC": true, "SPF": true,
 }
 
 // Record represents a DNS resource record.

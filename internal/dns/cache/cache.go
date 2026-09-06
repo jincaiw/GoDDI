@@ -132,6 +132,29 @@ func (c *Cache) SetPrefetchCallback(fn func(qname string, qtype uint16)) {
 	c.mu.Unlock()
 }
 
+// Configure hot-updates the tunable cache settings (Technitium v13/v14
+// parity: serve-stale, prefetch and TTL clamps are runtime-adjustable).
+// Non-positive values keep the current setting.
+func (c *Cache) Configure(serveStale *bool, staleTTL, minTTL, maxTTL int, prefetch *bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if serveStale != nil {
+		c.serveStale = *serveStale
+	}
+	if staleTTL > 0 {
+		c.staleTTL = staleTTL
+	}
+	if minTTL > 0 {
+		c.minTTL = minTTL
+	}
+	if maxTTL > 0 {
+		c.maxTTL = maxTTL
+	}
+	if prefetch != nil {
+		c.prefetch = *prefetch
+	}
+}
+
 // cacheKey generates a cache key from qname and qtype.
 // Types unknown to dns.TypeToString map to "" which would collide distinct
 // query types; fall back to the numeric type in that case.
@@ -177,6 +200,15 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 				return nil, false, false
 			}
 			c.mu.Unlock()
+
+			// RFC 8767 §5: stale answers should carry a short TTL so the
+			// client retries quickly instead of pinning the stale data.
+			for _, rr := range msg.Answer {
+				rr.Header().Ttl = 30
+			}
+			for _, rr := range msg.Ns {
+				rr.Header().Ttl = 30
+			}
 			return msg, true, true
 		}
 

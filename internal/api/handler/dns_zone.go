@@ -450,6 +450,8 @@ func initCachedManagers() {
 		cachedZoneMgr = zone.NewZoneManager(DNSServices.DB, DNSServices.ZoneStore)
 		cachedRecordMgr = zone.NewRecordManager(DNSServices.DB, DNSServices.ZoneStore, cachedZoneMgr)
 		cachedDNSSECMgr = dnssec.NewDNSSECManager(DNSServices.DB, cachedZoneMgr, DNSServices.ZoneStore, DNSServices.JWTSecret)
+		// Make the record manager reachable from ZoneManager.CloneZone.
+		zone.RegisterSharedRecordManager(cachedRecordMgr)
 	})
 }
 
@@ -469,4 +471,101 @@ func getRecordManager() *zone.RecordManager {
 func getDNSSECManager() *dnssec.DNSSECManager {
 	initCachedManagers()
 	return cachedDNSSECMgr
+}
+
+// --- Zone Clone / Convert / Batch Delete (Technitium v13.5/v15.3 parity) ---
+
+// CloneDNSZone handles POST /api/v1/dns/zones/{id}/clone
+func CloneDNSZone(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if req.Name == "" {
+		response.BadRequest(w, "缺少新区域名称")
+		return
+	}
+
+	clone, err := getZoneManager().CloneZone(id, req.Name)
+	if err != nil {
+		response.BadRequest(w, err.Error())
+		return
+	}
+	response.Created(w, clone)
+}
+
+// ConvertDNSZone handles POST /api/v1/dns/zones/{id}/convert
+func ConvertDNSZone(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Type string `json:"type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if req.Type == "" {
+		response.BadRequest(w, "缺少目标区域类型")
+		return
+	}
+
+	z, err := getZoneManager().ConvertZoneType(id, req.Type)
+	if err != nil {
+		response.BadRequest(w, err.Error())
+		return
+	}
+	response.OK(w, z)
+}
+
+// BatchDeleteDNSZones handles POST /api/v1/dns/zones/batch-delete
+func BatchDeleteDNSZones(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if len(req.IDs) == 0 {
+		response.BadRequest(w, "缺少区域ID列表")
+		return
+	}
+	if len(req.IDs) > 100 {
+		response.BadRequest(w, "单次最多删除 100 个区域")
+		return
+	}
+
+	mgr := getZoneManager()
+	deleted, failed := 0, make([]string, 0)
+	for _, id := range req.IDs {
+		if err := mgr.DeleteZone(id); err != nil {
+			failed = append(failed, id)
+			continue
+		}
+		deleted++
+	}
+
+	response.OK(w, map[string]interface{}{
+		"deleted": deleted,
+		"failed":  failed,
+	})
 }

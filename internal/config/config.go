@@ -291,20 +291,20 @@ func DefaultConfig() *Config {
 			Listeners: DNSListenersConfig{
 				UDP: DNSListenerConfig{Enabled: true, Address: ":53"},
 				TCP: DNSListenerConfig{Enabled: true, Address: ":53"},
-			DOT: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
-			DOH: DNSListenerTLSConfig{Enabled: false, Address: ":8443"},
-			DOQ: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
+				DOT: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
+				DOH: DNSListenerTLSConfig{Enabled: false, Address: ":8443"},
+				DOQ: DNSListenerTLSConfig{Enabled: false, Address: ":853"},
+			},
+			RateLimit: DNSRateLimitConfig{
+				Enabled:      true,
+				ClientQPS:    0,
+				ClientBurst:  0,
+				RRLThreshold: 0,
+			},
+			DynamicUpdate: DNSDynamicUpdateConfig{
+				TSIGKeys: map[string]string{},
+			},
 		},
-		RateLimit: DNSRateLimitConfig{
-			Enabled:      true,
-			ClientQPS:    0,
-			ClientBurst:  0,
-			RRLThreshold: 0,
-		},
-		DynamicUpdate: DNSDynamicUpdateConfig{
-			TSIGKeys: map[string]string{},
-		},
-	},
 		Cache: CacheConfig{
 			Enabled:        true,
 			MaxEntries:     10000,

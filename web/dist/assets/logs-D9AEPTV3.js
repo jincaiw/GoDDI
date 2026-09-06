@@ -1,0 +1,1 @@
+import{s as e}from"./auth-B7OufbA5.js";function t(t){return e(`/logs/audit`,t)}export{t};

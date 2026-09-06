@@ -110,6 +110,17 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		"protocol", proto,
 	)
 
+	// Step 0: RFC 6303 / RFC 6761 locally served zones. Queries inside
+	// special-use namespaces never reach the internet.
+	if h.server.specialZonesEnabled() && isLocallyServed(qname) {
+		resp := answerLocallyServed(req)
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
+		if err := w.WriteMsg(resp); err != nil {
+			slog.Debug("dns_handler: write failed", "error", err)
+		}
+		return
+	}
+
 	// Step 1: Check local authoritative zones first.
 	// Authoritative answers bypass recursion ACL checks. A zone-level query
 	// ACL may refuse the client.
@@ -117,6 +128,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if denied {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
+		AddEDE(resp, EDEFilteredPolicy, "query denied by zone ACL")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REFUSED", start, "", false, false)
 		_ = w.WriteMsg(resp)
 		return
@@ -143,6 +155,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if !h.server.isRecursionAllowed(clientIPNet) {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
+		AddEDE(resp, EDEFilteredPolicy, "recursion denied by policy")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REFUSED", start, "", false, false)
 		if err := w.WriteMsg(resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
@@ -179,6 +192,11 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "DROP", start, "", false, true)
 			return
 		}
+		if filterResult.ResponseType == "NXDOMAIN" {
+			AddEDE(resp, EDEBlocked, "domain blocked by local policy")
+		} else {
+			AddEDE(resp, EDECensored, "domain blocked by local policy")
+		}
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, filterResult.ResponseType, start, "", false, true)
 		if err := w.WriteMsg(resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
@@ -187,10 +205,14 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	// Step 6: Check cache.
-	// When ECS data is forwarded upstream (passthrough/add mode) the cached
-	// answer would be tied to one client's topology, so the cache is bypassed
-	// entirely for correctness.
-	if h.server.cache != nil && !h.server.ecsCacheBypass() {
+	// The cache is bypassed entirely for correctness when:
+	//   - ECS data is forwarded upstream (passthrough/add mode): the cached
+	//     answer would be tied to one client's topology; or
+	//   - the client sets the DNSSEC OK (DO) bit: cached entries do not
+	//     carry RRSIGs, so serving them would silently break DNSSEC-aware
+	//     clients. Full chain-of-trust validation is planned for a later
+	//     release (see Technitium parity notes).
+	if h.server.cache != nil && !h.server.ecsCacheBypass() && !reqHasDO(req) {
 		cachedMsg, hit, _ := h.server.cache.Get(qname, qtype)
 		if hit {
 			cachedMsg.SetReply(req)
@@ -214,6 +236,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		)
 		errResp := new(dns.Msg)
 		errResp.SetRcode(req, dns.RcodeServerFailure)
+		AddEDE(errResp, EDENoReachableAuthority, "all upstream forwarders failed")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "SERVFAIL", start, "", false, false)
 		if err := w.WriteMsg(errResp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
@@ -245,8 +268,9 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		}
 	}
 
-	// Step 10: Cache the response.
-	if h.server.cache != nil {
+	// Step 10: Cache the response. DO-bit responses are not cached: the
+	// entry would mix signed/unsigned answer variants for later lookups.
+	if h.server.cache != nil && !reqHasDO(req) {
 		h.server.cache.Set(qname, qtype, resp)
 	}
 
@@ -284,6 +308,16 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	_ = duration // Duration already logged via query log.
 }
 
+// reqHasDO reports whether the request carries the EDNS DNSSEC OK (DO) bit
+// (RFC 4035 §4.3). DO-bit clients expect RRSIGs, which cached entries do
+// not preserve.
+func reqHasDO(req *dns.Msg) bool {
+	if opt := req.IsEdns0(); opt != nil {
+		return opt.Do()
+	}
+	return false
+}
+
 // extractClientAddr extracts the client IP and port from the DNS response writer.
 func extractClientAddr(w dns.ResponseWriter) (string, int) {
 	addr := w.RemoteAddr()
@@ -303,6 +337,14 @@ func (h *DNSHandler) writeQueryLog(
 	// Feed the in-memory Top-N statistics (dashboard) regardless of whether
 	// persistent query logging is enabled. Cheap enough for the hot path.
 	metrics.TopStatsGlobal.RecordWithRcode(clientIP, qname, blocked, rcode)
+
+	// Feed Prometheus lifecycle counters (A1 parity with Technitium v15.0
+	// metrics endpoint).
+	metrics.RecordDNSQuery(
+		dns.TypeToString[qtype], rcode,
+		time.Since(start).Seconds(),
+		cached, blocked,
+	)
 
 	if h.server.queryLog == nil {
 		return

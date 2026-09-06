@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -33,13 +34,50 @@ func NewSecondarySync(db *sql.DB) *SecondarySync {
 //
 //	<primary-host>[:<port>][|<tsig-key-name>|<tsig-secret>[|<tsig-algorithm>]]
 //
-// If the TSIG fields are missing, the secondary will refuse to sync
-// (fail-closed) per the security review.
+// The primary address may carry a scheme prefix to select the transport:
+//
+//	tls://host[:port]           XFR-over-TLS (RFC 9103), certificate verified
+//	tls-insecure://host[:port]  XFR-over-TLS without certificate verification
+//	                              (lab / self-signed primaries only)
+//
+// The default port is 53 (plain TCP) or 853 (TLS). If the TSIG fields are
+// missing, the secondary will refuse to sync (fail-closed) per the
+// security review.
 type transferTSIGConfig struct {
 	primaryAddr string
+	useTLS      bool
+	tlsInsecure bool
 	tsigName    string
 	tsigSecret  string
 	tsigAlgo    string
+}
+
+// parsePrimaryAddress strips a transport scheme prefix from the primary
+// address and reports the selected transport.
+func parsePrimaryAddress(raw string) (addr string, useTLS, insecure bool, err error) {
+	normalized := strings.ToLower(raw)
+	switch {
+	case strings.HasPrefix(normalized, "tls-insecure://"):
+		addr = raw[len("tls-insecure://"):]
+		useTLS, insecure = true, true
+	case strings.HasPrefix(normalized, "tls://"):
+		addr = raw[len("tls://"):]
+		useTLS = true
+	default:
+		addr = raw
+	}
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", false, false, fmt.Errorf("empty primary address")
+	}
+	if _, _, e := net.SplitHostPort(addr); e != nil {
+		defPort := "53"
+		if useTLS {
+			defPort = "853"
+		}
+		addr = net.JoinHostPort(addr, defPort)
+	}
+	return addr, useTLS, insecure, nil
 }
 
 // parseTransferPolicy extracts the primary address and (optional) TSIG
@@ -53,13 +91,11 @@ func parseTransferPolicy(policy string) (*transferTSIGConfig, error) {
 	}
 
 	parts := strings.Split(policy, "|")
-	cfg := &transferTSIGConfig{primaryAddr: strings.TrimSpace(parts[0])}
-	if cfg.primaryAddr == "" {
-		return nil, fmt.Errorf("transfer_policy missing primary address")
+	addr, useTLS, tlsInsecure, err := parsePrimaryAddress(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return nil, err
 	}
-	if _, _, err := net.SplitHostPort(cfg.primaryAddr); err != nil {
-		cfg.primaryAddr = net.JoinHostPort(cfg.primaryAddr, "53")
-	}
+	cfg := &transferTSIGConfig{primaryAddr: addr, useTLS: useTLS, tlsInsecure: tlsInsecure}
 
 	if len(parts) >= 3 {
 		cfg.tsigName = strings.TrimSpace(parts[1])
@@ -290,11 +326,20 @@ func (s *SecondarySync) soaRefreshSeconds(zoneID string) time.Duration {
 }
 
 // axfrFromPrimary performs an AXFR transfer from the primary server using
-// TSIG authentication.
+// TSIG authentication. XFR-over-TLS (RFC 9103) is used when the policy's
+// primary address carries a tls:// or tls-insecure:// scheme.
 func (s *SecondarySync) axfrFromPrimary(zoneName string, cfg *transferTSIGConfig) ([]dns.RR, error) {
 	t := new(dns.Transfer)
 	m := new(dns.Msg)
 	m.SetAxfr(zoneName)
+
+	if cfg.useTLS {
+		t.TLS = &tls.Config{
+			ServerName:         hostOnly(cfg.primaryAddr),
+			InsecureSkipVerify: cfg.tlsInsecure, //nolint:gosec // explicit opt-in via tls-insecure:// scheme
+			MinVersion:         tls.VersionTLS12,
+		}
+	}
 
 	// Attach TSIG credentials to the AXFR request. miekg/dns looks the secret
 	// up in TsigSecret by zone name (lowercase, FQDN). The key name from the
@@ -323,6 +368,15 @@ func (s *SecondarySync) axfrFromPrimary(zoneName string, cfg *transferTSIGConfig
 	}
 
 	return records, nil
+}
+
+// hostOnly strips the port from a host:port address, used as the TLS
+// ServerName for XFR-over-TLS certificate verification.
+func hostOnly(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		return host
+	}
+	return addr
 }
 
 // defaultAlgoMap returns the canonical algorithm name to use for the given

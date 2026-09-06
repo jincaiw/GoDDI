@@ -50,6 +50,7 @@ type Server struct {
 	tcpServer *dns.Server
 	dotServer *dns.Server
 	dohServer *DoHServer
+	doqServer *DoQServer
 	handler   dns.Handler
 
 	// listenerMu serializes encrypted-listener configuration updates and
@@ -65,10 +66,19 @@ type Server struct {
 	recursionNets []*net.IPNet
 
 	// EDNS Client Subnet (RFC 7871) forwarding policy.
-	ecsMu sync.RWMutex
-	ecsMode forwarder.ECSMode
+	ecsMu         sync.RWMutex
+	ecsMode       forwarder.ECSMode
 	ecsIPv4Prefix int
 	ecsIPv6Prefix int
+
+	// RFC 6303/6761 locally served zones switch (default true).
+	specialMu    sync.RWMutex
+	specialZones bool
+
+	// TSIG keys (RFC 8945) applied to TCP/DoT listeners for signed
+	// AXFR/IXFR/NOTIFY transactions.
+	tsigMu      sync.Mutex
+	tsigSecrets map[string]string
 }
 
 // New creates a new DNS server.
@@ -95,6 +105,9 @@ func New(
 		ecsMode:       forwarder.ECSStrip,
 		ecsIPv4Prefix: forwarder.DefaultECSIPv4Prefix,
 		ecsIPv6Prefix: forwarder.DefaultECSIPv6Prefix,
+
+		// Locally served zones on by default.
+		specialZones: true,
 	}
 
 	// Parse recursion ACL networks.
@@ -232,10 +245,109 @@ func (s *Server) isRecursionAllowed(clientIP net.IP) bool {
 	return false
 }
 
+// Prefetch refreshes one cache entry in the background. It is wired as
+// the cache's prefetch callback: when a hot entry's remaining TTL drops
+// below the prefetch threshold, the cache calls this to re-resolve the
+// name upstream and refresh the entry without blocking the client.
+func (s *Server) Prefetch(qname string, qtype uint16) {
+	if s.cache == nil {
+		return
+	}
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(qname), qtype)
+	msg.RecursionDesired = true
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	resp, _, _, err := s.resolveForward(ctx, s.PrepareUpstreamMsg(msg, nil))
+	if err != nil || resp == nil {
+		return
+	}
+	s.cache.Set(qname, qtype, resp)
+}
+
+// AddEDE attaches an Extended DNS Error (RFC 8914) option to the message's
+// OPT record, creating the OPT if needed. Best-effort: failures are logged
+// at debug level and never abort the response.
+func AddEDE(m *dns.Msg, infoCode uint16, extraText string) {
+	opt := m.IsEdns0()
+	if opt == nil {
+		m.SetEdns0(1232, false)
+		opt = m.IsEdns0()
+		if opt == nil {
+			return
+		}
+	}
+	for _, o := range opt.Option {
+		if e, ok := o.(*dns.EDNS0_EDE); ok && e.InfoCode == infoCode {
+			return // already present; do not duplicate
+		}
+	}
+	opt.Option = append(opt.Option, &dns.EDNS0_EDE{
+		InfoCode:  infoCode,
+		ExtraText: extraText,
+	})
+}
+
+// EDE info codes used by GoDDI (RFC 8914 registry subset).
+const (
+	EDENetworkError         = 10 // Network Error
+	EDENoReachableAuthority = 11 // No Reachable Authority
+	EDEBlocked              = 15 // Blocked
+	EDECensored             = 16 // Censored
+	EDEFilteredPolicy       = 17 // Filtered Policy
+)
+
+// specialZonesEnabled reports whether RFC 6303/6761 locally served zones
+// are active (default true, toggled via the dns_special_zones setting).
+func (s *Server) specialZonesEnabled() bool {
+	s.specialMu.RLock()
+	defer s.specialMu.RUnlock()
+	return s.specialZones
+}
+
+// SetSpecialZonesEnabled hot-updates the locally served zones switch.
+func (s *Server) SetSpecialZonesEnabled(enabled bool) {
+	s.specialMu.Lock()
+	s.specialZones = enabled
+	s.specialMu.Unlock()
+	slog.Info("dns_server: locally served zones", "enabled", enabled)
+}
+
+// SetTSIGSecretMap installs the RFC 8945 key map used to verify inbound
+// signed requests and sign responses on TCP-based listeners. Passing nil
+// disables TSIG. Takes effect for listeners (re)started afterwards.
+func (s *Server) SetTSIGSecretMap(secrets map[string]string) {
+	s.tsigMu.Lock()
+	s.tsigSecrets = secrets
+	s.tsigMu.Unlock()
+}
+
+// tsigSnapshot returns a copy of the current TSIG secret map for listener
+// construction. Must not be called concurrently with SetTSIGSecretMap from
+// the same goroutine flow; Start serializes listener setup through
+// listenerMu before calling startDoT/startDoH.
+func (s *Server) tsigSnapshot() map[string]string {
+	s.tsigMu.Lock()
+	defer s.tsigMu.Unlock()
+	if s.tsigSecrets == nil {
+		return nil
+	}
+	out := make(map[string]string, len(s.tsigSecrets))
+	for k, v := range s.tsigSecrets {
+		out[k] = v
+	}
+	return out
+}
+
 // Start starts the DNS server (UDP and TCP listeners).
 func (s *Server) Start(ctx context.Context) error {
 	handler := &DNSHandler{server: s}
 	s.handler = handler
+
+	s.tsigMu.Lock()
+	tsigSecrets := s.tsigSecrets
+	s.tsigMu.Unlock()
 
 	// Start UDP listener.
 	if s.cfg.DNS.Listeners.UDP.Enabled {
@@ -258,6 +370,9 @@ func (s *Server) Start(ctx context.Context) error {
 			Addr:    s.cfg.DNS.Listeners.TCP.Address,
 			Net:     "tcp",
 			Handler: handler,
+			// RFC 8945: verify inbound TSIG-signed requests and sign
+			// the matching responses (zone transfers, NOTIFY).
+			TsigSecret: tsigSecrets,
 		}
 		go func() {
 			slog.Info("dns_server: starting TCP listener", "addr", s.cfg.DNS.Listeners.TCP.Address)
@@ -278,6 +393,13 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cfg.DNS.Listeners.DOH.Enabled {
 		if err := s.startDoH(handler); err != nil {
 			slog.Error("dns_server: DoH listener failed to start", "error", err)
+		}
+	}
+
+	// Start DoQ (DNS-over-QUIC, RFC 9250) listener.
+	if s.cfg.DNS.Listeners.DOQ.Enabled {
+		if err := s.startDoQ(handler); err != nil {
+			slog.Error("dns_server: DoQ listener failed to start", "error", err)
 		}
 	}
 
@@ -309,15 +431,32 @@ func (s *Server) startDoT(handler dns.Handler) error {
 		return err
 	}
 	s.dotServer = &dns.Server{
-		Addr:      cfg.Address,
-		Net:       "tcp-tls",
-		Handler:   handler,
-		TLSConfig: tlsCfg,
+		Addr:       cfg.Address,
+		Net:        "tcp-tls",
+		Handler:    handler,
+		TLSConfig:  tlsCfg,
+		TsigSecret: s.tsigSnapshot(),
 	}
 	go func() {
 		slog.Info("dns_server: starting DoT listener", "addr", cfg.Address)
 		if err := s.dotServer.ListenAndServe(); err != nil {
 			slog.Error("dns_server: DoT listener error", "error", err)
+		}
+	}()
+	return nil
+}
+
+// startDoQ starts the DNS-over-QUIC listener (RFC 9250).
+func (s *Server) startDoQ(handler dns.Handler) error {
+	cfg := s.cfg.DNS.Listeners.DOQ
+	tlsCfg, err := loadTLSConfig(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		return err
+	}
+	s.doqServer = NewDoQServer(cfg.Address, tlsCfg, handler)
+	go func() {
+		if err := s.doqServer.ListenAndServe(); err != nil {
+			slog.Error("dns_server: DoQ listener error", "error", err)
 		}
 	}()
 	return nil
@@ -351,6 +490,8 @@ func (s *Server) SetListenerConfig(kind string, cfg config.DNSListenerTLSConfig)
 		s.cfg.DNS.Listeners.DOT = cfg
 	case "doh":
 		s.cfg.DNS.Listeners.DOH = cfg
+	case "doq":
+		s.cfg.DNS.Listeners.DOQ = cfg
 	default:
 		return fmt.Errorf("unknown listener kind: %s", kind)
 	}
@@ -396,6 +537,20 @@ func (s *Server) RestartListener(kind string) error {
 			return nil
 		}
 		return s.startDoH(s.handler)
+	case "doq":
+		if s.doqServer != nil {
+			if err := s.doqServer.Shutdown(); err != nil {
+				slog.Warn("dns_server: DoQ listener shutdown warning", "error", err)
+			}
+			s.doqServer = nil
+		}
+		if !s.cfg.DNS.Listeners.DOQ.Enabled {
+			return nil
+		}
+		if s.handler == nil {
+			return nil
+		}
+		return s.startDoQ(s.handler)
 	default:
 		return fmt.Errorf("unknown listener kind: %s", kind)
 	}
@@ -437,6 +592,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		slog.Info("dns_server: shutting down DoH listener...")
 		if err := s.dohServer.Shutdown(ctx); err != nil {
 			slog.Error("dns_server: DoH shutdown error", "error", err)
+			errs = append(errs, err)
+		}
+	}
+
+	if s.doqServer != nil {
+		slog.Info("dns_server: shutting down DoQ listener...")
+		if err := s.doqServer.Shutdown(); err != nil {
+			slog.Error("dns_server: DoQ shutdown error", "error", err)
 			errs = append(errs, err)
 		}
 	}

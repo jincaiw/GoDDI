@@ -175,9 +175,9 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		slog.Error("zone_store: failed to iterate records", "error", err)
 	}
 
-		// Build in-memory zone data.
-		newZones := make(map[string]*zoneData)
-		for zoneID, z := range zoneMap {
+	// Build in-memory zone data.
+	newZones := make(map[string]*zoneData)
+	for zoneID, z := range zoneMap {
 		zd := &zoneData{
 			zone:    z,
 			records: make(map[string][]dns.RR),
@@ -676,8 +676,36 @@ func buildRR(r ZoneRecord, zoneName string) dns.RR {
 			Target:   r.Value,
 		}
 
+	case "RP":
+		parts := strings.Fields(r.Value)
+		if len(parts) < 2 {
+			return nil
+		}
+		return &dns.RP{
+			Hdr:  hdr,
+			Mbox: dns.Fqdn(parts[0]),
+			Txt:  dns.Fqdn(parts[1]),
+		}
+
+	case "SVCB", "HTTPS":
+		// RFC 9460 presentation format: "priority target [key=value ...]".
+		// Delegate to miekg's parser so SvcParams are handled correctly.
+		rr, err := dns.NewRR(name + " " + strconv.FormatUint(uint64(ttl), 10) + " IN " + r.Type + " " + r.Value)
+		if err != nil {
+			return nil
+		}
+		return rr
+
 	default:
-		return nil
+		// Generic fallback (RFC 3597): parse the record from presentation
+		// format so less common types (HINFO, LOC, SPF, unknown types
+		// stored as \# ...) still answer authoritatively. Technitium
+		// supports unknown record types the same way.
+		rr, err := dns.NewRR(name + " " + strconv.FormatUint(uint64(ttl), 10) + " IN " + r.Type + " " + r.Value)
+		if err != nil {
+			return nil
+		}
+		return rr
 	}
 }
 

@@ -24,6 +24,7 @@ func notImplementedExtension(w http.ResponseWriter) {
 var listenerSettingKeys = map[string]string{
 	"dot": "dns_dot_config",
 	"doh": "dns_doh_config",
+	"doq": "dns_doq_config",
 }
 
 // configureListener is the shared implementation behind ConfigureDoT and
@@ -95,9 +96,9 @@ func ConfigureDoH(w http.ResponseWriter, r *http.Request) {
 	configureListener(w, r, "doh")
 }
 
-// ConfigureDoQ handles PUT /api/v1/dns/listeners/doq
+// ConfigureDoQ handles PUT /api/v1/dns/listeners/doq (RFC 9250 listener).
 func ConfigureDoQ(w http.ResponseWriter, r *http.Request) {
-	notImplementedExtension(w)
+	configureListener(w, r, "doq")
 }
 
 // --- SSO ---

@@ -32,6 +32,12 @@ const (
 )
 
 // SupportedAlgorithms lists all supported DNSSEC algorithms.
+//
+// ED448 (RFC 9580, algorithm number 16) is intentionally absent: miekg/dns
+// exports the constant but has no Ed448 crypto implementation (no key
+// parsing, signing or verification), and the Go standard library does not
+// provide an ed448 package. Adding the constant alone would mint keys that
+// cannot sign. Revisit when either dependency gains Ed448 support.
 var SupportedAlgorithms = map[DNSSECAlgorithm]uint8{
 	AlgRSASHA256:       dns.RSASHA256,
 	AlgRSASHA512:       dns.RSASHA512,
