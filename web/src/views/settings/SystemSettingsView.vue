@@ -5,13 +5,13 @@
     <n-spin :show="loading">
       <n-card>
         <n-form label-placement="left" label-width="200px">
-          <n-form-item v-for="setting in settings" :key="setting.key" :label="setting.key">
+          <n-form-item v-for="setting in settings" :key="setting.key" :label="settingLabel(setting.key)">
             <n-switch v-if="setting.type === 'bool'" v-model:value="setting.value" :checked-value="'true'" :unchecked-value="'false'" />
             <n-input-number v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" />
             <n-input v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" />
             <n-button type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</n-button>
             <template #feedback>
-              <span style="color: var(--n-text-color-3); font-size: 12px;">{{ setting.description }}</span>
+              <span style="color: var(--n-text-color-3); font-size: 12px;">{{ settingDesc(setting) }}</span>
             </template>
           </n-form-item>
         </n-form>
@@ -29,6 +29,18 @@ import { listSystemSettings, updateSystemSetting, type SystemSetting } from '@/a
 
 const { t } = useI18n()
 const message = useMessage()
+
+// Localized label/description for a setting key; falls back to the raw key /
+// backend description for unknown keys.
+function settingLabel(key: string): string {
+  const localized = t(`settings.items.${key}.label`)
+  return localized !== `settings.items.${key}.label` ? localized : key
+}
+
+function settingDesc(setting: SystemSetting): string {
+  const localized = t(`settings.items.${setting.key}.desc`)
+  return localized !== `settings.items.${setting.key}.desc` ? localized : setting.description
+}
 
 const loading = ref(false)
 const settings = ref<SystemSetting[]>([])

@@ -33,9 +33,9 @@
       <n-checkbox-group v-model:value="selectedPerms">
         <n-space vertical>
           <div v-for="group in permissionGroups" :key="group.resource">
-            <n-text strong>{{ group.resource }}</n-text>
+            <n-text strong>{{ t(`perm.resource.${group.resource}`) }}</n-text>
             <n-space style="margin-top: 4px; margin-left: 12px;">
-              <n-checkbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="p.action" />
+              <n-checkbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" />
             </n-space>
           </div>
         </n-space>
@@ -89,11 +89,29 @@ const permissionGroups = computed(() => {
   return Object.entries(groups).map(([resource, permissions]) => ({ resource, permissions }))
 })
 
+// Localized helpers -------------------------------------------------------
+
+function roleLabel(name: string): string {
+  const key = `admin.roles.builtin.${name}`
+  const localized = t(key)
+  return localized !== key ? localized : name
+}
+
+function roleDesc(name: string, fallback: string): string {
+  const key = `admin.roles.builtinDesc.${name}`
+  const localized = t(key)
+  return localized !== key ? localized : fallback
+}
+
+function permTag(p: { resource: string; action: string }): string {
+  return `${t(`perm.resource.${p.resource}`)} · ${t(`perm.action.${p.action}`)}`
+}
+
 const columns = [
-  { title: () => t('common.name'), key: 'name' },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('admin.roles.isSystem'), key: 'is_system', width: 90, render: (row: Role) => h(NTag, { size: 'small', type: row.is_system ? 'info' : 'default' }, { default: () => row.is_system ? 'Yes' : 'No' }) },
-  { title: () => t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small' }, { default: () => `${p.resource}:${p.action}` })) }) },
+  { title: () => t('common.name'), key: 'name', render: (row: Role) => roleLabel(row.name) },
+  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true }, render: (row: Role) => roleDesc(row.name, row.description) },
+  { title: () => t('admin.roles.isSystem'), key: 'is_system', width: 90, render: (row: Role) => h(NTag, { size: 'small', type: row.is_system ? 'info' : 'default' }, { default: () => row.is_system ? t('common.yes') : t('common.no') }) },
+  { title: () => t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small', bordered: false, type: 'info' }, { default: () => permTag(p) })) }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Role) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', disabled: row.is_system || !perm.canWrite('role'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),

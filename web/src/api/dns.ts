@@ -381,7 +381,7 @@ export interface DNSQueryLog {
 }
 
 export function listDNSQueryLogs(params?: Record<string, unknown>) {
-  return getList<DNSQueryLog>('/dns/logs', params)
+  return getList<DNSQueryLog>('/logs/dns', params)
 }
 
 // --- Dashboard Stats ---
