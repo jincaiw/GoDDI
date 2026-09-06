@@ -79,6 +79,8 @@ export default {
     ipamSubnets: 'Subnets',
     ipamAddresses: 'Addresses',
     admin: 'Administration',
+    administration: 'Administration',
+    tools: 'Tools',
     adminUsers: 'Users',
     adminRoles: 'Roles',
     adminGroups: 'Groups',

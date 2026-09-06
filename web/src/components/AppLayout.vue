@@ -176,7 +176,10 @@ const activeKey = computed(() => {
 const breadcrumbs = computed(() => {
   const items = [{ label: 'GoDDI', path: '/' }]
   const path = route.path
-  if (path.startsWith('/dns')) {
+  if (path.startsWith('/dns/client')) {
+    items.push({ label: t('nav.tools'), path: '/dns/client' })
+    items.push({ label: t('nav.dnsClient'), path: '/dns/client' })
+  } else if (path.startsWith('/dns')) {
     items.push({ label: t('nav.dns'), path: '/dns' })
     if (path.includes('/zones')) items.push({ label: t('nav.dnsZones'), path: '/dns/zones' })
     if (path.includes('/forwarders')) items.push({ label: t('nav.dnsForwarders'), path: '/dns/forwarders' })
@@ -195,7 +198,7 @@ const breadcrumbs = computed(() => {
     if (path.includes('/subnets')) items.push({ label: t('nav.ipamSubnets'), path: '/ipam/subnets' })
     if (path.includes('/addresses')) items.push({ label: t('nav.ipamAddresses'), path: '/ipam/addresses' })
   } else if (path.startsWith('/admin')) {
-    items.push({ label: t('nav.admin'), path: '/admin' })
+    items.push({ label: t('nav.administration'), path: '/admin' })
     if (path.includes('/users')) items.push({ label: t('nav.adminUsers'), path: '/admin/users' })
     if (path.includes('/roles')) items.push({ label: t('nav.adminRoles'), path: '/admin/roles' })
     if (path.includes('/groups')) items.push({ label: t('nav.adminGroups'), path: '/admin/groups' })
@@ -206,8 +209,9 @@ const breadcrumbs = computed(() => {
     if (path.includes('/dns')) items.push({ label: t('nav.logsDns'), path: '/logs/dns' })
     if (path.includes('/dhcp')) items.push({ label: t('nav.logsDhcp'), path: '/logs/dhcp' })
   } else if (path.startsWith('/settings')) {
-    items.push({ label: t('nav.settings'), path: '/settings' })
+    items.push({ label: t('nav.administration'), path: '/admin' })
     if (path.includes('/backup')) items.push({ label: t('nav.settingsBackup'), path: '/settings/backup' })
+    else items.push({ label: t('nav.settings'), path: '/settings' })
   }
   return items
 })
@@ -235,7 +239,6 @@ const menuOptionList: MenuOption[] = [
       { key: '/dns/forwarders', label: () => t('nav.dnsForwarders'), icon: renderIcon(SwapHorizontalOutline) },
       { key: '/dns/security', label: () => t('nav.dnsSecurity'), icon: renderIcon(ShieldCheckmarkOutline) },
       { key: '/dns/cache', label: () => t('nav.dnsCache'), icon: renderIcon(ServerOutline) },
-      { key: '/dns/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
     ],
   },
   {
@@ -260,14 +263,11 @@ const menuOptionList: MenuOption[] = [
     ],
   },
   {
-    key: '/admin',
-    label: () => t('nav.admin'),
-    icon: renderIcon(PeopleOutline),
+    key: '/tools',
+    label: () => t('nav.tools'),
+    icon: renderIcon(TerminalOutline),
     children: [
-      { key: '/admin/users', label: () => t('nav.adminUsers'), icon: renderIcon(PersonOutline) },
-      { key: '/admin/roles', label: () => t('nav.adminRoles'), icon: renderIcon(KeyOutline) },
-      { key: '/admin/groups', label: () => t('nav.adminGroups'), icon: renderIcon(PeopleOutline) },
-      { key: '/admin/tokens', label: () => t('nav.adminTokens'), icon: renderIcon(KeyOutline) },
+      { key: '/dns/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
     ],
   },
   {
@@ -281,11 +281,15 @@ const menuOptionList: MenuOption[] = [
     ],
   },
   {
-    key: 'settings-group',
-    label: () => t('nav.settings'),
-    icon: renderIcon(SettingsOutline),
+    key: '/admin',
+    label: () => t('nav.administration'),
+    icon: renderIcon(PeopleOutline),
     children: [
-      { key: '/settings', label: () => t('settings.title'), icon: renderIcon(SettingsOutline) },
+      { key: '/admin/users', label: () => t('nav.adminUsers'), icon: renderIcon(PersonOutline) },
+      { key: '/admin/groups', label: () => t('nav.adminGroups'), icon: renderIcon(PeopleOutline) },
+      { key: '/admin/roles', label: () => t('nav.adminRoles'), icon: renderIcon(KeyOutline) },
+      { key: '/admin/tokens', label: () => t('nav.adminTokens'), icon: renderIcon(KeyOutline) },
+      { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
       { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
     ],
   },

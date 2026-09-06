@@ -79,6 +79,8 @@ export default {
     ipamSubnets: '子网管理',
     ipamAddresses: 'IP 地址',
     admin: '系统管理',
+    administration: '管理',
+    tools: '工具',
     adminUsers: '用户管理',
     adminRoles: '角色管理',
     adminGroups: '组管理',
