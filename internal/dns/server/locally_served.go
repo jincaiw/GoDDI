@@ -29,6 +29,7 @@ var locallyServedZones = []string{
 	"b.e.f.ip6.arpa.",
 
 	// RFC 6761 §6: special-use domain names.
+	"localhost.", // §6.3: answered from loopback for A/AAAA
 	"test.",
 	"invalid.",
 	"example.com.",
