@@ -202,11 +202,11 @@ const blockListColumns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockList) => h(NSwitch, { value: row.enabled, disabled: true }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: BlockList) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', onClick: () => { selectedBlockList.value = row; loadBlockRules(row.id) } }, { default: () => 'Rules' }),
+      h(NButton, { size: 'small', text: true, onClick: () => { selectedBlockList.value = row; loadBlockRules(row.id) } }, { default: () => 'Rules' }),
       ...(row.type === 'external' ? [
-        h(NButton, { size: 'small', type: 'primary', loading: refreshingId.value === row.id, disabled: !perm.canWrite('dns'), onClick: () => handleRefreshBlockList(row.id) }, { default: () => t('dns.security.refresh') }),
+        h(NButton, { size: 'small', text: true, type: 'primary', loading: refreshingId.value === row.id, disabled: !perm.canWrite('dns'), onClick: () => handleRefreshBlockList(row.id) }, { default: () => t('dns.security.refresh') }),
       ] : []),
-      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockList(row.id) }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockList(row.id) }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -220,7 +220,7 @@ const blockRuleColumns = [
   { title: () => t('dns.security.matchType'), key: 'match_type', render: (row: BlockRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
   { title: () => t('dns.security.responseType'), key: 'response_type', render: (row: BlockRule) => h(NTag, { size: 'small', type: row.response_type === 'DROP' ? 'error' : 'warning' }, { default: () => row.response_type }) },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: BlockRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockRule(row.list_id, row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: BlockRule) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockRule(row.list_id, row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Allow Rules
@@ -233,7 +233,7 @@ const allowRuleColumns = [
   { title: () => t('dns.security.pattern'), key: 'pattern' },
   { title: () => t('dns.security.matchType'), key: 'match_type', render: (row: AllowRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: AllowRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: AllowRule) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteAllowRule(row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: AllowRule) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteAllowRule(row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Client Policies
@@ -248,7 +248,7 @@ const policyColumns = [
   { title: () => t('dns.security.action'), key: 'action', render: (row: ClientPolicy) => h(NTag, { size: 'small', type: row.action === 'allow' ? 'success' : 'error' }, { default: () => row.action }) },
   { title: () => t('common.priority'), key: 'priority', width: 80 },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: ClientPolicy) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: ClientPolicy) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeletePolicy(row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: ClientPolicy) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeletePolicy(row.id) }, { default: () => t('common.delete') }) },
 ]
 
 // Load functions

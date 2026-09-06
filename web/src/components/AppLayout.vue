@@ -23,6 +23,7 @@
         :collapsed-icon-size="22"
         :options="menuOptions"
         :value="activeKey"
+        :default-expanded-keys="expandedKeys"
         @update:value="handleMenuSelect"
         :render-label="(renderMenuLabel as any)"
       />
@@ -161,6 +162,9 @@ function toggleDark() {
 
 const displayName = computed(() => authStore.user?.display_name || authStore.user?.username || '')
 
+// All menu groups start expanded, matching the design spec.
+const expandedKeys = ['/dns', '/dhcp', '/ipam', '/tools', '/logs', '/admin']
+
 const activeKey = computed(() => {
   const path = route.path
   const keys = menuOptionList
@@ -183,7 +187,9 @@ const breadcrumbs = computed(() => {
     if (path.includes('/forwarders')) items.push({ label: t('nav.dnsForwarders'), path: '/dns/forwarders' })
     if (path.includes('/security')) items.push({ label: t('nav.dnsSecurity'), path: '/dns/security' })
     if (path.includes('/cache')) items.push({ label: t('nav.dnsCache'), path: '/dns/cache' })
-    if (path.includes('/client')) items.push({ label: t('nav.dnsClient'), path: '/dns/client' })
+  } else if (path.startsWith('/tools')) {
+    items.push({ label: t('nav.tools'), path: '/tools' })
+    if (path.includes('/client')) items.push({ label: t('nav.dnsClient'), path: '/tools/client' })
   } else if (path.startsWith('/dhcp')) {
     items.push({ label: t('nav.dhcp'), path: '/dhcp' })
     if (path.includes('/scopes')) items.push({ label: t('nav.dhcpScopes'), path: '/dhcp/scopes' })
@@ -198,8 +204,8 @@ const breadcrumbs = computed(() => {
   } else if (path.startsWith('/admin')) {
     items.push({ label: t('nav.administration'), path: '/admin' })
     if (path.includes('/users')) items.push({ label: t('nav.adminUsers'), path: '/admin/users' })
-    if (path.includes('/roles')) items.push({ label: t('nav.adminRoles'), path: '/admin/roles' })
     if (path.includes('/groups')) items.push({ label: t('nav.adminGroups'), path: '/admin/groups' })
+    if (path.includes('/roles')) items.push({ label: t('nav.adminRoles'), path: '/admin/roles' })
     if (path.includes('/tokens')) items.push({ label: t('nav.adminTokens'), path: '/admin/tokens' })
     if (path.includes('/sessions')) items.push({ label: t('nav.adminSessions'), path: '/admin/sessions' })
   } else if (path.startsWith('/logs')) {
@@ -210,6 +216,7 @@ const breadcrumbs = computed(() => {
   } else if (path.startsWith('/settings')) {
     items.push({ label: t('nav.system'), path: '/settings' })
     if (path.includes('/backup')) items.push({ label: t('nav.settingsBackup'), path: '/settings/backup' })
+    else items.push({ label: t('settings.title'), path: '/settings' })
   }
   return items
 })
@@ -237,7 +244,6 @@ const menuOptionList: MenuOption[] = [
       { key: '/dns/forwarders', label: () => t('nav.dnsForwarders'), icon: renderIcon(SwapHorizontalOutline) },
       { key: '/dns/security', label: () => t('nav.dnsSecurity'), icon: renderIcon(ShieldCheckmarkOutline) },
       { key: '/dns/cache', label: () => t('nav.dnsCache'), icon: renderIcon(ServerOutline) },
-      { key: '/dns/client', label: () => t('nav.dnsClient'), icon: renderIcon(TerminalOutline) },
     ],
   },
   {
@@ -387,8 +393,7 @@ async function handleUserAction(key: string) {
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  background: color-mix(in srgb, var(--app-surface) 86%, transparent);
-  backdrop-filter: blur(24px) saturate(160%);
+  background: var(--app-page-background);
 }
 
 .header-left,
@@ -432,13 +437,13 @@ async function handleUserAction(key: string) {
   font-size: 22px;
   font-weight: 600;
   color: #fff;
-  background: linear-gradient(155deg, #49a3ff, #007aff);
+  background: linear-gradient(155deg, #49a3ff, #0a84ff);
   width: 36px;
   height: 36px;
   display: grid;
   place-items: center;
   border-radius: 10px;
-  box-shadow: 0 3px 8px #007aff20;
+  box-shadow: 0 3px 8px #0a84ff20;
   flex-shrink: 0;
 }
 

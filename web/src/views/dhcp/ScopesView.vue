@@ -81,8 +81,8 @@ const columns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPScope) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dhcp'), onUpdateValue: () => toggleEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPScope) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', onClick: () => { editingScope.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, onClick: () => { editingScope.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

@@ -6,9 +6,9 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.dnsQueriesToday')">
             <template #prefix>
-              <n-icon color="#007aff"><globe-outline /></n-icon>
+              <n-icon color="#0a84ff"><globe-outline /></n-icon>
             </template>
-            {{ stats.dnsQueries }}
+            {{ stats.dnsQueries.toLocaleString('en-US') }}
           </n-statistic>
         </n-card>
       </n-gi>
@@ -36,7 +36,7 @@
         <n-card class="metric-card">
           <n-statistic :label="t('dashboard.ipamUsage')">
             <template #prefix>
-              <n-icon color="#007aff"><grid-outline /></n-icon>
+              <n-icon color="#0a84ff"><grid-outline /></n-icon>
             </template>
             {{ stats.ipamUsage }}%
           </n-statistic>
@@ -218,13 +218,13 @@ onMounted(async () => {
   height: 100%;
   min-height: 128px;
   position: relative;
-  border-radius: 16px;
+  border-radius: 10px;
 }
 
 .metric-card :deep(.n-statistic__label), .metric-card :deep(.n-statistic-value) { margin-left: 56px; }
 .metric-card :deep(.n-statistic__label) { font-size: 13px; min-height: 40px; margin-bottom: 0; }
 .metric-card :deep(.n-statistic-value__content) { font-size: 28px; font-weight: 600; letter-spacing: -0.8px; }
-.metric-card :deep(.n-statistic-value__prefix) { position: absolute; left: 20px; top: 40px; margin: 0; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #007aff0c; }
+.metric-card :deep(.n-statistic-value__prefix) { position: absolute; left: 20px; top: 40px; margin: 0; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #0a84ff10; }
 
 .top-title { margin: 0 0 8px; font-size: 13px; color: #888; }
 .top-list { list-style: none; margin: 0; padding: 0; }

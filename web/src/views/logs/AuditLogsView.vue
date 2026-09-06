@@ -4,14 +4,14 @@
       <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
     </page-header>
 
-    <n-card style="margin-bottom: 16px;">
+    <div class="filter-bar">
       <n-space>
         <n-input v-model:value="filters.username" :placeholder="t('logs.audit.user')" clearable style="width: 140px;" @keyup.enter="loadData" />
         <n-input v-model:value="filters.action" :placeholder="t('logs.audit.action')" clearable style="width: 140px;" @keyup.enter="loadData" />
         <n-input v-model:value="filters.resource" :placeholder="t('logs.audit.resource')" clearable style="width: 140px;" @keyup.enter="loadData" />
         <n-button type="primary" @click="loadData">{{ t('common.search') }}</n-button>
       </n-space>
-    </n-card>
+    </div>
 
     <n-data-table
       :columns="columns"

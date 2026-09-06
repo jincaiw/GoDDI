@@ -48,8 +48,9 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/dns/CacheView.vue'),
         meta: { permission: { resource: 'dns', action: 'read' } },
       },
+      // Tools
       {
-        path: 'dns/client',
+        path: 'tools/client',
         name: 'DNSClient',
         component: () => import('@/views/dns/ClientView.vue'),
         meta: { permission: { resource: 'dns', action: 'read' } },

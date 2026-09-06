@@ -1,14 +1,29 @@
 <template>
   <div>
-    <page-header :title="t('admin.sessions.title')" />
+    <page-header :title="t('sessions.title')">
+      <n-button type="primary" :loading="revokingOthers" @click="showRevokeOthersConfirm = true">
+        {{ t('sessions.revokeOthers') }}
+      </n-button>
+    </page-header>
 
     <n-data-table
       :columns="columns"
       :data="sessions"
       :loading="loading"
-      :bordered="false"
-      size="small"
       :row-key="(row: SessionInfo) => row.id"
+    />
+
+    <confirm-dialog
+      :show="showRevokeConfirm"
+      :message="t('sessions.revokeConfirm')"
+      @confirm="handleRevoke"
+      @cancel="showRevokeConfirm = false"
+    />
+    <confirm-dialog
+      :show="showRevokeOthersConfirm"
+      :message="t('sessions.revokeOthersConfirm')"
+      @confirm="handleRevokeOthers"
+      @cancel="showRevokeOthersConfirm = false"
     />
   </div>
 </template>
@@ -16,79 +31,100 @@
 <script setup lang="ts">
 import { ref, computed, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NButton, NSpace, useMessage } from 'naive-ui'
+import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { listSessions, deleteSession, type SessionInfo } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const { t, locale } = useI18n()
 const message = useMessage()
+const authStore = useAuthStore()
 
-const sessions = ref<SessionInfo[]>([])
 const loading = ref(false)
+const revokingOthers = ref(false)
+const sessions = ref<SessionInfo[]>([])
+const showRevokeConfirm = ref(false)
+const showRevokeOthersConfirm = ref(false)
+const revokingId = ref('')
+
+function formatTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(locale.value, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
+function isCurrentSession(row: SessionInfo) {
+  return row.user_id === authStore.user?.id
+}
 
 const columns = computed(() => [
+  { title: () => t('sessions.sessionId'), key: 'id', width: 260, ellipsis: { tooltip: true } },
   {
-    title: () => t('admin.sessions.ip'),
-    key: 'ip_address',
-    width: 160,
+    title: () => t('sessions.user'), key: 'user_id', width: 140,
+    render: (row: SessionInfo) => h(NTag, { size: 'small', type: isCurrentSession(row) ? 'info' : 'success', bordered: false }, {
+      default: () => (isCurrentSession(row) ? authStore.user?.username || row.user_id : row.user_id),
+    }),
   },
+  { title: () => t('sessions.ip'), key: 'ip', width: 150 },
+  { title: () => t('sessions.createdAt'), key: 'created_at', width: 170, render: (row: SessionInfo) => formatTime(row.created_at) },
+  { title: () => t('sessions.expiresAt'), key: 'expires_at', width: 170, render: (row: SessionInfo) => formatTime(row.expires_at) },
   {
-    title: () => t('admin.sessions.userAgent'),
-    key: 'user_agent',
-    ellipsis: { tooltip: true },
-  },
-  {
-    title: () => t('common.createdAt'),
-    key: 'created_at',
-    width: 180,
-    render: (row: SessionInfo) => formatTime(row.created_at),
-  },
-  {
-    title: () => t('admin.sessions.expiresAt'),
-    key: 'expires_at',
-    width: 180,
-    render: (row: SessionInfo) => formatTime(row.expires_at),
-  },
-  {
-    title: () => t('common.actions'),
-    key: 'actions',
-    width: 100,
-    render: (row: SessionInfo) =>
-      h(NSpace, null, () =>
-        h(
-          NButton,
-          { size: 'small', type: 'error', secondary: true, onClick: () => handleRevoke(row) },
-          () => t('admin.sessions.revoke')
-        )
-      ),
+    title: () => t('common.actions'), key: 'actions', width: 100,
+    render: (row: SessionInfo) => h(NSpace, null, {
+      default: () => [
+        h(NButton, { size: 'small', text: true, type: 'error', quaternary: true, onClick: () => { revokingId.value = row.id; showRevokeConfirm.value = true } }, { default: () => t('sessions.revoke') }),
+      ],
+    }),
   },
 ])
 
-function formatTime(v: string): string {
-  const d = new Date(v)
-  return Number.isNaN(d.getTime()) ? v : d.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
-}
-
-async function load() {
+async function loadData() {
   loading.value = true
   try {
     sessions.value = await listSessions()
-  } catch {
-    message.error(t('common.failed'))
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
   } finally {
     loading.value = false
   }
 }
 
-async function handleRevoke(row: SessionInfo) {
+async function handleRevoke() {
   try {
-    await deleteSession(row.id)
-    message.success(t('admin.sessions.revoked'))
-    await load()
-  } catch {
-    message.error(t('common.failed'))
+    await deleteSession(revokingId.value)
+    message.success(t('sessions.revokeSuccess'))
+    loadData()
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  }
+  showRevokeConfirm.value = false
+}
+
+async function handleRevokeOthers() {
+  revokingOthers.value = true
+  try {
+    // Keep the most recently created session (assumed to be the current one).
+    const sorted = [...sessions.value].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    const keepId = sorted[0]?.id
+    const targets = sessions.value.filter((s) => s.id !== keepId)
+    for (const target of targets) {
+      try {
+        await deleteSession(target.id)
+      } catch {
+        // Continue revoking the remaining sessions
+      }
+    }
+    message.success(t('sessions.revokeSuccess'))
+    loadData()
+  } finally {
+    revokingOthers.value = false
+    showRevokeOthersConfirm.value = false
   }
 }
 
-onMounted(load)
+onMounted(loadData)
 </script>

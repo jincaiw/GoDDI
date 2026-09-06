@@ -4,12 +4,12 @@
       <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
     </page-header>
 
-    <n-card style="margin-bottom: 16px;">
+    <div class="filter-bar">
       <n-space>
         <n-input v-model:value="searchQuery" :placeholder="t('common.search') + ' IP/MAC'" clearable style="width: 240px;" @keyup.enter="loadData" />
         <n-select v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
       </n-space>
-    </n-card>
+    </div>
 
     <n-data-table
       :columns="columns"
@@ -62,7 +62,7 @@ const columns = [
   { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: row.status === 'active' ? 'success' : 'default' }, { default: () => row.status }) },
   { title: () => t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
   { title: () => t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
 ]
 
 async function loadData() {

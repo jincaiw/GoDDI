@@ -53,9 +53,9 @@ const columns = [
   { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
   { title: () => t('common.actions'), key: 'actions', width: 260, render: (row: Backup) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', disabled: row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
-      h(NButton, { size: 'small', type: 'warning', onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
-      h(NButton, { size: 'small', type: 'error', onClick: () => { actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
+      h(NButton, { size: 'small', text: true, type: 'warning', onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
+      h(NButton, { size: 'small', text: true, type: 'error', onClick: () => { actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

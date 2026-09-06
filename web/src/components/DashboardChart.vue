@@ -37,7 +37,7 @@ const option = computed(() => ({
       showSymbol: true,
       areaStyle: { opacity: 0.3 },
       data: props.queries,
-      itemStyle: { color: '#007aff' },
+      itemStyle: { color: '#0a84ff' },
     },
   ],
 }))

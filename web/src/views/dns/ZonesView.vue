@@ -6,13 +6,13 @@
       </n-button>
     </page-header>
 
-    <n-card style="margin-bottom: 16px;">
+    <div class="filter-bar">
       <n-tabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
         <n-tab name="authoritative">{{ t('dns.zones.tabAuthoritative') }}</n-tab>
         <n-tab name="allowed">{{ t('dns.zones.tabAllowed') }}</n-tab>
         <n-tab name="blocked">{{ t('dns.zones.tabBlocked') }}</n-tab>
       </n-tabs>
-      <n-space style="margin-top: 12px;" align="center">
+      <n-space align="center">
         <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
           <template #prefix><n-icon><search-outline /></n-icon></template>
         </n-input>
@@ -25,7 +25,7 @@
           </n-button>
         </template>
       </n-space>
-    </n-card>
+    </div>
 
     <n-data-table
       :columns="columns"
@@ -233,10 +233,10 @@ const columns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSZone) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 300, render: (row: DNSZone) => h(NSpace, { size: 'small' }, {
     default: () => [
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', onClick: () => router.push(`/dns/zones/${row.id}`) }, { default: () => t('common.edit') })]),
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', disabled: !perm.canWrite('dns'), onClick: () => openClone(row) }, { default: () => t('dns.zones.clone') })]),
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', disabled: !perm.canWrite('dns'), onClick: () => openConvert(row) }, { default: () => t('dns.zones.convert') })]),
-      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, onClick: () => router.push(`/dns/zones/${row.id}`) }, { default: () => t('common.edit') })]),
+      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openClone(row) }, { default: () => t('dns.zones.clone') })]),
+      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openConvert(row) }, { default: () => t('dns.zones.convert') })]),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

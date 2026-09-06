@@ -100,8 +100,8 @@ const forwarderColumns = [
   } }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSForwarder) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', onClick: () => { editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteFwd(row.id) }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, onClick: () => { editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteFwd(row.id) }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -109,7 +109,7 @@ const forwarderColumns = [
 const condColumns = [
   { title: () => t('dns.forwarders.domain'), key: 'domain' },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: ConditionalForwarder) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: ConditionalForwarder) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteCond(row.id) }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: ConditionalForwarder) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteCond(row.id) }, { default: () => t('common.delete') }) },
 ]
 
 function openCreateForwarder() {

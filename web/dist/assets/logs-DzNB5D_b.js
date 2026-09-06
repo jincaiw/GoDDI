@@ -1,0 +1,1 @@
+import{s as e}from"./auth-RfiMf961.js";function t(t){return e(`/logs/audit`,t)}export{t};

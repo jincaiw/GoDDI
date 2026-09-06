@@ -114,9 +114,9 @@ const columns = [
   { title: () => t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small', bordered: false, type: 'info' }, { default: () => permTag(p) })) }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Role) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', disabled: row.is_system || !perm.canWrite('role'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', disabled: !perm.canWrite('role'), onClick: () => { assigningRoleId.value = row.id; selectedPerms.value = (row.permissions || []).map(p => p.id); showPermModal.value = true } }, { default: () => t('admin.roles.assignPermissions') }),
-      h(NButton, { size: 'small', type: 'error', disabled: row.is_system || !perm.canDelete('role'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: row.is_system || !perm.canWrite('role'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('role'), onClick: () => { assigningRoleId.value = row.id; selectedPerms.value = (row.permissions || []).map(p => p.id); showPermModal.value = true } }, { default: () => t('admin.roles.assignPermissions') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: row.is_system || !perm.canDelete('role'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

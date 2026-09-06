@@ -76,7 +76,7 @@ const columns = [
   { title: () => t('admin.users.username'), key: 'username' },
   { title: () => t('admin.tokens.expiresAt'), key: 'expires_at', width: 160 },
   { title: () => t('admin.tokens.lastUsedAt'), key: 'last_used_at', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('token'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('token'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
 ]
 
 async function loadData() {

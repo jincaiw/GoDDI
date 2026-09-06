@@ -7,12 +7,12 @@
       </n-space>
     </page-header>
 
-    <n-card style="margin-bottom: 16px;">
+    <div class="filter-bar">
       <n-space>
         <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="loadData" />
         <n-select v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
       </n-space>
-    </n-card>
+    </div>
 
     <n-data-table
       :columns="columns"
@@ -97,7 +97,7 @@ const columns = [
   { title: () => t('ipam.addresses.hostname'), key: 'hostname' },
   { title: () => t('ipam.addresses.mac'), key: 'mac_address' },
   { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: IPAMAddress) => row.status === 'used' ? h(NButton, { size: 'small', type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') }) : null },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: IPAMAddress) => row.status === 'used' ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') }) : null },
 ]
 
 async function loadData() {

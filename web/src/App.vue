@@ -37,16 +37,16 @@ const naiveDateLocale = computed(() => appStore.locale === 'zh-CN' ? dateZhCN : 
   --app-muted: #6e6e73;
   --app-border: #e5e5ea;
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', sans-serif;
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 :root[data-theme='dark'] {
   --app-page-background: #1c1c1e;
-  --app-surface: #242426;
-  --app-text: #f5f5f7;
+  --app-surface: #2c2c2e;
+  --app-text: #ffffff;
   --app-muted: #a1a1a6;
-  --app-border: #3a3a3c;
+  --app-border: #38383a;
   color-scheme: dark;
 }
 
@@ -55,12 +55,20 @@ const naiveDateLocale = computed(() => appStore.locale === 'zh-CN' ? dateZhCN : 
 }
 
 .n-card {
-  border-radius: 16px;
+  border-radius: 10px;
   box-shadow: 0 2px 6px rgb(0 0 0 / 2%);
 }
 
+.filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .n-data-table {
-  border-radius: 12px;
+  border-radius: 10px;
   overflow-x: auto;
 }
 
