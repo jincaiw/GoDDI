@@ -34,6 +34,29 @@
       </n-space>
     </n-card>
 
+    <!-- Access Control (ACL) -->
+    <n-card style="margin-bottom: 16px;" :title="t('dns.zones.aclTitle')" v-if="zone && zone.type !== 'allowed' && zone.type !== 'blocked'">
+      <n-form label-placement="left" label-width="160px">
+        <n-form-item :label="t('dns.zones.aclAllowQuery')">
+          <n-dynamic-tags v-model:value="aclForm.allow_query" :disabled="!perm.canWrite('dns')" />
+        </n-form-item>
+        <n-form-item :label="t('dns.zones.aclAllowTransfer')">
+          <n-dynamic-tags v-model:value="aclForm.allow_transfer" :disabled="!perm.canWrite('dns')" />
+        </n-form-item>
+        <n-form-item :label="t('dns.zones.aclAllowUpdate')">
+          <n-dynamic-tags v-model:value="aclForm.allow_update" :disabled="!perm.canWrite('dns')" />
+        </n-form-item>
+        <n-form-item :label="t('dns.zones.aclNotify')">
+          <n-dynamic-tags v-model:value="aclForm.notify" :disabled="!perm.canWrite('dns')" />
+        </n-form-item>
+      </n-form>
+      <n-text depth="3" style="font-size: 12px;">{{ t('dns.zones.aclHint') }}</n-text>
+      <n-divider />
+      <n-space>
+        <n-button v-if="perm.canWrite('dns')" type="primary" size="small" :loading="aclSaving" @click="saveACL">{{ t('common.save') }}</n-button>
+      </n-space>
+    </n-card>
+
     <!-- Records Table -->
     <n-card :title="t('dns.records.title')">
       <template #header-extra>
@@ -110,7 +133,7 @@ import {
   getDNSZone, updateDNSZone, exportZoneFile, syncSecondaryZone,
   enableDNSSEC, disableDNSSEC, rotateDNSSECKeys,
   listDNSRecords, createDNSRecord, updateDNSRecord, deleteDNSRecord,
-  type DNSZone, type DNSRecord, type CreateDNSRecordRequest,
+  type DNSZone, type DNSRecord, type CreateDNSRecordRequest, type ZoneACL,
 } from '@/api/dns'
 
 const router = useRouter()
@@ -171,8 +194,43 @@ const recordColumns = [
 async function loadZone() {
   try {
     zone.value = await getDNSZone(zoneId)
+    const acl = zone.value.acl
+    aclForm.allow_query = [...(acl?.allow_query ?? [])]
+    aclForm.allow_transfer = [...(acl?.allow_transfer ?? [])]
+    aclForm.allow_update = [...(acl?.allow_update ?? [])]
+    aclForm.notify = [...(acl?.notify ?? [])]
   } catch (err: unknown) {
     message.error(err instanceof Error ? err.message : t('common.failed'))
+  }
+}
+
+// Zone ACL editor state. Empty lists mean unrestricted.
+const aclForm = reactive<Required<ZoneACL>>({
+  allow_query: [],
+  allow_transfer: [],
+  allow_update: [],
+  notify: [],
+})
+const aclSaving = ref(false)
+
+async function saveACL() {
+  aclSaving.value = true
+  try {
+    // Send the ACL unconditionally: an all-empty list clears restrictions
+    // server-side because the store treats empty lists as "allow all".
+    const acl: Required<ZoneACL> = {
+      allow_query: aclForm.allow_query,
+      allow_transfer: aclForm.allow_transfer,
+      allow_update: aclForm.allow_update,
+      notify: aclForm.notify,
+    }
+    await updateDNSZone(zoneId, { acl })
+    message.success(t('common.updateSuccess'))
+    loadZone()
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    aclSaving.value = false
   }
 }
 

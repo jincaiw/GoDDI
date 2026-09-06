@@ -2,7 +2,9 @@ package zone
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -18,10 +20,104 @@ const (
 	ZoneTypeStub      ZoneType = "stub"
 	ZoneTypeForward   ZoneType = "forward"
 	ZoneTypeReverse   ZoneType = "reverse"
+	ZoneTypeAllowed   ZoneType = "allowed"
+	ZoneTypeBlocked   ZoneType = "blocked"
+)
+
+// ACL kinds used with ZoneACL.ACLAllows.
+const (
+	ACLQuery    = "query"
+	ACLTransfer = "transfer"
+	ACLUpdate   = "update"
 )
 
 // ValidZoneTypes contains all valid zone types.
-var ValidZoneTypes = []ZoneType{ZoneTypePrimary, ZoneTypeSecondary, ZoneTypeStub, ZoneTypeForward, ZoneTypeReverse}
+var ValidZoneTypes = []ZoneType{ZoneTypePrimary, ZoneTypeSecondary, ZoneTypeStub, ZoneTypeForward, ZoneTypeReverse, ZoneTypeAllowed, ZoneTypeBlocked}
+
+// ZoneACL controls per-zone access. Empty lists mean unrestricted for the
+// corresponding kind; a configured list accepts both single IPs and CIDRs.
+type ZoneACL struct {
+	AllowQuery    []string `json:"allow_query,omitempty"`
+	AllowTransfer []string `json:"allow_transfer,omitempty"`
+	AllowUpdate   []string `json:"allow_update,omitempty"`
+	// Notify lists the addresses that receive a NOTIFY (RFC 1996) whenever
+	// the zone's serial is bumped (primary zones only).
+	Notify []string `json:"notify,omitempty"`
+}
+
+// ACLAllows reports whether ip is permitted for the given ACL kind.
+func (a *ZoneACL) ACLAllows(kind, ip string) bool {
+	if a == nil {
+		return true
+	}
+	var list []string
+	switch kind {
+	case ACLQuery:
+		list = a.AllowQuery
+	case ACLTransfer:
+		list = a.AllowTransfer
+	case ACLUpdate:
+		list = a.AllowUpdate
+	default:
+		return true
+	}
+	if len(list) == 0 {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, entry := range list {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, ipNet, err := net.ParseCIDR(entry); err == nil && ipNet.Contains(parsed) {
+				return true
+			}
+			continue
+		}
+		if p := net.ParseIP(entry); p != nil && parsed.Equal(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetNotify returns the NOTIFY target list (nil-safe).
+func (a *ZoneACL) GetNotify() []string {
+	if a == nil {
+		return nil
+	}
+	return a.Notify
+}
+
+// parseZoneACL decodes the acl JSON column; empty/invalid yields nil.
+func parseZoneACL(s string) *ZoneACL {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var acl ZoneACL
+	if err := json.Unmarshal([]byte(s), &acl); err != nil {
+		return nil
+	}
+	return &acl
+}
+
+// marshalZoneACL encodes the ACL for storage; nil becomes SQL NULL.
+func marshalZoneACL(a *ZoneACL) interface{} {
+	if a == nil {
+		return nil
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
 
 // Zone represents a DNS zone with full metadata.
 type Zone struct {
@@ -40,6 +136,7 @@ type Zone struct {
 	Minimum        int       `json:"minimum"`
 	TransferPolicy string    `json:"transfer_policy,omitempty"`
 	UpdatePolicy   string    `json:"update_policy,omitempty"`
+	ACL            *ZoneACL  `json:"acl,omitempty"`
 	RecordsCount   int       `json:"records_count"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -47,19 +144,20 @@ type Zone struct {
 
 // ZoneOptions contains options for creating or updating a zone.
 type ZoneOptions struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Enabled        *bool  `json:"enabled,omitempty"`
-	DNSSECEnabled  *bool  `json:"dnssec_enabled,omitempty"`
-	DefaultTTL     *int   `json:"default_ttl,omitempty"`
-	SOA_MName      string `json:"soa_mname,omitempty"`
-	SOA_RName      string `json:"soa_rname,omitempty"`
-	Refresh        *int   `json:"refresh,omitempty"`
-	Retry          *int   `json:"retry,omitempty"`
-	Expire         *int   `json:"expire,omitempty"`
-	Minimum        *int   `json:"minimum,omitempty"`
-	TransferPolicy string `json:"transfer_policy,omitempty"`
-	UpdatePolicy   string `json:"update_policy,omitempty"`
+	Name           string   `json:"name"`
+	Type           string   `json:"type"`
+	Enabled        *bool    `json:"enabled,omitempty"`
+	DNSSECEnabled  *bool    `json:"dnssec_enabled,omitempty"`
+	DefaultTTL     *int     `json:"default_ttl,omitempty"`
+	SOA_MName      string   `json:"soa_mname,omitempty"`
+	SOA_RName      string   `json:"soa_rname,omitempty"`
+	Refresh        *int     `json:"refresh,omitempty"`
+	Retry          *int     `json:"retry,omitempty"`
+	Expire         *int     `json:"expire,omitempty"`
+	Minimum        *int     `json:"minimum,omitempty"`
+	TransferPolicy string   `json:"transfer_policy,omitempty"`
+	UpdatePolicy   string   `json:"update_policy,omitempty"`
+	ACL            *ZoneACL `json:"acl,omitempty"`
 }
 
 // ZoneFilter contains filter options for listing zones.
@@ -162,11 +260,11 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	_, err = m.db.Exec(`
 		INSERT INTO dns_zones (id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			transfer_policy, update_policy, acl)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, name, opts.Type, enabled, false, defaultTTL,
 		soaMName, soaRName, serial, refresh, retry, expire, minimum,
-		opts.TransferPolicy, opts.UpdatePolicy)
+		opts.TransferPolicy, opts.UpdatePolicy, marshalZoneACL(opts.ACL))
 	if err != nil {
 		return nil, fmt.Errorf("inserting zone: %w", err)
 	}
@@ -187,6 +285,7 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 		Minimum:        minimum,
 		TransferPolicy: opts.TransferPolicy,
 		UpdatePolicy:   opts.UpdatePolicy,
+		ACL:            opts.ACL,
 	}
 
 	// Reload in-memory zone store.
@@ -204,16 +303,16 @@ func (m *ZoneManager) GetZone(id string) (*Zone, error) {
 	}
 
 	var z Zone
-	var transferPolicy, updatePolicy sql.NullString
+	var transferPolicy, updatePolicy, aclJSON sql.NullString
 	err := m.db.QueryRow(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, created_at, updated_at
+			transfer_policy, update_policy, acl, created_at, updated_at
 		FROM dns_zones WHERE id = ?
 	`, id).Scan(
 		&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 		&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-		&transferPolicy, &updatePolicy, &z.CreatedAt, &z.UpdatedAt,
+		&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", id)
@@ -227,6 +326,9 @@ func (m *ZoneManager) GetZone(id string) (*Zone, error) {
 	}
 	if updatePolicy.Valid {
 		z.UpdatePolicy = updatePolicy.String
+	}
+	if aclJSON.Valid {
+		z.ACL = parseZoneACL(aclJSON.String)
 	}
 
 	return &z, nil
@@ -242,16 +344,16 @@ func (m *ZoneManager) GetZoneByName(name string) (*Zone, error) {
 	}
 
 	var z Zone
-	var transferPolicy, updatePolicy sql.NullString
+	var transferPolicy, updatePolicy, aclJSON sql.NullString
 	err := m.db.QueryRow(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, created_at, updated_at
+			transfer_policy, update_policy, acl, created_at, updated_at
 		FROM dns_zones WHERE name = ?
 	`, name).Scan(
 		&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 		&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-		&transferPolicy, &updatePolicy, &z.CreatedAt, &z.UpdatedAt,
+		&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", name)
@@ -265,6 +367,9 @@ func (m *ZoneManager) GetZoneByName(name string) (*Zone, error) {
 	}
 	if updatePolicy.Valid {
 		z.UpdatePolicy = updatePolicy.String
+	}
+	if aclJSON.Valid {
+		z.ACL = parseZoneACL(aclJSON.String)
 	}
 
 	return &z, nil
@@ -286,8 +391,14 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 	var args []interface{}
 
 	if filter.Type != "" {
-		conditions = append(conditions, "type = ?")
-		args = append(args, filter.Type)
+		if filter.Type == "authoritative" {
+			// Group pseudo-type: all zones that participate in authoritative
+			// answers (excludes special allowed/blocked policy zones).
+			conditions = append(conditions, "type IN ('primary','secondary','stub','forward')")
+		} else {
+			conditions = append(conditions, "type = ?")
+			args = append(args, filter.Type)
+		}
 	}
 	if filter.Enabled != nil {
 		conditions = append(conditions, "enabled = ?")
@@ -316,7 +427,7 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 	querySQL := fmt.Sprintf(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, created_at, updated_at,
+			transfer_policy, update_policy, acl, created_at, updated_at,
 			(SELECT COUNT(*) FROM dns_records WHERE zone_id = dns_zones.id)
 		FROM dns_zones %s
 		ORDER BY name
@@ -333,11 +444,11 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 	var zones []Zone
 	for rows.Next() {
 		var z Zone
-		var transferPolicy, updatePolicy sql.NullString
+		var transferPolicy, updatePolicy, aclJSON sql.NullString
 		if err := rows.Scan(
 			&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 			&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-			&transferPolicy, &updatePolicy, &z.CreatedAt, &z.UpdatedAt,
+			&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
 			&z.RecordsCount,
 		); err != nil {
 			continue
@@ -347,6 +458,9 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 		}
 		if updatePolicy.Valid {
 			z.UpdatePolicy = updatePolicy.String
+		}
+		if aclJSON.Valid {
+			z.ACL = parseZoneACL(aclJSON.String)
 		}
 		zones = append(zones, z)
 	}
@@ -450,6 +564,11 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		setClauses = append(setClauses, "update_policy = ?")
 		args = append(args, opts.UpdatePolicy)
 		existing.UpdatePolicy = opts.UpdatePolicy
+	}
+	if opts.ACL != nil {
+		setClauses = append(setClauses, "acl = ?")
+		args = append(args, marshalZoneACL(opts.ACL))
+		existing.ACL = opts.ACL
 	}
 
 	if len(setClauses) == 0 {

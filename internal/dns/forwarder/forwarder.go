@@ -549,6 +549,41 @@ func (fg *ForwarderGroup) LookupForwarder(address string) *Forwarder {
 	return nil
 }
 
+// ForwardToAddresses forwards the message to the given upstream addresses in
+// order and returns the first successful response. It is used for zone-level
+// forwarding (forward/stub zones) whose targets are not part of the global
+// forwarder pool; targets already present in the pool reuse their health and
+// latency state.
+func (fg *ForwarderGroup) ForwardToAddresses(ctx context.Context, msg *dns.Msg, targets []string) (*dns.Msg, time.Duration, error) {
+	var lastErr error
+	for _, addr := range targets {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		f := fg.LookupForwarder(addr)
+		if f == nil {
+			f = &Forwarder{
+				ID:       "zone-" + addr,
+				Name:     addr,
+				Protocol: "udp",
+				Address:  addr,
+				Enabled:  true,
+			}
+			f.healthy.Store(true)
+		}
+		resp, d, err := fg.queryUpstream(ctx, msg, f)
+		if err == nil {
+			return resp, d, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no zone forward targets configured")
+	}
+	return nil, 0, lastErr
+}
+
 // parseHostPort ensures address has a port. It correctly handles IPv6 literals
 // by checking for surrounding brackets and only appending :53 when the host is
 // actually missing a port.

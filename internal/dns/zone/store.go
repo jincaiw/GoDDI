@@ -34,6 +34,9 @@ type zoneData struct {
 	records map[string][]dns.RR // key: lowercase name -> records
 	soa     *dns.SOA
 	ns      []*dns.NS
+	// special is set for zones that do not participate in authoritative
+	// lookups ("allowed" / "blocked"); empty for normal zones.
+	special string
 }
 
 // Store is an in-memory zone store that loads zones and records from the database.
@@ -89,7 +92,7 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	zoneRows, err := s.db.Query(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, created_at, updated_at
+			transfer_policy, update_policy, acl, created_at, updated_at
 		FROM dns_zones WHERE enabled = 1
 	`)
 	if err != nil {
@@ -101,11 +104,11 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	zoneMap := make(map[string]*Zone) // id -> Zone
 	for zoneRows.Next() {
 		var z Zone
-		var transferPolicy, updatePolicy sql.NullString
+		var transferPolicy, updatePolicy, aclJSON sql.NullString
 		if err := zoneRows.Scan(
 			&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 			&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-			&transferPolicy, &updatePolicy, &z.CreatedAt, &z.UpdatedAt,
+			&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
 		); err != nil {
 			slog.Error("zone_store: failed to scan zone", "error", err)
 			continue
@@ -115,6 +118,9 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		}
 		if updatePolicy.Valid {
 			z.UpdatePolicy = updatePolicy.String
+		}
+		if aclJSON.Valid {
+			z.ACL = parseZoneACL(aclJSON.String)
 		}
 		zoneMap[z.ID] = &z
 	}
@@ -175,6 +181,12 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		zd := &zoneData{
 			zone:    z,
 			records: make(map[string][]dns.RR),
+		}
+
+		// Special zone types do not participate in authoritative lookups;
+		// they act as allow/block policy zones instead.
+		if z.Type == string(ZoneTypeAllowed) || z.Type == string(ZoneTypeBlocked) {
+			zd.special = z.Type
 		}
 
 		zoneName := dns.Fqdn(strings.ToLower(z.Name))
@@ -254,7 +266,7 @@ func (s *Store) Lookup(qname string, qtype uint16) (string, []dns.RR, bool) {
 	// Try exact zone match first, then parent zones.
 	name := qname
 	for {
-		if zd, ok := s.zones[name]; ok {
+		if zd, ok := s.zones[name]; ok && zd.special == "" {
 			answers := s.lookupInZone(zd, qname, qtype)
 			if answers != nil {
 				return name, answers, true
@@ -290,7 +302,7 @@ func (s *Store) MatchingZone(qname string) string {
 
 	name := dns.Fqdn(strings.ToLower(qname))
 	for {
-		if _, ok := s.zones[name]; ok {
+		if zd, ok := s.zones[name]; ok && zd.special == "" {
 			return name
 		}
 		idx := strings.IndexByte(name, '.')
@@ -299,10 +311,99 @@ func (s *Store) MatchingZone(qname string) string {
 		}
 		name = name[idx+1:]
 		if name == "." {
-			if _, ok := s.zones["."]; ok {
+			if zd, ok := s.zones["."]; ok && zd.special == "" {
 				return "."
 			}
 			return ""
+		}
+	}
+}
+
+// ACLAllows checks the zone-level ACL of the most specific zone matching
+// qname for the given kind ("query"/"transfer"/"update") and client IP.
+// Returns true when no zone or no ACL restricts the kind.
+func (s *Store) ACLAllows(kind, qname, ip string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	name := dns.Fqdn(strings.ToLower(qname))
+	for {
+		if zd, ok := s.zones[name]; ok {
+			return zd.zone.ACL.ACLAllows(kind, ip)
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 || idx >= len(name)-1 {
+			return true
+		}
+		name = name[idx+1:]
+		if name == "." {
+			if zd, ok := s.zones["."]; ok {
+				return zd.zone.ACL.ACLAllows(kind, ip)
+			}
+			return true
+		}
+	}
+}
+
+// MatchSpecial returns "allowed" or "blocked" when qname falls inside the
+// most specific special policy zone of that kind, "" otherwise.
+func (s *Store) MatchSpecial(qname string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	name := dns.Fqdn(strings.ToLower(qname))
+	for {
+		if zd, ok := s.zones[name]; ok && zd.special != "" {
+			return zd.special
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 || idx >= len(name)-1 {
+			return ""
+		}
+		name = name[idx+1:]
+		if name == "." {
+			if zd, ok := s.zones["."]; ok && zd.special != "" {
+				return zd.special
+			}
+			return ""
+		}
+	}
+}
+
+// ForwardTargets returns the upstream addresses configured for the most
+// specific forward/stub zone matching qname, plus its kind. Forward zones
+// take their upstreams from the ACL Notify list (reused as target list);
+// stub zones resolve their NS records' nameservers from the loaded zone.
+func (s *Store) ForwardTargets(qname string) (kind string, targets []string, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	name := dns.Fqdn(strings.ToLower(qname))
+	for {
+		if zd, ok2 := s.zones[name]; ok2 {
+			switch zd.zone.Type {
+			case string(ZoneTypeForward):
+				if len(zd.zone.ACL.GetNotify()) > 0 {
+					return "forward", zd.zone.ACL.GetNotify(), true
+				}
+			case string(ZoneTypeStub):
+				var addrs []string
+				for _, ns := range zd.ns {
+					host := ns.Ns
+					addrs = append(addrs, net.JoinHostPort(strings.TrimSuffix(host, "."), "53"))
+				}
+				if len(addrs) > 0 {
+					return "stub", addrs, true
+				}
+			}
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 || idx >= len(name)-1 {
+			return "", nil, false
+		}
+		name = name[idx+1:]
+		if name == "." {
+			return "", nil, false
 		}
 	}
 }

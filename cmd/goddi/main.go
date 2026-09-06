@@ -49,7 +49,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.1.5"
+	Version   = "0.1.6"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -293,6 +293,18 @@ func runServer(configPath string) error {
 		updateHandler := dynamic_update.NewUpdateHandler(db.DB, zoneStore, zoneMgr, recordMgr)
 		updateHandler.SetTSIGSecrets(cfg.DNS.DynamicUpdate.TSIGKeys)
 		dnsSrv.SetUpdateHandler(updateHandler)
+
+		// NOTIFY (RFC 1996): primary zones announce serial bumps to the
+		// ACL notify targets; inbound NOTIFY triggers a secondary refresh.
+		recordMgr.SetNotifyHook(func(zoneName string) {
+			transfer.SendNotifyForZone(db.DB, zoneName)
+		})
+		secondarySync := transfer.NewSecondarySync(db.DB)
+		dnsSrv.SetNotifyHandler(func(zoneName string) {
+			if err := secondarySync.HandleNotify(zoneName); err != nil {
+				slog.Warn("notify: secondary refresh failed", "zone", zoneName, "error", err)
+			}
+		})
 	}
 
 	// Initialize API handler services.
@@ -305,6 +317,7 @@ func runServer(configPath string) error {
 		DNSClient:        dnsClient,
 		ZoneStore:        zoneStore,
 		BlockListFetcher: blockListFetcher,
+		DNSServer:        dnsSrv,
 		JWTSecret:        cfg.Security.JWTSecret,
 	})
 
@@ -400,11 +413,42 @@ func runServer(configPath string) error {
 			if hours, err := strconv.Atoi(value); err == nil && hours > 0 {
 				blockListFetcher.SetInterval(time.Duration(hours) * time.Hour)
 			}
+		case "dns_ecs_mode", "dns_ecs_ipv4_prefix_length", "dns_ecs_ipv6_prefix_length":
+			if dnsSrv != nil {
+				// The three ECS keys form one config unit; re-read all of
+				// them so a single-key update cannot clobber the others.
+				mode := currentECSMode(settingsMgr)
+				v4 := forwarder.DefaultECSIPv4Prefix
+				v6 := forwarder.DefaultECSIPv6Prefix
+				if v, err := settingsMgr.GetSetting("dns_ecs_ipv4_prefix_length"); err == nil {
+					v4 = parseIntOr(v, forwarder.DefaultECSIPv4Prefix)
+				}
+				if v, err := settingsMgr.GetSetting("dns_ecs_ipv6_prefix_length"); err == nil {
+					v6 = parseIntOr(v, forwarder.DefaultECSIPv6Prefix)
+				}
+				dnsSrv.SetECSConfig(mode, v4, v6)
+			}
+		case "dns_dot_config", "dns_doh_config":
+			if dnsSrv != nil {
+				kind := "dot"
+				if key == "dns_doh_config" {
+					kind = "doh"
+				}
+				var lc config.DNSListenerTLSConfig
+				if err := json.Unmarshal([]byte(value), &lc); err == nil {
+					if err := dnsSrv.SetListenerConfig(kind, lc); err == nil {
+						if err := dnsSrv.RestartListener(kind); err != nil {
+							slog.Warn("listener restart failed", "kind", kind, "error", err)
+						}
+					}
+				}
+			}
 		}
 	}
 	for _, key := range []string{
 		"dns_recursion", "security_rebinding", "dns_blocking_enabled",
 		"dns_rate_limit_qps", "dns_blocklist_refresh_hours",
+		"dns_ecs_mode", "dns_ecs_ipv4_prefix_length", "dns_ecs_ipv6_prefix_length",
 	} {
 		if v, err := settingsMgr.GetSetting(key); err == nil {
 			applySetting(key, v)
@@ -724,4 +768,25 @@ func loadRuntimeConfig(configPath string) (*config.Config, error) {
 		return config.DefaultConfig(), nil
 	}
 	return nil, err
+}
+
+// currentECSMode reads the persisted ECS mode setting, falling back to
+// "strip" when unset. Used when applying any of the three ECS keys so the
+// other members of the config unit keep their stored values.
+func currentECSMode(mgr *system.Manager) string {
+	if mgr == nil {
+		return "strip"
+	}
+	if v, err := mgr.GetSetting("dns_ecs_mode"); err == nil && v != "" {
+		return v
+	}
+	return "strip"
+}
+
+// parseIntOr parses value as an int, returning fallback on error.
+func parseIntOr(value string, fallback int) int {
+	if n, err := strconv.Atoi(value); err == nil {
+		return n
+	}
+	return fallback
 }

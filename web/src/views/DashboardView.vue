@@ -111,6 +111,7 @@ import { getDashboardStats, getDashboardTop, type HourlyDNSStats, type TopStats 
 import { listAuditLogs } from '@/api/logs'
 
 const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
+const RcodeDonut = defineAsyncComponent(() => import('@/components/RcodeDonut.vue'))
 
 const { t, locale } = useI18n()
 
@@ -126,7 +127,7 @@ const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queri
 
 // Top statistics
 const topRange = ref<'hour' | 'day' | 'week'>('hour')
-const topStats = ref<TopStats>({ range: 'hour', top_clients: [], top_domains: [], top_blocked: [] })
+const topStats = ref<TopStats>({ range: 'hour', top_clients: [], top_domains: [], top_blocked: [], rcodes: { total: 0, noerror: 0, nxdomain: 0, servfail: 0, refused: 0, other: 0 } })
 
 async function loadTop() {
   try { topStats.value = await getDashboardTop(topRange.value, 10) } catch { /* ignore */ }

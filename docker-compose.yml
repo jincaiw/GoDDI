@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "0.1.5"
+        VERSION: "0.1.6"
         GIT_COMMIT: "5ac1444"
         BUILD_DATE: "2026-09-06"
     container_name: goddi

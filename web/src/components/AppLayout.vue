@@ -125,6 +125,7 @@ import {
   ListOutline,
   MenuOutline,
   LanguageOutline,
+  TimeOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
@@ -203,6 +204,7 @@ const breadcrumbs = computed(() => {
     if (path.includes('/roles')) items.push({ label: t('nav.adminRoles'), path: '/admin/roles' })
     if (path.includes('/groups')) items.push({ label: t('nav.adminGroups'), path: '/admin/groups' })
     if (path.includes('/tokens')) items.push({ label: t('nav.adminTokens'), path: '/admin/tokens' })
+    if (path.includes('/sessions')) items.push({ label: t('nav.adminSessions'), path: '/admin/sessions' })
   } else if (path.startsWith('/logs')) {
     items.push({ label: t('nav.logs'), path: '/logs' })
     if (path.includes('/audit')) items.push({ label: t('nav.logsAudit'), path: '/logs/audit' })
@@ -289,6 +291,7 @@ const menuOptionList: MenuOption[] = [
       { key: '/admin/groups', label: () => t('nav.adminGroups'), icon: renderIcon(PeopleOutline) },
       { key: '/admin/roles', label: () => t('nav.adminRoles'), icon: renderIcon(KeyOutline) },
       { key: '/admin/tokens', label: () => t('nav.adminTokens'), icon: renderIcon(KeyOutline) },
+      { key: '/admin/sessions', label: () => t('nav.adminSessions'), icon: renderIcon(TimeOutline) },
       { key: '/settings', label: () => t('nav.settings'), icon: renderIcon(SettingsOutline) },
       { key: '/settings/backup', label: () => t('nav.settingsBackup'), icon: renderIcon(CloudDownloadOutline) },
     ],
@@ -305,6 +308,7 @@ const menuPermissions: Record<string, PermissionCheck> = {
   '/admin/roles': { resource: 'role', action: 'read' },
   '/admin/groups': { resource: 'group', action: 'read' },
   '/admin/tokens': { resource: 'token', action: 'read' },
+  '/admin/sessions': { resource: 'user', action: 'read' },
   '/logs/audit': { resource: 'audit', action: 'read' },
   '/logs/dns': { resource: 'dns', action: 'read' },
   '/logs/dhcp': { resource: 'dhcp', action: 'read' },

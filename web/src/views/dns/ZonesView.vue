@@ -7,11 +7,16 @@
     </page-header>
 
     <n-card style="margin-bottom: 16px;">
-      <n-space>
+      <n-tabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
+        <n-tab name="authoritative">{{ t('dns.zones.tabAuthoritative') }}</n-tab>
+        <n-tab name="allowed">{{ t('dns.zones.tabAllowed') }}</n-tab>
+        <n-tab name="blocked">{{ t('dns.zones.tabBlocked') }}</n-tab>
+      </n-tabs>
+      <n-space style="margin-top: 12px;">
         <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
           <template #prefix><n-icon><search-outline /></n-icon></template>
         </n-input>
-        <n-select v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
+        <n-select v-if="activeTab === 'authoritative'" v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
         <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
       </n-space>
     </n-card>
@@ -35,26 +40,31 @@
         <n-form-item :label="t('dns.zones.zoneType')" path="type">
           <n-select v-model:value="formData.type" :options="zoneTypeOptions" :disabled="!!editingZone" />
         </n-form-item>
-        <n-form-item :label="t('dns.zones.ttl')" path="default_ttl">
-          <n-input-number v-model:value="formData.default_ttl" :min="60" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.primaryNs')" path="soa_mname">
-          <n-input v-model:value="formData.soa_mname" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.adminEmail')" path="soa_rname">
-          <n-input v-model:value="formData.soa_rname" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.refresh')" path="refresh">
-          <n-input-number v-model:value="formData.refresh" :min="0" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.retry')" path="retry">
-          <n-input-number v-model:value="formData.retry" :min="0" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.expire')" path="expire">
-          <n-input-number v-model:value="formData.expire" :min="0" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.minimum')" path="minimum">
-          <n-input-number v-model:value="formData.minimum" :min="0" />
+        <template v-if="!isSpecialType">
+          <n-form-item :label="t('dns.zones.ttl')" path="default_ttl">
+            <n-input-number v-model:value="formData.default_ttl" :min="60" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.primaryNs')" path="soa_mname">
+            <n-input v-model:value="formData.soa_mname" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.adminEmail')" path="soa_rname">
+            <n-input v-model:value="formData.soa_rname" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.refresh')" path="refresh">
+            <n-input-number v-model:value="formData.refresh" :min="0" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.retry')" path="retry">
+            <n-input-number v-model:value="formData.retry" :min="0" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.expire')" path="expire">
+            <n-input-number v-model:value="formData.expire" :min="0" />
+          </n-form-item>
+          <n-form-item :label="t('dns.zones.minimum')" path="minimum">
+            <n-input-number v-model:value="formData.minimum" :min="0" />
+          </n-form-item>
+        </template>
+        <n-form-item v-if="activeTab !== 'authoritative' || isSpecialType" :label="t('dns.zones.specialHint')">
+          <n-text depth="3" style="font-size: 12px;">{{ t('dns.zones.specialHintText') }}</n-text>
         </n-form-item>
         <n-form-item :label="t('common.enabled')" path="enabled">
           <n-switch v-model:value="formData.enabled" />
@@ -78,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, computed, h, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
@@ -98,10 +108,13 @@ const submitting = ref(false)
 const zones = ref<DNSZone[]>([])
 const searchQuery = ref('')
 const filterType = ref<string | null>(null)
+const activeTab = ref<'authoritative' | 'allowed' | 'blocked'>('authoritative')
 const showCreateModal = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingId = ref('')
 const editingZone = ref<DNSZone | null>(null)
+
+const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked')
 
 const typeOptions = [
   { label: 'Primary', value: 'primary' },
@@ -110,7 +123,17 @@ const typeOptions = [
   { label: 'Forward', value: 'forward' },
 ]
 
-const zoneTypeOptions = typeOptions
+const zoneTypeOptions = [
+  ...typeOptions,
+  { label: t('dns.zones.typeAllowed'), value: 'allowed' },
+  { label: t('dns.zones.typeBlocked'), value: 'blocked' },
+]
+
+function handleTabChange(tab: string) {
+  activeTab.value = tab as 'authoritative' | 'allowed' | 'blocked'
+  filterType.value = null
+  applyFilters()
+}
 
 const pagination = reactive({
   page: 1,
@@ -135,13 +158,13 @@ const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
 
 const columns = [
   { title: () => t('dns.zones.zoneName'), key: 'name' },
-  { title: () => t('dns.zones.zoneType'), key: 'type', width: 100, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.type === 'primary' ? 'success' : 'info' }, { default: () => row.type }) },
+  { title: () => t('dns.zones.zoneType'), key: 'type', width: 100, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.type === 'primary' ? 'success' : row.type === 'allowed' ? 'success' : row.type === 'blocked' ? 'error' : 'info' }, { default: () => row.type }) },
   { title: () => t('dns.zones.records'), key: 'records_count', width: 80 },
   { title: () => t('dns.zones.dnssec'), key: 'dnssec_enabled', width: 90, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.dnssec_enabled ? 'success' : 'default' }, { default: () => row.dnssec_enabled ? 'ON' : 'OFF' }) },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSZone) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 200, render: (row: DNSZone) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', onClick: () => router.push(`/dns/zones/${row.id}`) }, { default: () => t('common.edit') }),
+      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', onClick: () => router.push(`/dns/zones/${row.id}`) }, { default: () => t('common.edit') })]),
       h(NButton, { size: 'small', type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -152,7 +175,11 @@ async function loadData() {
   try {
     const params: Record<string, unknown> = { page: pagination.page, page_size: pagination.pageSize }
     if (searchQuery.value) params.name = searchQuery.value
-    if (filterType.value) params.type = filterType.value
+    if (activeTab.value === 'authoritative') {
+      params.type = filterType.value || 'authoritative'
+    } else {
+      params.type = activeTab.value
+    }
     const result = await listDNSZones(params)
     zones.value = result.data
     pagination.itemCount = result.meta.total
@@ -170,7 +197,8 @@ function applyFilters() {
 
 function openCreateZone() {
   editingZone.value = null
-  Object.assign(formData, { name: '', type: 'primary', default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
+  const presetType = activeTab.value === 'allowed' ? 'allowed' : activeTab.value === 'blocked' ? 'blocked' : 'primary'
+  Object.assign(formData, { name: '', type: presetType, default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
   showCreateModal.value = true
 }
 

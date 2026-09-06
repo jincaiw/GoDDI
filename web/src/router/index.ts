@@ -123,6 +123,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/TokensView.vue'),
         meta: { permission: { resource: 'token', action: 'read' } },
       },
+      {
+        path: 'admin/sessions',
+        name: 'AdminSessions',
+        component: () => import('@/views/admin/SessionsView.vue'),
+        meta: { permission: { resource: 'user', action: 'read' } },
+      },
       // Logs
       {
         path: 'logs/audit',

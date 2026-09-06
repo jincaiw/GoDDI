@@ -337,6 +337,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 
 			// Dashboard.
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard", handler.GetDashboard)
+			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard/top", handler.GetDashboardTop)
 
 			// Backup.
 			r.Route("/backup", func(r chi.Router) {

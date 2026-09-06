@@ -13,10 +13,21 @@ type TopEntry struct {
 
 // TopResult holds the three Top-N lists for one time range.
 type TopResult struct {
-	Range      string     `json:"range"`
-	TopClients []TopEntry `json:"top_clients"`
-	TopDomains []TopEntry `json:"top_domains"`
-	TopBlocked []TopEntry `json:"top_blocked"`
+	Range      string       `json:"range"`
+	TopClients []TopEntry   `json:"top_clients"`
+	TopDomains []TopEntry   `json:"top_domains"`
+	TopBlocked []TopEntry   `json:"top_blocked"`
+	Rcodes     RcodeSummary `json:"rcodes"`
+}
+
+// RcodeSummary aggregates response-code counts for one range.
+type RcodeSummary struct {
+	Total    int64 `json:"total"`
+	NoError  int64 `json:"noerror"`
+	NXDomain int64 `json:"nxdomain"`
+	ServFail int64 `json:"servfail"`
+	Refused  int64 `json:"refused"`
+	Other    int64 `json:"other"`
 }
 
 const (
@@ -31,6 +42,7 @@ type topBucket struct {
 	clients map[string]int64
 	domains map[string]int64
 	blocked map[string]int64
+	rcodes  map[string]int64
 }
 
 func newTopBucket() *topBucket {
@@ -38,6 +50,7 @@ func newTopBucket() *topBucket {
 		clients: make(map[string]int64),
 		domains: make(map[string]int64),
 		blocked: make(map[string]int64),
+		rcodes:  make(map[string]int64),
 	}
 }
 
@@ -70,8 +83,14 @@ func NewTopStats() *TopStats {
 }
 
 // Record attributes one DNS query to the current minute/hour/day buckets.
-// It is called from the DNS hot path and must stay cheap.
+// It is called from the DNS hot path and must stay cheap. rcode is the
+// response code string (e.g. "NOERROR", "NXDOMAIN", "SERVFAIL").
 func (ts *TopStats) Record(clientIP, qname string, blocked bool) {
+	ts.RecordWithRcode(clientIP, qname, blocked, "")
+}
+
+// RecordWithRcode is Record with response-code attribution.
+func (ts *TopStats) RecordWithRcode(clientIP, qname string, blocked bool, rcode string) {
 	now := time.Now()
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -94,6 +113,9 @@ func (ts *TopStats) Record(clientIP, qname string, blocked bool) {
 			if qname != "" {
 				b.blocked[qname]++
 			}
+		}
+		if rcode != "" {
+			b.rcodes[rcode]++
 		}
 	}
 }
@@ -152,6 +174,22 @@ func (ts *TopStats) Top(rangeName string, limit int) TopResult {
 	result.TopClients = topN(agg.clients, limit)
 	result.TopDomains = topN(agg.domains, limit)
 	result.TopBlocked = topN(agg.blocked, limit)
+
+	for code, count := range agg.rcodes {
+		result.Rcodes.Total += count
+		switch code {
+		case "NOERROR":
+			result.Rcodes.NoError += count
+		case "NXDOMAIN":
+			result.Rcodes.NXDomain += count
+		case "SERVFAIL":
+			result.Rcodes.ServFail += count
+		case "REFUSED":
+			result.Rcodes.Refused += count
+		default:
+			result.Rcodes.Other += count
+		}
+	}
 	return result
 }
 
@@ -170,6 +208,9 @@ func mergeSlots(slots []topSlot) *topBucket {
 		}
 		for k, v := range s.bucket.blocked {
 			agg.blocked[k] += v
+		}
+		for k, v := range s.bucket.rcodes {
+			agg.rcodes[k] += v
 		}
 	}
 	return agg

@@ -16,6 +16,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dns/client"
 	"github.com/jasonwa/goddi/internal/dns/filter"
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
+	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
 	"github.com/jasonwa/goddi/internal/dns/zone"
 )
 
@@ -44,6 +45,7 @@ type DNSServiceContainer struct {
 	DNSClient        *client.DNSClient
 	ZoneStore        *zone.Store
 	BlockListFetcher *filter.BlockListFetcher
+	DNSServer        *dnsserver.Server
 	JWTSecret        string
 }
 

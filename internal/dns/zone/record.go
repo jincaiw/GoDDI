@@ -81,6 +81,33 @@ type RecordManager struct {
 	db        *sql.DB
 	zoneStore *Store
 	zoneMgr   *ZoneManager
+	// notifyHook is invoked (in a goroutine by the caller) with the zone
+	// name whenever a primary zone's serial is bumped, so NOTIFY (RFC 1996)
+	// announcements can be dispatched to configured secondaries.
+	notifyHook func(zoneName string)
+}
+
+// SetNotifyHook registers the NOTIFY dispatch callback.
+func (m *RecordManager) SetNotifyHook(fn func(zoneName string)) {
+	m.notifyHook = fn
+}
+
+// notifyPrimary fires the notify hook for the given zone when it is a
+// primary zone with a serial bump.
+func (m *RecordManager) notifyPrimary(zoneID string) {
+	if m.notifyHook == nil {
+		return
+	}
+	zoneName := ""
+	if z, err := m.zoneMgr.GetZone(zoneID); err == nil {
+		if z.Type != string(ZoneTypePrimary) {
+			return
+		}
+		zoneName = z.Name
+	}
+	if zoneName != "" {
+		go m.notifyHook(zoneName)
+	}
 }
 
 // NewRecordManager creates a new RecordManager.
@@ -743,6 +770,10 @@ func (m *RecordManager) logChange(zoneID string, serial uint32, changeType, name
 	if err != nil {
 		slog.Warn("record: failed to write zone change history", "zone_id", zoneID, "error", err)
 	}
+
+	// NOTIFY secondaries about the serial bump (primary zones only; the
+	// hook is a no-op when unset or the zone has no notify targets).
+	m.notifyPrimary(zoneID)
 }
 
 // PruneZoneChangeHistory removes change rows older than the given number of

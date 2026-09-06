@@ -48,7 +48,7 @@ export interface PermissionInfo {
 export interface SessionInfo {
   id: string
   user_id: string
-  ip: string
+  ip_address: string
   user_agent: string
   created_at: string
   expires_at: string

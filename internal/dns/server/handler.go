@@ -10,6 +10,7 @@ import (
 
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/filter"
+	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/jasonwa/goddi/internal/metrics"
 	"github.com/miekg/dns"
 )
@@ -50,11 +51,37 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			_ = w.WriteMsg(resp)
 			return
 		}
+		// Zone-level update ACL.
+		if h.server.zoneStore != nil && len(req.Question) > 0 &&
+			!h.server.zoneStore.ACLAllows(zone.ACLUpdate, qname, clientIP) {
+			slog.Warn("dns_handler: dynamic update denied by zone ACL", "zone", qname, "client", clientIP)
+			resp := new(dns.Msg)
+			resp.SetRcode(req, dns.RcodeRefused)
+			_ = w.WriteMsg(resp)
+			return
+		}
 		resp, err := h.server.updateHandler.HandleUpdateFrom(req, clientIP)
 		if err != nil {
 			slog.Error("dns_handler: dynamic update failed", "error", err)
 			resp = new(dns.Msg)
 			resp.SetRcode(req, dns.RcodeServerFailure)
+		}
+		_ = w.WriteMsg(resp)
+		return
+	}
+
+	// Inbound NOTIFY (RFC 1996): a primary announces a serial bump; trigger
+	// a secondary refresh asynchronously and acknowledge with the local SOA.
+	if req.Opcode == dns.OpcodeNotify {
+		if h.server.notifyHandler != nil && len(req.Question) > 0 {
+			zoneName := qname
+			go h.server.notifyHandler(zoneName)
+		}
+		resp := new(dns.Msg)
+		resp.SetReply(req)
+		resp.Authoritative = true
+		if soa := h.server.zoneSOAFor(qname); soa != nil {
+			resp.Answer = []dns.RR{soa}
 		}
 		_ = w.WriteMsg(resp)
 		return
@@ -84,8 +111,17 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	)
 
 	// Step 1: Check local authoritative zones first.
-	// Authoritative answers bypass recursion ACL checks.
-	if resp, found := h.server.lookupAuthoritative(qname, qtype); found {
+	// Authoritative answers bypass recursion ACL checks. A zone-level query
+	// ACL may refuse the client.
+	resp, denied, found := h.server.lookupAuthoritative(qname, qtype, clientIP)
+	if denied {
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REFUSED", start, "", false, false)
+		_ = w.WriteMsg(resp)
+		return
+	}
+	if found {
 		// SetReply resets Rcode to NOERROR; preserve the authoritative
 		// negative-answer code (NXDOMAIN) computed by the zone lookup.
 		rcode := resp.Rcode
@@ -117,9 +153,25 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	// Step 3: Match client policy.
 	// (handled within filter.Check below)
 
+	// Step 3b: Special policy zones (Technitium-style Allowed/Blocked zones).
+	// Allowed zones bypass the blocking pipeline entirely; blocked zones
+	// answer NXDOMAIN before any block list evaluation.
+	special := ""
+	if h.server.zoneStore != nil {
+		special = h.server.zoneStore.MatchSpecial(qname)
+	}
+
 	// Step 4: Check allow list (whitelist).
 	// Step 5: Check block list (security rules).
-	filterResult := h.server.filter.Check(qname, clientIP)
+	var filterResult filter.CheckResult
+	if special == "allowed" {
+		filterResult.Blocked = false
+	} else if special == "blocked" {
+		filterResult.Blocked = true
+		filterResult.ResponseType = "NXDOMAIN"
+	} else {
+		filterResult = h.server.filter.Check(qname, clientIP)
+	}
 	if filterResult.Blocked {
 		resp := filter.GenerateBlockedResponse(req, filterResult.ResponseType, filterResult.ResponseData)
 		if resp == nil {
@@ -135,7 +187,10 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	// Step 6: Check cache.
-	if h.server.cache != nil {
+	// When ECS data is forwarded upstream (passthrough/add mode) the cached
+	// answer would be tied to one client's topology, so the cache is bypassed
+	// entirely for correctness.
+	if h.server.cache != nil && !h.server.ecsCacheBypass() {
 		cachedMsg, hit, _ := h.server.cache.Get(qname, qtype)
 		if hit {
 			cachedMsg.SetReply(req)
@@ -151,7 +206,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, fwd, duration, err := h.server.resolveForward(ctx, req)
+	resp, fwd, duration, err := h.server.resolveForward(ctx, h.server.PrepareUpstreamMsg(req, clientIPNet))
 	if err != nil {
 		slog.Error("dns_handler: forward failed",
 			"query_name", qname,
@@ -247,7 +302,7 @@ func (h *DNSHandler) writeQueryLog(
 ) {
 	// Feed the in-memory Top-N statistics (dashboard) regardless of whether
 	// persistent query logging is enabled. Cheap enough for the hot path.
-	metrics.TopStatsGlobal.Record(clientIP, qname, blocked)
+	metrics.TopStatsGlobal.RecordWithRcode(clientIP, qname, blocked, rcode)
 
 	if h.server.queryLog == nil {
 		return
@@ -301,6 +356,15 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 	}
 
 	zoneName := req.Question[0].Name
+
+	// Zone-level transfer ACL; deny by default when a list is configured.
+	if h.server.zoneStore != nil && !h.server.zoneStore.ACLAllows(zone.ACLTransfer, zoneName, clientIP) {
+		slog.Warn("dns_handler: zone transfer denied by zone ACL", "zone", zoneName, "client", clientIP)
+		resp := new(dns.Msg)
+		resp.SetRcode(req, dns.RcodeRefused)
+		_ = w.WriteMsg(resp)
+		return
+	}
 
 	// ACL check by client address; deny by default.
 	if !h.server.axfrHandler.CheckTransferACL(zoneName, clientIP) {

@@ -2,6 +2,13 @@ import client, { get, getList, post, put, del } from './client'
 
 // --- DNS Zones ---
 
+export interface ZoneACL {
+  allow_query?: string[]
+  allow_transfer?: string[]
+  allow_update?: string[]
+  notify?: string[]
+}
+
 export interface DNSZone {
   id: string
   name: string
@@ -16,6 +23,7 @@ export interface DNSZone {
   retry: number
   expire: number
   minimum: number
+  acl?: ZoneACL | null
   records_count: number
   created_at: string
   updated_at: string
@@ -32,6 +40,7 @@ export interface CreateDNSZoneRequest {
   retry?: number
   expire?: number
   minimum?: number
+  acl?: ZoneACL
 }
 
 export function listDNSZones(params?: Record<string, unknown>) {
@@ -414,11 +423,21 @@ export interface TopEntry {
   count: number
 }
 
+export interface RcodeSummary {
+  total: number
+  noerror: number
+  nxdomain: number
+  servfail: number
+  refused: number
+  other: number
+}
+
 export interface TopStats {
   range: string
   top_clients: TopEntry[]
   top_domains: TopEntry[]
   top_blocked: TopEntry[]
+  rcodes: RcodeSummary
 }
 
 export function getDashboardTop(range: 'hour' | 'day' | 'week', limit = 10) {
