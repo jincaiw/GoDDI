@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
       args:
         VERSION: "0.2.0"
-        GIT_COMMIT: "2ce5663"
+        GIT_COMMIT: "5d32fcf"
         BUILD_DATE: "2026-09-07"
     container_name: goddi
     restart: unless-stopped
