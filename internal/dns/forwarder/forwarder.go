@@ -416,9 +416,11 @@ func (fg *ForwarderGroup) forwardHealthAware(ctx context.Context, msg *dns.Msg, 
 }
 
 // clientFor returns a cached dns.Client for the given network and timeout,
-// creating it on first use. SingleInflight coalesces concurrent identical
-// queries to the SAME upstream, which tames cache-miss thundering herds
-// without sharing responses across different upstreams.
+// creating it on first use. Reusing the client keeps the underlying UDP
+// socket warm (avoids a fresh dial per query). Note: dns.Client
+// SingleInflight is a no-op since miekg/dns #1449, so identical concurrent
+// queries are NOT coalesced here; the cache layer absorbs most of the
+// thundering herd instead.
 func (f *Forwarder) clientFor(network string, timeout time.Duration) *dns.Client {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -430,11 +432,10 @@ func (f *Forwarder) clientFor(network string, timeout time.Duration) *dns.Client
 		return c
 	}
 	c := &dns.Client{
-		Net:            network,
-		ReadTimeout:    timeout,
-		WriteTimeout:   timeout,
-		DialTimeout:    timeout,
-		SingleInflight: true,
+		Net:          network,
+		ReadTimeout:  timeout,
+		WriteTimeout: timeout,
+		DialTimeout:  timeout,
 	}
 	f.clients[key] = c
 	return c

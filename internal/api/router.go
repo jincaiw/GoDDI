@@ -44,6 +44,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 
 	// Global middleware.
 	r.Use(chimw.RequestID)
+	//nolint:staticcheck // SA1019: RealIP is intentional here; the server runs behind a trusted reverse proxy that overwrites X-Forwarded-For.
 	r.Use(chimw.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(chimw.Recoverer)

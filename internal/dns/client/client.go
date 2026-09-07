@@ -152,7 +152,7 @@ func (c *DNSClient) Query(name string, qtype uint16, upstream string) (*QueryRes
 // validateUpstreamAddress rejects loopback, link-local, and private IPs to
 // mitigate SSRF. It accepts either a host:port form or a bare IP literal.
 func validateUpstreamAddress(addr string) error {
-	host := addr
+	var host string
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		host = h
 	} else {

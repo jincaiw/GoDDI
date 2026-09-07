@@ -159,9 +159,7 @@ func ValidateRecordName(name string) error {
 		return nil
 	}
 	name = strings.TrimSuffix(name, ".")
-	if strings.HasPrefix(name, "*.") {
-		name = strings.TrimPrefix(name, "*.")
-	}
+	name = strings.TrimPrefix(name, "*.")
 	if name == "" {
 		return fmt.Errorf("记录名称不能为空")
 	}

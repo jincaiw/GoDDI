@@ -453,11 +453,6 @@ func hmacEqual(a, b []byte) bool {
 	return hmac.Equal(a, b)
 }
 
-// insertRR inserts a dns.RR into the database for a zone.
-func (s *SecondarySync) insertRR(zoneID string, rr dns.RR, zoneName string) error {
-	return s.insertRRTx(s.db, zoneID, rr, zoneName)
-}
-
 // insertRRTx inserts a dns.RR into the database using the given executor (tx or db).
 func (s *SecondarySync) insertRRTx(exec executor, zoneID string, rr dns.RR, zoneName string) error {
 	hdr := rr.Header()

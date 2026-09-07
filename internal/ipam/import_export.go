@@ -310,7 +310,3 @@ func nullIfEmpty(s string) interface{} {
 	}
 	return s
 }
-
-func slogImport(msg, name string, err error) {
-	slog.Error(fmt.Sprintf("%s %s: %v", msg, name, err))
-}

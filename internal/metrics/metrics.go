@@ -238,6 +238,7 @@ func InitMetrics() {
 					return
 				case <-ticker.C:
 					UptimeSeconds.Set(time.Since(startTime).Seconds())
+					sampleProviders()
 				}
 			}
 		}()

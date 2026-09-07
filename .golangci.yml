@@ -16,6 +16,13 @@ linters:
     - ineffassign
     - unused
     - misspell
+  settings:
+    staticcheck:
+      # QF* are stylistic "quickfix" suggestions (tagged switches,
+      # fmt.Fprintf rewrites, ...); policy is to keep correctness checks.
+      checks:
+        - all
+        - -QF*
 
 issues:
   max-issues-per-linter: 0

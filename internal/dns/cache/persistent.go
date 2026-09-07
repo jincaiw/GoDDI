@@ -12,7 +12,6 @@ import (
 type PersistentCache struct {
 	*Cache
 	db   *sql.DB
-	path string
 	quit chan struct{}
 	done chan struct{}
 }

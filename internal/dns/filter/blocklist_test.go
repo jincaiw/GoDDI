@@ -306,7 +306,7 @@ func TestDomainTrie_SuffixMatch(t *testing.T) {
 	}
 
 	// Exact domain should also match suffix
-	rule, matched = trie.Match("example.com")
+	_, matched = trie.Match("example.com")
 	if !matched {
 		t.Error("exact domain should match suffix rule")
 	}

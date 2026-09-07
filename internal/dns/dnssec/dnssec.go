@@ -163,6 +163,7 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 		// (0x04 || X || Y) is the more standard representation; we use
 		// elliptic.Marshal which produces exactly that, then trim the
 		// leading 0x04 byte because DNSKEY stores just X || Y.
+		//nolint:staticcheck // SA1019: elliptic.Marshal is the only way to get the 0x04||X||Y wire form this DNSKEY format requires; migration to crypto/ecdh tracked separately.
 		rawPoint := elliptic.Marshal(curve, ecKey.PublicKey.X, ecKey.PublicKey.Y)
 		if len(rawPoint) < 1 {
 			return nil, fmt.Errorf("marshaling ECDSA public key: empty point")

@@ -120,16 +120,6 @@ func AutoInitializeAdmin(db *sql.DB) error {
 	return InitializeAdmin(db, username, password)
 }
 
-// getAdminRoleID returns the ID of the admin role.
-func getAdminRoleID(db *sql.DB) string {
-	var id string
-	err := db.QueryRow(`SELECT id FROM roles WHERE name = 'admin' AND is_builtin = 1`).Scan(&id)
-	if err != nil {
-		return ""
-	}
-	return id
-}
-
 // getAdminRoleIDTx returns the ID of the admin role using a transaction.
 func getAdminRoleIDTx(tx *sql.Tx) string {
 	var id string
