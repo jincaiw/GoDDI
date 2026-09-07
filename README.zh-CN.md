@@ -139,19 +139,19 @@ Docker Engine 的 host 网络主要适用于 Linux。其他平台建议禁用 DH
 
 ## 构建与测试
 
-要求 Go 1.26+、Node.js 22+ 和 npm。
+要求 Go 1.26+、Node.js 22+ 和 pnpm 10+。
 
 ```bash
-cd web
-npm ci
-npm run build
+cd web-admin
+pnpm install --frozen-lockfile
+pnpm build
 cd ..
 go test -race -cover ./...
 go vet ./...
 go build ./cmd/goddi
 ```
 
-由于 `web/dist` 会在编译时嵌入 Go 二进制，因此必须先构建前端。
+由于 `web/dist` 会在编译时嵌入 Go 二进制，因此必须先构建前端（`web-admin` 构建产物需复制到 `web/dist`，`make web-build` 会自动完成）。端到端测试位于 `e2e/` 目录（Playwright），需先启动测试服务器并以 `GODDI_TEST_BASE_URL` 指向它。
 
 ## 首次部署检查清单
 

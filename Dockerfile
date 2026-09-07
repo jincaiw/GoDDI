@@ -1,13 +1,14 @@
-# Frontend build stage
+# Frontend build stage (soybean-admin pnpm monorepo)
 FROM node:22-alpine AS web-builder
 
-WORKDIR /app/web
+RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
 
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+WORKDIR /app/web-admin
 
-COPY web/ ./
-RUN npm run build
+# Copy source code
+COPY web-admin/ ./
+RUN pnpm install --frozen-lockfile
+RUN pnpm build
 
 # Backend build stage
 FROM golang:1.26-alpine AS builder
@@ -22,7 +23,7 @@ RUN go mod download
 
 # Copy source code
 COPY . .
-COPY --from=web-builder /app/web/dist/ /app/web/dist/
+COPY --from=web-builder /app/web-admin/dist/ /app/web/dist/
 
 # Build binary with version info
 ARG VERSION=0.1.2

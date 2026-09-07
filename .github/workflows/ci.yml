@@ -98,8 +98,8 @@ jobs:
           echo "DNS integration test passed"
 
       - name: Install browser
-        working-directory: web
-        run: npx playwright install --with-deps chromium
+        working-directory: e2e
+        run: npm ci && npx playwright install --with-deps chromium
 
       - name: Browser and API regression tests
         env:
@@ -121,7 +121,7 @@ jobs:
             if curl -fsS http://127.0.0.1:16090/health; then break; fi
             sleep 1
           done
-          cd web
+          cd e2e
           npx playwright test
 
   # L2: static linting. Conservative linter set (see .golangci.yml).

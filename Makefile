@@ -21,7 +21,9 @@ build: web-build
 
 .PHONY: web-build
 web-build:
-	cd web && npm ci && npm run build
+	cd web-admin && pnpm install --frozen-lockfile && pnpm build
+	rm -rf web/dist && mkdir -p web/dist
+	cp -r web-admin/dist/. web/dist/
 
 ## test: Run all tests
 test:

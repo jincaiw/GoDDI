@@ -139,12 +139,12 @@ Host networking is supported by Docker Engine on Linux. For other platforms, dis
 
 ## Build and Test
 
-Requirements: Go 1.26+, Node.js 22+, and npm.
+Requirements: Go 1.26+, Node.js 22+, and pnpm 10+.
 
 ```bash
-cd web
-npm ci
-npm run build
+cd web-admin
+pnpm install --frozen-lockfile
+pnpm build
 cd ..
 go test -race -cover ./...
 go vet ./...

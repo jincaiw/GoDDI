@@ -52,6 +52,10 @@ config.prod.yaml
 # Environment files
 .env
 .env.*
+# keep soybean-admin env files (needed to build)
+!web-admin/.env
+!web-admin/.env.prod
+!web-admin/.env.test
 
 # Temporary files
 /tmp/
@@ -63,6 +67,7 @@ web/dist-ci/
 # npm local cache
 web/.npm-cache/
 node_modules/
+web-admin/dist/
 
 # Local docker runtime overrides
 .docker/
