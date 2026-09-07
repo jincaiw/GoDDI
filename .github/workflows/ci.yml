@@ -138,7 +138,8 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v7 is required for golangci-lint v2 (v6 only supports v1).
+        uses: golangci/golangci-lint-action@v7
         with:
           # Pinned: "latest" resolved to a binary built with Go 1.24,
           # which refuses configs targeting go 1.26.6.
