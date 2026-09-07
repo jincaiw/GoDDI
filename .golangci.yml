@@ -1,0 +1,22 @@
+# GoDDI golangci-lint configuration (L2).
+# Conservative set: the same checks `go vet` performs plus high-signal
+# static analysis. errcheck is intentionally omitted because the codebase
+# deliberately ignores a few fire-and-forget Exec calls (backup status
+# updates); revisit if the codebase adopts a strict error-handling policy.
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - misspell
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

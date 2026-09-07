@@ -46,6 +46,13 @@ type Server struct {
 	// notifyHandler is invoked for inbound NOTIFY (RFC 1996) messages.
 	notifyHandler func(zoneName string)
 
+	// notifyGuard bounds NOTIFY-triggered refreshes: at most
+	// notifyMaxConcurrent refreshes run at once and the same zone is only
+	// refreshed once per notifySuppress window.
+	notifyMu        sync.Mutex
+	notifyInflight  int
+	notifyLastStart map[string]time.Time
+
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	dotServer *dns.Server
@@ -169,7 +176,60 @@ func (s *Server) SetUpdateHandler(h *dynamic_update.UpdateHandler) {
 // SetNotifyHandler attaches the inbound NOTIFY (RFC 1996) handler, which
 // typically triggers a secondary zone refresh.
 func (s *Server) SetNotifyHandler(fn func(zoneName string)) {
+	s.notifyMu.Lock()
 	s.notifyHandler = fn
+	if s.notifyLastStart == nil {
+		s.notifyLastStart = make(map[string]time.Time)
+	}
+	s.notifyMu.Unlock()
+}
+
+const (
+	// notifyMaxConcurrent caps concurrent NOTIFY-triggered refreshes.
+	notifyMaxConcurrent = 2
+	// notifySuppress drops repeat NOTIFYs for the same zone in this window.
+	notifySuppress = 10 * time.Second
+)
+
+// scheduleNotifyRefresh runs the NOTIFY refresh for zoneName asynchronously,
+// subject to a concurrency cap and per-zone suppression.
+func (s *Server) scheduleNotifyRefresh(zoneName string) {
+	zone := dns.Fqdn(strings.ToLower(zoneName))
+
+	s.notifyMu.Lock()
+	if s.notifyLastStart == nil {
+		s.notifyLastStart = make(map[string]time.Time)
+	}
+	now := time.Now()
+	if last, ok := s.notifyLastStart[zone]; ok && now.Sub(last) < notifySuppress {
+		s.notifyMu.Unlock()
+		return
+	}
+	if s.notifyInflight >= notifyMaxConcurrent {
+		s.notifyMu.Unlock()
+		slog.Debug("dns_server: dropping NOTIFY refresh, too many in flight", "zone", zone)
+		return
+	}
+	s.notifyInflight++
+	s.notifyLastStart[zone] = now
+	handler := s.notifyHandler
+	s.notifyMu.Unlock()
+
+	if handler == nil {
+		s.notifyMu.Lock()
+		s.notifyInflight--
+		s.notifyMu.Unlock()
+		return
+	}
+
+	go func() {
+		defer func() {
+			s.notifyMu.Lock()
+			s.notifyInflight--
+			s.notifyMu.Unlock()
+		}()
+		handler(zone)
+	}()
 }
 
 // SetECSConfig hot-updates the EDNS Client Subnet (RFC 7871) forwarding

@@ -38,7 +38,7 @@ func ListDNSQueryLogs(w http.ResponseWriter, r *http.Request) {
 
 	entries, total, err := dnsquerylog.QueryLogs(DNSServices.DB, filters, page, pageSize)
 	if err != nil {
-		response.InternalError(w, "failed to query logs: "+err.Error())
+		response.InternalErrorWithLog(w, "failed to query logs", err)
 		return
 	}
 
@@ -75,7 +75,7 @@ func ExportDNSQueryLogs(w http.ResponseWriter, r *http.Request) {
 	const maxExportRows = 100000
 	entries, _, err := dnsquerylog.QueryLogs(DNSServices.DB, filters, 1, maxExportRows)
 	if err != nil {
-		response.InternalError(w, "failed to query logs: "+err.Error())
+		response.InternalErrorWithLog(w, "failed to query logs", err)
 		return
 	}
 

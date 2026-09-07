@@ -1,6 +1,7 @@
 package dnsutil
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -225,6 +226,63 @@ func TestFQDNAndUnFQDNRoundTrip(t *testing.T) {
 		unfqdn := UnFQDN(fqdn)
 		if unfqdn != d {
 			t.Errorf("UnFQDN(FQDN(%q)) = %q, want %q", d, unfqdn, d)
+		}
+	}
+}
+
+func TestValidateZoneName(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"example.com", "example.com.", "local", "sub.example.com",
+		"1.168.192.in-addr.arpa", "my-zone.example", "_tcp.example.com",
+	}
+	for _, name := range valid {
+		if err := ValidateZoneName(name); err != nil {
+			t.Errorf("ValidateZoneName(%q) unexpected error: %v", name, err)
+		}
+	}
+
+	invalid := map[string]string{
+		"":                                 "空名称",
+		".":                                "根作为区域",
+		"..":                               "空标签",
+		"a..b":                             "空标签",
+		"-bad.test":                        "前导连字符",
+		"bad-.test":                        "尾部连字符",
+		"含中文.test":                         "非 ASCII",
+		"a b.test":                         "含空格",
+		strings.Repeat("a", 64) + ".test":  "超长标签",
+		strings.Repeat("a", 250) + ".test": "超长名称",
+	}
+	for name, why := range invalid {
+		if err := ValidateZoneName(name); err == nil {
+			t.Errorf("ValidateZoneName(%q) should reject (%s)", name, why)
+		}
+	}
+}
+
+func TestValidateRecordName(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{"@", "*", "*.example.com", "www", "www.example.com", "www.example.com.", "_sip._tcp.example.com"}
+	for _, name := range valid {
+		if err := ValidateRecordName(name); err != nil {
+			t.Errorf("ValidateRecordName(%q) unexpected error: %v", name, err)
+		}
+	}
+
+	invalid := map[string]string{
+		"":                                 "空名称",
+		"a..b":                             "空标签",
+		"*.":                               "不完整的通配符",
+		"-a.test":                          "前导连字符",
+		"中文.test":                          "非 ASCII",
+		strings.Repeat("a", 300) + ".test": "超长名称",
+	}
+	for name, why := range invalid {
+		if err := ValidateRecordName(name); err == nil {
+			t.Errorf("ValidateRecordName(%q) should reject (%s)", name, why)
 		}
 	}
 }

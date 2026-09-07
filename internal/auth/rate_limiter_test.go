@@ -212,3 +212,114 @@ func TestEnsureRateLimitTable(t *testing.T) {
 		t.Fatalf("EnsureRateLimitTable() on existing table error = %v", err)
 	}
 }
+
+func TestResetUserAttempts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if err := EnsureRateLimitTable(db); err != nil {
+		t.Fatalf("EnsureRateLimitTable() error = %v", err)
+	}
+
+	rl := NewRateLimiter(db, 2, 15*time.Minute)
+
+	// Lock the user from two different IPs.
+	for i := 0; i < 2; i++ {
+		_ = rl.RecordFailedLogin("victim", "10.0.0.1")
+		_ = rl.RecordFailedLogin("victim", "10.0.0.2")
+	}
+	// Another user must not be affected later.
+	for i := 0; i < 2; i++ {
+		_ = rl.RecordFailedLogin("other", "10.0.0.3")
+	}
+
+	locked, err := rl.ListLockedEntries()
+	if err != nil {
+		t.Fatalf("ListLockedEntries() error = %v", err)
+	}
+	if len(locked) != 3 {
+		t.Fatalf("ListLockedEntries() = %d entries, want 3", len(locked))
+	}
+
+	removed, err := rl.ResetUserAttempts("victim")
+	if err != nil {
+		t.Fatalf("ResetUserAttempts() error = %v", err)
+	}
+	if removed < 2 {
+		t.Errorf("ResetUserAttempts() removed %d entries, want >= 2", removed)
+	}
+
+	// The victim can log in again from both IPs.
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2"} {
+		allowed, err := rl.CheckLoginRate("victim", ip)
+		if err != nil {
+			t.Fatalf("CheckLoginRate() error = %v", err)
+		}
+		if !allowed {
+			t.Errorf("user should be unlocked for ip %s", ip)
+		}
+	}
+
+	// Other users stay locked.
+	remaining, err := rl.ListLockedEntries()
+	if err != nil {
+		t.Fatalf("ListLockedEntries() error = %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Username != "other" {
+		t.Errorf("unexpected remaining lockouts: %+v", remaining)
+	}
+}
+
+func TestResetUserAttempts_IPv6Key(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if err := EnsureRateLimitTable(db); err != nil {
+		t.Fatalf("EnsureRateLimitTable() error = %v", err)
+	}
+
+	rl := NewRateLimiter(db, 1, 15*time.Minute)
+	_ = rl.RecordFailedLogin("v6user", "fe80::1")
+
+	locked, err := rl.ListLockedEntries()
+	if err != nil {
+		t.Fatalf("ListLockedEntries() error = %v", err)
+	}
+	if len(locked) != 1 {
+		t.Fatalf("ListLockedEntries() = %d entries, want 1", len(locked))
+	}
+	if locked[0].Username != "v6user" || locked[0].IP != "fe80::1" {
+		t.Errorf("splitLockKey round-trip failed: %+v", locked[0])
+	}
+
+	if _, err := rl.ResetUserAttempts("v6user"); err != nil {
+		t.Fatalf("ResetUserAttempts() error = %v", err)
+	}
+	allowed, _ := rl.CheckLoginRate("v6user", "fe80::1")
+	if !allowed {
+		t.Error("IPv6-keyed lockout should be cleared by username reset")
+	}
+}
+
+func TestResetAllLockouts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if err := EnsureRateLimitTable(db); err != nil {
+		t.Fatalf("EnsureRateLimitTable() error = %v", err)
+	}
+
+	rl := NewRateLimiter(db, 1, 15*time.Minute)
+	_ = rl.RecordFailedLogin("a", "10.0.0.1")
+	_ = rl.RecordFailedLogin("b", "10.0.0.2")
+
+	removed, err := rl.ResetAllLockouts()
+	if err != nil {
+		t.Fatalf("ResetAllLockouts() error = %v", err)
+	}
+	if removed < 2 {
+		t.Errorf("ResetAllLockouts() removed %d, want >= 2", removed)
+	}
+
+	locked, _ := rl.ListLockedEntries()
+	if len(locked) != 0 {
+		t.Errorf("lockouts remain after ResetAllLockouts: %+v", locked)
+	}
+}

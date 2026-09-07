@@ -12,6 +12,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dns/dnssec"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
 
 // Cached DNS manager instances, initialized once.
@@ -48,7 +49,7 @@ func ListDNSZones(w http.ResponseWriter, r *http.Request) {
 
 	zones, total, err := getZoneManager().ListZones(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -71,6 +72,11 @@ func CreateDNSZone(w http.ResponseWriter, r *http.Request) {
 
 	if opts.Name == "" {
 		response.BadRequest(w, "缺少区域名称")
+		return
+	}
+
+	if err := dnsutil.ValidateZoneName(opts.Name); err != nil {
+		response.BadRequest(w, err.Error())
 		return
 	}
 
@@ -124,6 +130,13 @@ func UpdateDNSZone(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
+	}
+
+	if opts.Name != "" {
+		if err := dnsutil.ValidateZoneName(opts.Name); err != nil {
+			response.BadRequest(w, err.Error())
+			return
+		}
 	}
 
 	z, err := getZoneManager().UpdateZone(id, opts)
@@ -209,12 +222,12 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 	switch req.Format {
 	case "csv":
 		if err := recordMgr.ImportRecordsCSV(zoneID, []byte(req.Content)); err != nil {
-			response.InternalError(w, "导入CSV失败: "+err.Error())
+			response.InternalErrorWithLog(w, "导入CSV失败", err)
 			return
 		}
 	default:
 		if err := recordMgr.ImportZoneFile(zoneID, req.Content); err != nil {
-			response.InternalError(w, "导入区域文件失败: "+err.Error())
+			response.InternalErrorWithLog(w, "导入区域文件失败", err)
 			return
 		}
 	}
@@ -243,7 +256,7 @@ func ExportZoneFile(w http.ResponseWriter, r *http.Request) {
 	case "csv":
 		data, err := recordMgr.ExportRecordsCSV(zoneID)
 		if err != nil {
-			response.InternalError(w, "导出CSV失败: "+err.Error())
+			response.InternalErrorWithLog(w, "导出CSV失败", err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/csv")
@@ -252,7 +265,7 @@ func ExportZoneFile(w http.ResponseWriter, r *http.Request) {
 	default:
 		content, err := recordMgr.ExportZoneFile(zoneID)
 		if err != nil {
-			response.InternalError(w, "导出区域文件失败: "+err.Error())
+			response.InternalErrorWithLog(w, "导出区域文件失败", err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
@@ -277,7 +290,7 @@ func SyncSecondaryZone(w http.ResponseWriter, r *http.Request) {
 
 	sync := transfer.NewSecondarySync(DNSServices.DB)
 	if err := sync.SyncFromPrimary(zoneID); err != nil {
-		response.InternalError(w, "同步区域失败: "+err.Error())
+		response.InternalErrorWithLog(w, "同步区域失败", err)
 		return
 	}
 
@@ -308,11 +321,33 @@ func GetDNSSECStatus(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, status)
 }
 
+// dnssecExperimentalNote explains what enabling DNSSEC currently does and,
+// more importantly, what it does not do. It is surfaced in API responses and
+// in the UI so operators are never left with a false sense of security.
+const dnssecExperimentalNote = "DNSSEC 为实验功能：当前仅标记区域并生成密钥，权威应答尚未携带 RRSIG/DNSKEY，校验方会判定为 Bogus"
+
+// dnssecFeatureEnabled reports whether the experimental DNSSEC feature gate is
+// on. It is disabled by default (see config.DNSSECConfig) because signing is
+// not implemented yet.
+func dnssecFeatureEnabled() bool {
+	return DNSServices != nil && DNSServices.Config != nil && DNSServices.Config.DNS.DNSSEC.Enabled
+}
+
 // EnableDNSSEC enables DNSSEC for a zone.
 // POST /api/v1/dns/zones/{id}/dnssec/enable
+//
+// EXPERIMENTAL: this marks the zone as DNSSEC-enabled and generates KSK/ZSK,
+// but the zone is not actually signed yet — no RRSIG or NSEC records are
+// produced, so validating resolvers will treat answers as Bogus. The endpoint
+// is gated behind dns.dnssec.enabled until real signing lands.
 func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 	if DNSServices == nil || DNSServices.DB == nil {
 		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	if !dnssecFeatureEnabled() {
+		response.Forbidden(w, "DNSSEC 实验功能未启用；如需体验请在配置中设置 dns.dnssec.enabled=true。"+dnssecExperimentalNote)
 		return
 	}
 
@@ -346,7 +381,7 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 	// Generate KSK and ZSK with rollback on failure.
 	ksk, err := mgr.GenerateKSK(zoneID, req.Algorithm)
 	if err != nil {
-		response.InternalError(w, "生成KSK失败: "+err.Error())
+		response.InternalErrorWithLog(w, "生成KSK失败", err)
 		return
 	}
 	// Mark the new KSK as part of the same logical operation; we keep
@@ -358,7 +393,7 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 		// Clean up the KSK row that was just inserted so the zone is not
 		// left half-configured.
 		_ = mgr.DisableDNSSEC(zoneID)
-		response.InternalError(w, "生成ZSK失败: "+err.Error())
+		response.InternalErrorWithLog(w, "生成ZSK失败", err)
 		return
 	}
 	_ = zsk
@@ -367,11 +402,14 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 	// the keys we just generated.
 	if err := mgr.SignZone(zoneID); err != nil {
 		_ = mgr.DisableDNSSEC(zoneID)
-		response.InternalError(w, "签名区域失败: "+err.Error())
+		response.InternalErrorWithLog(w, "签名区域失败", err)
 		return
 	}
 
-	response.OKWithMessage(w, "DNSSEC enabled", map[string]string{"zone_id": zoneID})
+	response.OKWithMessage(w, "DNSSEC 已启用（实验功能）", map[string]any{
+		"zone_id": zoneID,
+		"warning": dnssecExperimentalNote,
+	})
 }
 
 // DisableDNSSEC disables DNSSEC for a zone.
@@ -390,7 +428,7 @@ func DisableDNSSEC(w http.ResponseWriter, r *http.Request) {
 
 	mgr := getDNSSECManager()
 	if err := mgr.DisableDNSSEC(zoneID); err != nil {
-		response.InternalError(w, "禁用DNSSEC失败: "+err.Error())
+		response.InternalErrorWithLog(w, "禁用DNSSEC失败", err)
 		return
 	}
 
@@ -399,9 +437,16 @@ func DisableDNSSEC(w http.ResponseWriter, r *http.Request) {
 
 // RotateDNSSECKeys rotates DNSSEC keys for a zone.
 // POST /api/v1/dns/zones/{id}/dnssec/rotate
+//
+// EXPERIMENTAL: gated by dns.dnssec.enabled, see EnableDNSSEC.
 func RotateDNSSECKeys(w http.ResponseWriter, r *http.Request) {
 	if DNSServices == nil || DNSServices.DB == nil {
 		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	if !dnssecFeatureEnabled() {
+		response.Forbidden(w, "DNSSEC 实验功能未启用；如需体验请在配置中设置 dns.dnssec.enabled=true。"+dnssecExperimentalNote)
 		return
 	}
 
@@ -413,7 +458,7 @@ func RotateDNSSECKeys(w http.ResponseWriter, r *http.Request) {
 
 	mgr := getDNSSECManager()
 	if err := mgr.RotateKeys(zoneID); err != nil {
-		response.InternalError(w, "轮换DNSSEC密钥失败: "+err.Error())
+		response.InternalErrorWithLog(w, "轮换DNSSEC密钥失败", err)
 		return
 	}
 

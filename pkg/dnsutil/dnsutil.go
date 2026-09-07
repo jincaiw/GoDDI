@@ -101,6 +101,84 @@ const (
 	TypeDNSKEY RecordType = "DNSKEY"
 )
 
+// isLabel reports whether s is a valid DNS label: 1-63 characters drawn from
+// letters, digits, hyphen and underscore, and not starting or ending with a
+// hyphen (RFC 1123 preferred hostname syntax).
+func isLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	if s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+			continue
+		default:
+			// Non-ASCII bytes (raw UTF-8 / IDN) are rejected; callers must
+			// submit punycode (xn--) instead.
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateZoneName checks that name is a usable zone name. A trailing dot is
+// tolerated. Empty labels, over-long labels, leading or trailing hyphens and
+// non-ASCII characters are rejected.
+func ValidateZoneName(name string) error {
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
+	if name == "" {
+		return fmt.Errorf("区域名称不能为空")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("区域名称包含空标签")
+	}
+	if len(name) > 253 {
+		return fmt.Errorf("区域名称超过 253 字符限制")
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !isLabel(label) {
+			return fmt.Errorf("区域名称包含非法标签 %q", label)
+		}
+	}
+	return nil
+}
+
+// ValidateRecordName checks that name is a usable owner name for a record. In
+// addition to ordinary names it accepts "@" (zone apex) and a leading wildcard
+// label ("*" or "*.foo"). Relative names are allowed.
+func ValidateRecordName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("记录名称不能为空")
+	}
+	if name == "@" || name == "*" {
+		return nil
+	}
+	name = strings.TrimSuffix(name, ".")
+	if strings.HasPrefix(name, "*.") {
+		name = strings.TrimPrefix(name, "*.")
+	}
+	if name == "" {
+		return fmt.Errorf("记录名称不能为空")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("记录名称包含空标签")
+	}
+	if len(name) > 253 {
+		return fmt.Errorf("记录名称超过 253 字符限制")
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !isLabel(label) {
+			return fmt.Errorf("记录名称包含非法标签 %q", label)
+		}
+	}
+	return nil
+}
+
 // ValidateRecordType checks if a DNS record type is valid.
 func ValidateRecordType(t string) bool {
 	switch RecordType(strings.ToUpper(t)) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -195,13 +196,22 @@ func (s *Server) receiveLoop(conn net.PacketConn, ifaceName string, serverIP net
 			continue
 		}
 
-		// Process the message.
+		// Process the message. handleMessage recovers panics internally so
+		// one malformed/hostile packet cannot kill the receive loop and
+		// silently take DHCP down for the whole interface.
 		s.handleMessage(msg, addr, conn, ifaceName, serverIP)
 	}
 }
 
 // handleMessage processes a DHCP message and sends a response.
 func (s *Server) handleMessage(msg *dhcpv4.DHCPv4, addr net.Addr, conn net.PacketConn, ifaceName string, serverIP net.IP) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("DHCP server: recovered from panic while handling packet",
+				"interface", ifaceName, "panic", rec,
+				"client", addr.String(), "stack", string(debug.Stack()))
+		}
+	}()
 	msgType := msg.MessageType()
 
 	mac := msg.ClientHWAddr.String()

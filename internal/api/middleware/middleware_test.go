@@ -259,8 +259,8 @@ func TestCSRF_ValidToken(t *testing.T) {
 
 	csrfKey := deriveTestCSRFKey(cfg.Security.JWTSecret)
 
-	// Generate a valid CSRF token
-	token := GenerateCSRFToken(csrfKey)
+	// Generate a valid CSRF token (no session claim -> empty binding)
+	token := GenerateCSRFToken(csrfKey, "")
 
 	handler := CSRFProtection(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -275,6 +275,45 @@ func TestCSRF_ValidToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Valid CSRF token: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestCSRF_SessionBound(t *testing.T) {
+	cfg := &config.Config{
+		Security: config.SecurityConfig{
+			JWTSecret: "test-secret-key-for-csrf-testing",
+		},
+	}
+
+	csrfKey := deriveTestCSRFKey(cfg.Security.JWTSecret)
+
+	handler := CSRFProtection(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// A token minted for session A must be accepted only when the request
+	// context carries session A.
+	tokenA := GenerateCSRFToken(csrfKey, "session-a")
+
+	req := httptest.NewRequest("POST", "/api/v1/test", nil)
+	req.Header.Set("X-CSRF-Token", tokenA)
+	ctx := rbac.WithSessionID(req.Context(), "session-a")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("Session-bound CSRF token for matching session: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Same token replayed under session B must be rejected.
+	req = httptest.NewRequest("POST", "/api/v1/test", nil)
+	req.Header.Set("X-CSRF-Token", tokenA)
+	ctx = rbac.WithSessionID(req.Context(), "session-b")
+	req = req.WithContext(ctx)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Session-bound CSRF token replayed under another session: status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

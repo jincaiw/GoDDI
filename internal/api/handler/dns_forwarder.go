@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dns/cache"
 	"github.com/jasonwa/goddi/internal/dns/client"
 	"github.com/jasonwa/goddi/internal/dns/filter"
@@ -47,6 +48,9 @@ type DNSServiceContainer struct {
 	BlockListFetcher *filter.BlockListFetcher
 	DNSServer        *dnsserver.Server
 	JWTSecret        string
+	// Config exposes the effective runtime configuration to handlers that
+	// need to consult feature gates (e.g. the experimental DNSSEC switch).
+	Config *config.Config
 }
 
 // InitDNSServices initializes the DNS service container for API handlers.
@@ -99,6 +103,15 @@ func CreateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SSRF guard: unless dns.allow_private_upstream is enabled, upstreams may
+	// not target loopback/private/link-local addresses.
+	if !dnsAllowPrivateUpstream() {
+		if err := validateUpstreamAddress(req.Address); err != nil {
+			response.BadRequest(w, "无效的上游地址: "+err.Error())
+			return
+		}
+	}
+
 	if req.Protocol == "" {
 		req.Protocol = "udp"
 	}
@@ -115,7 +128,7 @@ func CreateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, id, req.Name, req.Protocol, req.Address, req.Enabled, req.Priority)
 	if err != nil {
-		response.InternalError(w, "创建转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建转发器失败", err)
 		return
 	}
 
@@ -175,6 +188,12 @@ func UpdateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 			response.BadRequest(w, "地址格式无效，应为 host:port 格式")
 			return
 		}
+		if !dnsAllowPrivateUpstream() {
+			if err := validateUpstreamAddress(req.Address); err != nil {
+				response.BadRequest(w, "无效的上游地址: "+err.Error())
+				return
+			}
+		}
 	}
 
 	// Validate protocol.
@@ -188,7 +207,7 @@ func UpdateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		WHERE id=?
 	`, req.Name, req.Protocol, req.Address, req.Enabled, req.Priority, id)
 	if err != nil {
-		response.InternalError(w, "更新转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新转发器失败", err)
 		return
 	}
 
@@ -243,7 +262,7 @@ func DeleteDNSForwarder(w http.ResponseWriter, r *http.Request) {
 	// consistent view of the database.
 	tx, err := DNSServices.DB.Begin()
 	if err != nil {
-		response.InternalError(w, "删除转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除转发器失败", err)
 		return
 	}
 	defer func() {
@@ -259,7 +278,7 @@ func DeleteDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		WHERE EXISTS (SELECT 1 FROM json_each(forwarder_ids) WHERE value = ?)
 	`, id).Scan(&refCount)
 	if err != nil {
-		response.InternalError(w, "检查转发器引用失败: "+err.Error())
+		response.InternalErrorWithLog(w, "检查转发器引用失败", err)
 		return
 	}
 	if refCount > 0 {
@@ -268,12 +287,12 @@ func DeleteDNSForwarder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err = tx.Exec("DELETE FROM dns_forwarders WHERE id=?", id); err != nil {
-		response.InternalError(w, "删除转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除转发器失败", err)
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		response.InternalError(w, "删除转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除转发器失败", err)
 		return
 	}
 
@@ -333,7 +352,7 @@ func CreateConditionalForwarder(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?)
 	`, id, req.Domain, string(idsJSON), req.Enabled)
 	if err != nil {
-		response.InternalError(w, "创建条件转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建条件转发器失败", err)
 		return
 	}
 
@@ -382,7 +401,7 @@ func UpdateConditionalForwarder(w http.ResponseWriter, r *http.Request) {
 		WHERE id=?
 	`, req.Domain, string(idsJSON), req.Enabled, id)
 	if err != nil {
-		response.InternalError(w, "更新条件转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新条件转发器失败", err)
 		return
 	}
 
@@ -417,7 +436,7 @@ func DeleteConditionalForwarder(w http.ResponseWriter, r *http.Request) {
 
 	_, err := DNSServices.DB.Exec("DELETE FROM dns_conditional_forwarders WHERE id=?", id)
 	if err != nil {
-		response.InternalError(w, "删除条件转发器失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除条件转发器失败", err)
 		return
 	}
 

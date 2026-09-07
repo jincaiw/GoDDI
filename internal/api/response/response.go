@@ -140,6 +140,20 @@ func InternalError(w http.ResponseWriter, message string) {
 	})
 }
 
+// InternalErrorWithLog reports a generic message to the client while keeping
+// the underlying error server-side. Internal errors frequently carry schema
+// names, column names and absolute filesystem paths; echoing them hands an
+// attacker free reconnaissance about the deployment.
+func InternalErrorWithLog(w http.ResponseWriter, message string, err error) {
+	if err != nil {
+		slog.Error("api: internal error", "message", message, "error", err)
+	}
+	writeJSON(w, http.StatusInternalServerError, Response{
+		Code:    500,
+		Message: message,
+	})
+}
+
 // ServiceUnavailable sends a 503 Service Unavailable response.
 func ServiceUnavailable(w http.ResponseWriter, message string, data interface{}) {
 	writeJSON(w, http.StatusServiceUnavailable, Response{

@@ -58,7 +58,7 @@ func ListIPAMSpaces(w http.ResponseWriter, r *http.Request) {
 
 	spaces, total, err := IPAMServices.SpaceMgr.ListSpaces(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -92,7 +92,7 @@ func CreateIPAMSpace(w http.ResponseWriter, r *http.Request) {
 
 	s, err := IPAMServices.SpaceMgr.CreateSpace(req.Name, req.Description)
 	if err != nil {
-		response.InternalError(w, "创建失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建失败", err)
 		return
 	}
 
@@ -142,7 +142,7 @@ func UpdateIPAMSpace(w http.ResponseWriter, r *http.Request) {
 
 	s, err := IPAMServices.SpaceMgr.UpdateSpace(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新失败", err)
 		return
 	}
 
@@ -167,7 +167,7 @@ func DeleteIPAMSpace(w http.ResponseWriter, r *http.Request) {
 			response.Conflict(w, "删除失败: "+err.Error())
 			return
 		}
-		response.InternalError(w, "删除失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除失败", err)
 		return
 	}
 
@@ -201,7 +201,7 @@ func ListIPAMSubnets(w http.ResponseWriter, r *http.Request) {
 
 	subnets, total, err := IPAMServices.SubnetMgr.ListSubnets(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -255,7 +255,7 @@ func CreateIPAMSubnet(w http.ResponseWriter, r *http.Request) {
 
 	s, err := IPAMServices.SubnetMgr.CreateSubnet(req.SpaceID, req.Name, req.CIDR, opts)
 	if err != nil {
-		response.InternalError(w, "创建子网失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建子网失败", err)
 		return
 	}
 
@@ -305,7 +305,7 @@ func UpdateIPAMSubnet(w http.ResponseWriter, r *http.Request) {
 
 	s, err := IPAMServices.SubnetMgr.UpdateSubnet(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新子网失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新子网失败", err)
 		return
 	}
 
@@ -326,7 +326,7 @@ func DeleteIPAMSubnet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := IPAMServices.SubnetMgr.DeleteSubnet(id); err != nil {
-		response.InternalError(w, "删除子网失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除子网失败", err)
 		return
 	}
 
@@ -370,7 +370,7 @@ func GenerateDHCPScope(w http.ResponseWriter, r *http.Request) {
 
 	scopeOpts, err := IPAMServices.SubnetMgr.GenerateDHCPScope(id)
 	if err != nil {
-		response.InternalError(w, "生成DHCP作用域失败: "+err.Error())
+		response.InternalErrorWithLog(w, "生成DHCP作用域失败", err)
 		return
 	}
 
@@ -392,7 +392,7 @@ func GenerateReverseZone(w http.ResponseWriter, r *http.Request) {
 
 	zoneName, err := IPAMServices.SubnetMgr.GenerateReverseZone(id)
 	if err != nil {
-		response.InternalError(w, "生成反向区域失败: "+err.Error())
+		response.InternalErrorWithLog(w, "生成反向区域失败", err)
 		return
 	}
 
@@ -423,7 +423,7 @@ func ListIPAMAddresses(w http.ResponseWriter, r *http.Request) {
 
 	addresses, total, err := IPAMServices.AddressMgr.ListAddresses(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -477,7 +477,7 @@ func UpdateIPAMAddress(w http.ResponseWriter, r *http.Request) {
 
 	a, err := IPAMServices.AddressMgr.UpdateAddress(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新地址失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新地址失败", err)
 		return
 	}
 
@@ -516,7 +516,7 @@ func AllocateIP(w http.ResponseWriter, r *http.Request) {
 	if req.IPAddress == "" {
 		autoIP, err := IPAMServices.AddressMgr.AutoAssignIP(req.SubnetID)
 		if err != nil {
-			response.InternalError(w, "自动分配IP失败: "+err.Error())
+			response.InternalErrorWithLog(w, "自动分配IP失败", err)
 			return
 		}
 		req.IPAddress = autoIP
@@ -537,7 +537,7 @@ func AllocateIP(w http.ResponseWriter, r *http.Request) {
 
 	a, err := IPAMServices.AddressMgr.AllocateIP(req.SubnetID, req.IPAddress, req.Owner, opts)
 	if err != nil {
-		response.InternalError(w, "分配IP失败: "+err.Error())
+		response.InternalErrorWithLog(w, "分配IP失败", err)
 		return
 	}
 
@@ -565,7 +565,7 @@ func ReleaseIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := IPAMServices.AddressMgr.ReleaseIP(req.ID); err != nil {
-		response.InternalError(w, "释放IP失败: "+err.Error())
+		response.InternalErrorWithLog(w, "释放IP失败", err)
 		return
 	}
 
@@ -633,7 +633,7 @@ func ImportIPAMData(w http.ResponseWriter, r *http.Request) {
 	case "addresses":
 		if req.Format == "csv" {
 			if err := ie.ImportAddressesCSV(req.ParentID, []byte(req.Data)); err != nil {
-				response.InternalError(w, "导入地址失败: "+err.Error())
+				response.InternalErrorWithLog(w, "导入地址失败", err)
 				return
 			}
 		} else {
@@ -643,7 +643,7 @@ func ImportIPAMData(w http.ResponseWriter, r *http.Request) {
 	case "subnets":
 		if req.Format == "csv" {
 			if err := ie.ImportSubnetsCSV(req.ParentID, []byte(req.Data)); err != nil {
-				response.InternalError(w, "导入子网失败: "+err.Error())
+				response.InternalErrorWithLog(w, "导入子网失败", err)
 				return
 			}
 		} else {
@@ -687,7 +687,7 @@ func ExportIPAMData(w http.ResponseWriter, r *http.Request) {
 		if format == "csv" {
 			data, err := ie.ExportAddressesCSV(parentID)
 			if err != nil {
-				response.InternalError(w, "导出地址失败: "+err.Error())
+				response.InternalErrorWithLog(w, "导出地址失败", err)
 				return
 			}
 			w.Header().Set("Content-Type", "text/csv")
@@ -699,7 +699,7 @@ func ExportIPAMData(w http.ResponseWriter, r *http.Request) {
 		if format == "csv" {
 			data, err := ie.ExportSubnetsCSV(parentID)
 			if err != nil {
-				response.InternalError(w, "导出子网失败: "+err.Error())
+				response.InternalErrorWithLog(w, "导出子网失败", err)
 				return
 			}
 			w.Header().Set("Content-Type", "text/csv")

@@ -8,6 +8,17 @@ server:
   data_dir: "./data"
   language: "zh-CN"
   dark_mode: false
+  # TLS for the management UI and API. Strongly recommended for production:
+  # admin credentials and tokens travel in cleartext without it. When disabled,
+  # terminate TLS at a reverse proxy instead.
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    min_version: "1.2"   # "1.2" | "1.3"
+  # Whether to serve /api/v1/openapi.json publicly. The schema contains no
+  # secrets; disable on hardened internet-facing deployments.
+  expose_openapi: true
 
 database:
   driver: "sqlite"       # v0.1.0 supports SQLite
@@ -28,6 +39,11 @@ dns:
     udp:
       enabled: true
       address: ":53"
+  # DNSSEC is EXPERIMENTAL: enabling a zone only flags it and generates keys;
+  # answers carry no RRSIG/DNSKEY yet, so validating resolvers treat the zone
+  # as Bogus. Keep disabled unless you accept that.
+  dnssec:
+    enabled: false
     tcp:
       enabled: true
       address: ":53"

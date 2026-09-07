@@ -127,7 +127,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		&s.Blocked, &s.Cached, &s.Clients, &s.AvgResponseMs,
 	)
 	if err != nil {
-		response.InternalError(w, "统计查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "统计查询失败", err)
 		return
 	}
 
@@ -144,7 +144,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		ORDER BY bucket ASC
 	`, bucketFmt, startStr, endStr)
 	if err != nil {
-		response.InternalError(w, "统计序列查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "统计序列查询失败", err)
 		return
 	}
 	defer rows.Close()

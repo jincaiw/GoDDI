@@ -92,8 +92,12 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	// a secondary refresh asynchronously and acknowledge with the local SOA.
 	if req.Opcode == dns.OpcodeNotify {
 		if h.server.notifyHandler != nil && len(req.Question) > 0 {
-			zoneName := qname
-			go h.server.notifyHandler(zoneName)
+			// NOTIFY is unauthenticated by default: a flood of NOTIFYs (or a
+			// spoofed source IP) would otherwise spawn one goroutine per
+			// packet, each running a full AXFR plus a long write transaction.
+			// Bound the concurrency and suppress repeats for the same zone
+			// inside a short window.
+			h.server.scheduleNotifyRefresh(qname)
 		}
 		resp := new(dns.Msg)
 		resp.SetReply(req)

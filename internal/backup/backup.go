@@ -3,6 +3,7 @@ package backup
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/metrics"
 )
+
+// ErrNotFound is returned when a backup job does not exist. Callers use it to
+// distinguish "no such backup" (404) from real failures (500).
+var ErrNotFound = errors.New("backup job not found")
 
 // BackupOptions specifies options for creating a backup.
 type BackupOptions struct {
@@ -298,55 +303,51 @@ func (m *Manager) RestoreBackup(jobID string) error {
 		return fmt.Errorf("parsing backup file: %w", err)
 	}
 
-	// Run the whole restore inside a single transaction so that a partial
-	// failure cannot leave the database in a half-restored state.
-	tx, err := m.db.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning restore transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
+	// Each backup section is restored in its own transaction (R3-1).
+	// A single mega-transaction over the whole restore would monopolise
+	// the single SQLite write connection for the entire run (with
+	// SetMaxOpenConns(1) every other query queues behind it) and risks
+	// hitting busy_timeout on large datasets. Per-section transactions
+	// keep each section atomic (delete + insert of one domain) while
+	// releasing the connection between sections, so concurrent API
+	// traffic can interleave.
 	var errs []string
+	var restored []string
 
-	if len(backupFile.Data.DNS) > 0 {
-		if err := restoreDNS(tx, backupFile.Data.DNS); err != nil {
-			slog.Error("failed to restore DNS data", "error", err)
-			errs = append(errs, fmt.Sprintf("DNS: %v", err))
-		}
+	if err := m.restoreSection("DNS", backupFile.Data.DNS, restoreDNS); err != nil {
+		slog.Error("failed to restore DNS data", "error", err)
+		errs = append(errs, fmt.Sprintf("DNS: %v", err))
+	} else if len(backupFile.Data.DNS) > 0 {
+		restored = append(restored, "DNS")
 	}
-	if len(backupFile.Data.DHCP) > 0 {
-		if err := restoreDHCP(tx, backupFile.Data.DHCP); err != nil {
-			slog.Error("failed to restore DHCP data", "error", err)
-			errs = append(errs, fmt.Sprintf("DHCP: %v", err))
-		}
+	if err := m.restoreSection("DHCP", backupFile.Data.DHCP, restoreDHCP); err != nil {
+		slog.Error("failed to restore DHCP data", "error", err)
+		errs = append(errs, fmt.Sprintf("DHCP: %v", err))
+	} else if len(backupFile.Data.DHCP) > 0 {
+		restored = append(restored, "DHCP")
 	}
-	if len(backupFile.Data.IPAM) > 0 {
-		if err := restoreIPAM(tx, backupFile.Data.IPAM); err != nil {
-			slog.Error("failed to restore IPAM data", "error", err)
-			errs = append(errs, fmt.Sprintf("IPAM: %v", err))
-		}
+	if err := m.restoreSection("IPAM", backupFile.Data.IPAM, restoreIPAM); err != nil {
+		slog.Error("failed to restore IPAM data", "error", err)
+		errs = append(errs, fmt.Sprintf("IPAM: %v", err))
+	} else if len(backupFile.Data.IPAM) > 0 {
+		restored = append(restored, "IPAM")
 	}
-	if len(backupFile.Data.Security) > 0 {
-		if err := restoreSecurity(tx, backupFile.Data.Security); err != nil {
-			slog.Error("failed to restore security data", "error", err)
-			errs = append(errs, fmt.Sprintf("Security: %v", err))
-		}
+	if err := m.restoreSection("Security", backupFile.Data.Security, restoreSecurity); err != nil {
+		slog.Error("failed to restore security data", "error", err)
+		errs = append(errs, fmt.Sprintf("Security: %v", err))
+	} else if len(backupFile.Data.Security) > 0 {
+		restored = append(restored, "Security")
 	}
-	if len(backupFile.Data.Config) > 0 {
-		if err := restoreConfig(tx, backupFile.Data.Config); err != nil {
-			slog.Error("failed to restore config data", "error", err)
-			errs = append(errs, fmt.Sprintf("Config: %v", err))
-		}
+	if err := m.restoreSection("Config", backupFile.Data.Config, restoreConfig); err != nil {
+		slog.Error("failed to restore config data", "error", err)
+		errs = append(errs, fmt.Sprintf("Config: %v", err))
+	} else if len(backupFile.Data.Config) > 0 {
+		restored = append(restored, "Config")
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("backup restore partially failed: %s", strings.Join(errs, "; "))
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing restore transaction: %w", err)
+		return fmt.Errorf("backup restore partially failed (restored: %s): %s",
+			strings.Join(restored, ","), strings.Join(errs, "; "))
 	}
 
 	slog.Info("backup restored", "id", jobID, "type", backupFile.Metadata.Type)
@@ -447,7 +448,7 @@ func (m *Manager) GetBackup(id string) (*BackupJob, error) {
 	).Scan(&j.ID, &j.Type, &j.Status, &filePath, &sizeBytes, &description, &errMsg, &startedAt, &completedAt, &j.CreatedAt)
 
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("backup job not found: %s", id)
+		return nil, fmt.Errorf("backup job %s: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying backup job: %w", err)
@@ -553,6 +554,29 @@ func (m *Manager) safeBackupPath(filePath string) (string, error) {
 }
 
 // --- Restore helpers ---
+
+// restoreSection restores one backup section (DNS, DHCP, ...) inside its
+// own transaction. Empty sections are skipped. On failure the section
+// transaction is rolled back, leaving that section untouched.
+func (m *Manager) restoreSection(name string, data json.RawMessage, fn func(execOrQuery, json.RawMessage) error) error {
+	if len(data) == 0 {
+		return nil
+	}
+	start := time.Now()
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning %s restore transaction: %w", name, err)
+	}
+	if err := fn(tx, data); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing %s restore transaction: %w", name, err)
+	}
+	slog.Info("backup section restored", "section", name, "duration", time.Since(start).String())
+	return nil
+}
 
 // execOrQuery is the minimum set of methods shared by *sql.DB and *sql.Tx, so
 // that restore helpers can run either inside a transaction or directly on the

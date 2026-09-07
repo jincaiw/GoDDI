@@ -1,1 +1,0 @@
-import{s as e}from"./auth-DDEovzTa.js";function t(t){return e(`/logs/audit`,t)}export{t};

@@ -49,7 +49,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.1.10"
+	Version   = "0.1.11"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -96,7 +96,27 @@ func main() {
 	}
 	migrateCmd.Flags().StringVarP(&configPath, "config", "c", "/etc/goddi/config.yaml", "Path to configuration file")
 
-	rootCmd.AddCommand(serveCmd, versionCmd, migrateCmd)
+	// unlock subcommand: clears login rate-limit lockouts. This exists as a
+	// CLI command because a locked-out administrator cannot log in to use the
+	// unlock API — the CLI is the only recovery path when lockout is total.
+	var unlockUser, unlockIP string
+	var unlockAll bool
+	unlockCmd := &cobra.Command{
+		Use:   "unlock",
+		Short: "Clear login rate-limit lockouts",
+		Long: "Clear login rate-limit lockouts created by repeated failed logins.\n" +
+			"Use --user <name> to unlock one account on every source IP, --user <name> --ip <addr>\n" +
+			"to scope it to a single IP, or --all to clear every lockout.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUnlock(configPath, unlockUser, unlockIP, unlockAll)
+		},
+	}
+	unlockCmd.Flags().StringVarP(&configPath, "config", "c", "/etc/goddi/config.yaml", "Path to configuration file")
+	unlockCmd.Flags().StringVar(&unlockUser, "user", "", "Username to unlock")
+	unlockCmd.Flags().StringVar(&unlockIP, "ip", "", "Restrict the unlock to this source IP (requires --user)")
+	unlockCmd.Flags().BoolVar(&unlockAll, "all", false, "Clear every lockout for all users")
+
+	rootCmd.AddCommand(serveCmd, versionCmd, migrateCmd, unlockCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -206,6 +226,19 @@ func runServer(configPath string) error {
 			"serve_stale", cfg.Cache.ServeStale,
 			"persistent", cfg.Cache.Persistent,
 		)
+
+		// Publish cache statistics to /metrics (C3): gauges are sampled
+		// by the metrics ticker every 10 seconds.
+		metrics.RegisterCacheStatsProvider(func() metrics.CacheStatsSample {
+			st := dnsCache.Stats()
+			return metrics.CacheStatsSample{
+				Entries:    st.Entries,
+				MaxEntries: st.MaxEntries,
+				SizeBytes:  st.SizeBytes,
+				Hits:       st.Hits,
+				Misses:     st.Misses,
+			}
+		})
 	}
 
 	// DNS Filter Engine.
@@ -256,6 +289,9 @@ func runServer(configPath string) error {
 	if cfg.Log.QueryLogEnabled {
 		queryLog = dnsquerylog.NewQueryLogger(db.DB, cfg.Log.RetentionDays)
 		slog.Info("DNS query logger initialized", "retention_days", cfg.Log.RetentionDays)
+
+		// Publish dropped query-log entries to /metrics (L1).
+		metrics.RegisterQueryLogDroppedProvider(queryLog.DroppedCount)
 	}
 
 	// DNS Client (for debug queries).
@@ -334,6 +370,7 @@ func runServer(configPath string) error {
 		BlockListFetcher: blockListFetcher,
 		DNSServer:        dnsSrv,
 		JWTSecret:        cfg.Security.JWTSecret,
+		Config:           cfg,
 	})
 
 	// --- Initialize DHCP Components ---
@@ -556,9 +593,19 @@ func runServer(configPath string) error {
 	}
 
 	// Start HTTP server in a goroutine.
+	tlsEnabled := cfg.Server.TLS.Enabled
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("HTTP server listening", "addr", cfg.Server.HTTPAddr)
+		if tlsEnabled {
+			slog.Info("HTTPS server listening", "addr", cfg.Server.HTTPAddr,
+				"min_tls_version", cfg.Server.TLS.MinVersion)
+			if err := srv.ListenAndServeTLS(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+			return
+		}
+		slog.Info("HTTP server listening", "addr", cfg.Server.HTTPAddr,
+			"warning", "TLS disabled: admin credentials and tokens travel in cleartext; enable server.tls or terminate TLS at a reverse proxy")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -667,6 +714,10 @@ func runServer(configPath string) error {
 		}
 		cancel()
 	}
+
+	// Stop the metrics uptime ticker last (R5): it must keep publishing
+	// uptime while every other component is still shutting down.
+	metrics.Shutdown()
 
 	slog.Info("GoDDI stopped gracefully")
 	return nil
@@ -798,6 +849,83 @@ func runMigrations(configPath string) error {
 	}
 
 	slog.Info("migrations completed successfully")
+	return nil
+}
+
+// runUnlock clears login rate-limit lockouts. It intentionally does NOT need
+// HTTP credentials: the whole point is to recover an administrator account
+// that is locked out and therefore cannot call the unlock API.
+func runUnlock(configPath, username, ip string, all bool) error {
+	if !all && username == "" {
+		return fmt.Errorf("specify --user <name> (optionally with --ip <addr>) or --all")
+	}
+	if all && (username != "" || ip != "") {
+		return fmt.Errorf("--all cannot be combined with --user/--ip")
+	}
+	if ip != "" && username == "" {
+		return fmt.Errorf("--ip requires --user")
+	}
+
+	cfg, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	config.ApplyEnvOverrides(cfg)
+
+	applog.InitLogger(cfg.Log.Level)
+
+	db, err := database.New(cfg.Database)
+	if err != nil {
+		return fmt.Errorf("initializing database: %w", err)
+	}
+	defer db.Close()
+
+	if err := auth.EnsureRateLimitTable(db.DB); err != nil {
+		return fmt.Errorf("ensuring rate limit table: %w", err)
+	}
+
+	rl := auth.NewRateLimiter(db.DB, cfg.Security.LoginRateLimit, time.Duration(cfg.Security.LoginRateWindow)*time.Second)
+
+	switch {
+	case all:
+		removed, err := rl.ResetAllLockouts()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("已清除所有登录锁定（%d 条记录）\n", removed)
+	case ip != "":
+		if err := rl.ResetLoginAttempts(username, ip); err != nil {
+			return err
+		}
+		fmt.Printf("已解锁 %s（来源 %s）\n", username, ip)
+	default:
+		entries, err := rl.ListLockedEntries()
+		if err != nil {
+			return err
+		}
+		removed, err := rl.ResetUserAttempts(username)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("已解锁 %s（清除 %d 条记录）\n", username, removed)
+		for _, e := range entries {
+			if e.Username == username {
+				fmt.Printf("  - 曾被锁定: %s@%s，尝试 %d 次，锁定至 %s\n",
+					e.Username, e.IP, e.Attempts, e.LockedUntil.Format("2006-01-02 15:04:05"))
+			}
+		}
+	}
+
+	// Show remaining lockouts so the operator can confirm the state.
+	remaining, err := rl.ListLockedEntries()
+	if err == nil && len(remaining) > 0 {
+		fmt.Printf("当前仍有 %d 个锁定：\n", len(remaining))
+		for _, e := range remaining {
+			fmt.Printf("  - %s@%s，锁定至 %s\n", e.Username, e.IP, e.LockedUntil.Format("2006-01-02 15:04:05"))
+		}
+	}
+
 	return nil
 }
 

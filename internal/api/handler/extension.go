@@ -67,7 +67,7 @@ func configureListener(w http.ResponseWriter, r *http.Request, kind string) {
 	}
 	settingKey := listenerSettingKeys[kind]
 	if err := SystemServices.SettingsMgr.SetSetting(settingKey, string(payload), kind+" listener config"); err != nil {
-		response.InternalError(w, "保存监听配置失败: "+err.Error())
+		response.InternalErrorWithLog(w, "保存监听配置失败", err)
 		return
 	}
 
@@ -79,7 +79,7 @@ func configureListener(w http.ResponseWriter, r *http.Request, kind string) {
 	if err := DNSServices.DNSServer.RestartListener(kind); err != nil {
 		// The config is persisted but the listener failed to start; surface
 		// the error so the operator can fix cert paths etc.
-		response.InternalError(w, "监听器重启失败: "+err.Error())
+		response.InternalErrorWithLog(w, "监听器重启失败", err)
 		return
 	}
 

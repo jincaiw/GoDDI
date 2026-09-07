@@ -236,7 +236,13 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 	}, nil
 }
 
-// SignZone signs all records in a zone with DNSSEC.
+// SignZone marks a zone as DNSSEC-enabled.
+//
+// EXPERIMENTAL / INCOMPLETE: this does NOT sign anything. It verifies that a
+// ZSK/KSK exist and flips dns_zones.dnssec_enabled, but no RRSIG, DNSKEY or
+// NSEC records are generated or served, so a validating resolver will treat
+// the zone as Bogus. Real signing is tracked separately; until then the API
+// entry points are gated behind the dns.dnssec.enabled configuration switch.
 func (m *DNSSECManager) SignZone(zoneID string) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
@@ -354,12 +360,18 @@ func (m *DNSSECManager) GetDNSSECStatus(zoneID string) (map[string]interface{}, 
 		return nil, err
 	}
 
+	// "signed" is deliberately reported as false: even when dnssec_enabled is
+	// true the authoritative answers carry no RRSIG/NSEC records yet, so the
+	// zone is not actually signed. Callers (UI included) must not present
+	// dnssec_enabled alone as "DNSSEC is protecting this zone".
 	status := map[string]interface{}{
 		"zone_id":        zoneID,
 		"zone_name":      z.Name,
 		"dnssec_enabled": z.DNSSECEnabled,
 		"keys":           keys,
 		"key_count":      len(keys),
+		"signed":         false,
+		"experimental":   true,
 	}
 
 	return status, nil

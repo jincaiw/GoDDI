@@ -29,7 +29,7 @@ func ListDHCPLogs(w http.ResponseWriter, r *http.Request) {
 
 	entries, total, err := dhcpinternal.QueryDHCPLogs(DHCPServices.DB, filter)
 	if err != nil {
-		response.InternalError(w, "failed to query DHCP logs: "+err.Error())
+		response.InternalErrorWithLog(w, "failed to query DHCP logs", err)
 		return
 	}
 

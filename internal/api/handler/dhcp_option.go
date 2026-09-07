@@ -20,7 +20,7 @@ func ListDHCPOptions(w http.ResponseWriter, r *http.Request) {
 
 	options, err := DHCPServices.OptionMgr.ListOptions(scopeID)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -59,7 +59,7 @@ func CreateDHCPOption(w http.ResponseWriter, r *http.Request) {
 
 	o, err := DHCPServices.OptionMgr.CreateOption(opts.ScopeID, opts)
 	if err != nil {
-		response.InternalError(w, "创建选项失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建选项失败", err)
 		return
 	}
 
@@ -87,7 +87,7 @@ func UpdateDHCPOption(w http.ResponseWriter, r *http.Request) {
 
 	o, err := DHCPServices.OptionMgr.UpdateOption(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新选项失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新选项失败", err)
 		return
 	}
 
@@ -108,7 +108,7 @@ func DeleteDHCPOption(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DHCPServices.OptionMgr.DeleteOption(id); err != nil {
-		response.InternalError(w, "删除选项失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除选项失败", err)
 		return
 	}
 

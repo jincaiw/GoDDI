@@ -27,7 +27,7 @@ func ListTasksHandler(w http.ResponseWriter, r *http.Request) {
 
 	tasks, total, err := SystemServices.TaskMgr.ListTasks(filter)
 	if err != nil {
-		response.InternalError(w, "查询任务列表失败: "+err.Error())
+		response.InternalErrorWithLog(w, "查询任务列表失败", err)
 		return
 	}
 

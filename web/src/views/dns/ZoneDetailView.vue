@@ -16,7 +16,10 @@
         <n-descriptions-item :label="t('dns.zones.ttl')">{{ zone.default_ttl }}</n-descriptions-item>
         <n-descriptions-item :label="t('dns.zones.serial')">{{ zone.serial }}</n-descriptions-item>
         <n-descriptions-item :label="t('dns.zones.dnssec')">
-          <n-tag :type="zone.dnssec_enabled ? 'success' : 'default'" size="small">{{ zone.dnssec_enabled ? 'ON' : 'OFF' }}</n-tag>
+          <n-space :size="6" align="center">
+            <n-tag :type="zone.dnssec_enabled ? 'warning' : 'default'" size="small">{{ zone.dnssec_enabled ? 'ON' : 'OFF' }}</n-tag>
+            <n-tag size="small" type="warning">{{ t('common.experimental') }}</n-tag>
+          </n-space>
         </n-descriptions-item>
         <n-descriptions-item :label="t('dns.zones.primaryNs')">{{ zone.soa_mname || '-' }}</n-descriptions-item>
         <n-descriptions-item :label="t('dns.zones.adminEmail')">{{ zone.soa_rname || '-' }}</n-descriptions-item>
@@ -27,6 +30,9 @@
 
       <!-- DNSSEC Controls -->
       <n-divider />
+      <n-alert type="warning" size="small" style="margin-bottom: 12px;">
+        {{ t('dns.zones.dnssecExperimentalHint') }}
+      </n-alert>
       <n-space>
         <n-button v-if="!zone.dnssec_enabled && perm.canWrite('dns')" type="warning" size="small" @click="handleDnssecAction('enable')">{{ t('dns.zones.enableDnssec') }}</n-button>
         <n-button v-if="zone.dnssec_enabled && perm.canWrite('dns')" type="warning" size="small" @click="handleDnssecAction('disable')">{{ t('dns.zones.disableDnssec') }}</n-button>

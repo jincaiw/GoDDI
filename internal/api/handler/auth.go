@@ -286,7 +286,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	// it for subsequent mutating requests. The token is derived from the
 	// JWT secret via HKDF and is only valid for mutating methods enforced
 	// by the CSRF middleware.
-	csrfToken := middleware.GenerateCSRFToken(h.jwtMgr.CSRFKey())
+	csrfToken := middleware.GenerateCSRFToken(h.jwtMgr.CSRFKey(), session.ID)
 
 	response.OK(w, map[string]interface{}{
 		"token":        token,
@@ -309,6 +309,70 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 	response.OK(w, map[string]string{"message": "已登出"})
 }
+
+// ListLockouts handles GET /api/v1/auth/lockouts
+// Returns the usernames/IPs currently locked out by the login rate limiter,
+// so an administrator can tell a mistyped password from an active DoS attempt
+// and unlock the affected account.
+func (h *Handlers) ListLockouts(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.rateLimit.ListLockedEntries()
+	if err != nil {
+		response.InternalErrorWithLog(w, "查询登录锁定失败", err)
+		return
+	}
+	response.OK(w, entries)
+}
+
+// UnlockUser handles POST /api/v1/auth/unlock
+// Clears the login rate-limit state for a username (optionally scoped to one
+// source IP). This is the API counterpart of the `goddi unlock` CLI command:
+// an account locked out by repeated failures cannot log in to unlock itself,
+// so an administrator with user:write must be able to do it.
+func (h *Handlers) UnlockUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		IP       string `json:"ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+
+	if req.Username == "" {
+		response.BadRequest(w, "缺少用户名")
+		return
+	}
+
+	// Audit the unlock before performing it so the trail survives a failure.
+	logAuditError("unlock_user", h.auditMgr.Log(audit.LogEntry{
+		Username:     rbac.GetUsername(r.Context()),
+		Action:       "unlock_user",
+		ResourceType: "user",
+		ResourceID:   req.Username,
+		SourceIP:     getClientIP(r),
+		UserAgent:    r.UserAgent(),
+		Success:      true,
+	}))
+
+	var err error
+	var removed int64
+	if req.IP != "" {
+		err = h.rateLimit.ResetLoginAttempts(req.Username, req.IP)
+		removed = 1
+	} else {
+		removed, err = h.rateLimit.ResetUserAttempts(req.Username)
+	}
+	if err != nil {
+		response.InternalErrorWithLog(w, "解锁失败", err)
+		return
+	}
+
+	response.OKWithMessage(w, "已解锁", map[string]any{
+		"username": req.Username,
+		"entries":  removed,
+	})
+}
+
 
 // SetupTOTP handles POST /api/v1/auth/totp/setup
 func (h *Handlers) SetupTOTP(w http.ResponseWriter, r *http.Request) {
@@ -720,8 +784,9 @@ func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue a fresh CSRF token alongside the new JWT.
-	csrfToken := middleware.GenerateCSRFToken(h.jwtMgr.CSRFKey())
+	// Issue a fresh CSRF token alongside the new JWT, bound to the same
+	// session carried by the refreshed claims.
+	csrfToken := middleware.GenerateCSRFToken(h.jwtMgr.CSRFKey(), claims.SessionID)
 
 	response.OK(w, map[string]interface{}{
 		"token":      newToken,

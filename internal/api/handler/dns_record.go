@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
 
 // --- Record Management API Handlers ---
@@ -37,7 +38,7 @@ func ListDNSRecords(w http.ResponseWriter, r *http.Request) {
 
 	records, total, err := getRecordManager().ListRecords(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -74,6 +75,10 @@ func CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	if opts.Value == "" {
 		response.BadRequest(w, "缺少记录值")
+		return
+	}
+	if err := dnsutil.ValidateRecordName(opts.Name); err != nil {
+		response.BadRequest(w, err.Error())
 		return
 	}
 
@@ -127,6 +132,13 @@ func UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
+	}
+
+	if opts.Name != "" {
+		if err := dnsutil.ValidateRecordName(opts.Name); err != nil {
+			response.BadRequest(w, err.Error())
+			return
+		}
 	}
 
 	record, err := getRecordManager().UpdateRecord(id, opts)

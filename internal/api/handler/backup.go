@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,12 @@ import (
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/backup"
 )
+
+// backupNotFound reports whether err means "no such backup job", so handlers
+// can answer 404 instead of 500 for unknown IDs.
+func backupNotFound(err error) bool {
+	return errors.Is(err, backup.ErrNotFound)
+}
 
 // --- Backup API Handlers ---
 
@@ -32,7 +39,7 @@ func ListBackupsHandler(w http.ResponseWriter, r *http.Request) {
 
 	jobs, total, err := SystemServices.BackupMgr.ListBackups(filter)
 	if err != nil {
-		response.InternalError(w, "查询备份列表失败: "+err.Error())
+		response.InternalErrorWithLog(w, "查询备份列表失败", err)
 		return
 	}
 
@@ -67,7 +74,7 @@ func CreateBackupHandler(w http.ResponseWriter, r *http.Request) {
 
 	job, err := SystemServices.BackupMgr.CreateBackup(opts)
 	if err != nil {
-		response.InternalError(w, "创建备份失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建备份失败", err)
 		return
 	}
 
@@ -89,7 +96,11 @@ func GetBackupHandler(w http.ResponseWriter, r *http.Request) {
 
 	job, err := SystemServices.BackupMgr.GetBackup(id)
 	if err != nil {
-		response.NotFound(w, err.Error())
+		if backupNotFound(err) {
+			response.NotFound(w, "备份不存在")
+			return
+		}
+		response.InternalErrorWithLog(w, "查询备份失败", err)
 		return
 	}
 
@@ -110,7 +121,11 @@ func RestoreBackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := SystemServices.BackupMgr.RestoreBackup(id); err != nil {
-		response.InternalError(w, "恢复备份失败: "+err.Error())
+		if backupNotFound(err) {
+			response.NotFound(w, "备份不存在")
+			return
+		}
+		response.InternalErrorWithLog(w, "恢复备份失败", err)
 		return
 	}
 
@@ -137,7 +152,11 @@ func DeleteBackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := SystemServices.BackupMgr.DeleteBackup(id); err != nil {
-		response.InternalError(w, "删除备份失败: "+err.Error())
+		if backupNotFound(err) {
+			response.NotFound(w, "备份不存在")
+			return
+		}
+		response.InternalErrorWithLog(w, "删除备份失败", err)
 		return
 	}
 
@@ -159,7 +178,11 @@ func DownloadBackupHandler(w http.ResponseWriter, r *http.Request) {
 
 	rc, fileName, err := SystemServices.BackupMgr.DownloadBackup(id)
 	if err != nil {
-		response.InternalError(w, "下载备份失败: "+err.Error())
+		if backupNotFound(err) {
+			response.NotFound(w, "备份不存在")
+			return
+		}
+		response.InternalErrorWithLog(w, "下载备份失败", err)
 		return
 	}
 	defer rc.Close()

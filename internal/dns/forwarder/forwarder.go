@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,12 @@ type Forwarder struct {
 	lastHealthCheck  time.Time
 	latencyHistory   []time.Duration
 	mu               sync.Mutex
+
+	// clients caches reusable dns.Client instances keyed by
+	// "<net>:<timeout-nanos>" so hot-path queries do not rebuild a client
+	// (and re-derive timeouts) on every exchange. One map per forwarder
+	// keeps SingleInflight dedupe scoped to a single upstream.
+	clients map[string]*dns.Client
 }
 
 // IsHealthy returns whether the forwarder is healthy.
@@ -408,6 +415,31 @@ func (fg *ForwarderGroup) forwardHealthAware(ctx context.Context, msg *dns.Msg, 
 	return nil, nil, 0, fmt.Errorf("all forwarders failed: %w", lastErr)
 }
 
+// clientFor returns a cached dns.Client for the given network and timeout,
+// creating it on first use. SingleInflight coalesces concurrent identical
+// queries to the SAME upstream, which tames cache-miss thundering herds
+// without sharing responses across different upstreams.
+func (f *Forwarder) clientFor(network string, timeout time.Duration) *dns.Client {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clients == nil {
+		f.clients = make(map[string]*dns.Client)
+	}
+	key := network + ":" + strconv.FormatInt(int64(timeout), 10)
+	if c, ok := f.clients[key]; ok {
+		return c
+	}
+	c := &dns.Client{
+		Net:            network,
+		ReadTimeout:    timeout,
+		WriteTimeout:   timeout,
+		DialTimeout:    timeout,
+		SingleInflight: true,
+	}
+	f.clients[key] = c
+	return c
+}
+
 // queryUpstream sends a DNS query to a single upstream server.
 func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Forwarder) (*dns.Msg, time.Duration, error) {
 	proto := f.Protocol
@@ -417,19 +449,7 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 
 	start := time.Now()
 
-	client := &dns.Client{
-		Net:          proto,
-		ReadTimeout:  fg.timeout,
-		WriteTimeout: fg.timeout,
-	}
-
-	// Use context deadline if set.
-	if deadline, ok := ctx.Deadline(); ok {
-		client.DialTimeout = time.Until(deadline)
-		if client.DialTimeout <= 0 {
-			return nil, 0, fmt.Errorf("context deadline exceeded")
-		}
-	}
+	client := f.clientFor(proto, fg.timeout)
 
 	resp, _, err := client.ExchangeContext(ctx, msg, parseHostPort(f.Address))
 	d := time.Since(start)
@@ -458,11 +478,7 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 
 	// Handle truncated responses by retrying over TCP.
 	if resp.Truncated && proto == "udp" {
-		tcpClient := &dns.Client{
-			Net:          "tcp",
-			ReadTimeout:  fg.timeout,
-			WriteTimeout: fg.timeout,
-		}
+		tcpClient := f.clientFor("tcp", fg.timeout)
 		resp, _, err = tcpClient.ExchangeContext(ctx, msg, parseHostPort(f.Address))
 		d = time.Since(start)
 		if err != nil {
@@ -504,11 +520,11 @@ func (fg *ForwarderGroup) HealthCheck() {
 		msg.SetQuestion(".", dns.TypeNS)
 		msg.RecursionDesired = true
 
-		client := &dns.Client{
-			Net:          f.Protocol,
-			ReadTimeout:  3 * time.Second,
-			WriteTimeout: 3 * time.Second,
+		probeProto := f.Protocol
+		if probeProto == "" {
+			probeProto = "udp"
 		}
+		client := f.clientFor(probeProto, 3*time.Second)
 
 		start := time.Now()
 		resp, _, err := client.Exchange(msg, parseHostPort(f.Address))

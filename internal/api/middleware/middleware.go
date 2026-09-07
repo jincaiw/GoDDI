@@ -353,8 +353,11 @@ func CSRFProtection(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Validate the CSRF token using HMAC.
-			if !validateCSRFToken(csrfKeyBytes, csrfToken) {
+			// Validate the CSRF token using HMAC. The token is bound to the
+			// authenticated session ID so a token issued for one session
+			// cannot be replayed under another session (e.g. after logout
+			// and re-login as a different user).
+			if !validateCSRFToken(csrfKeyBytes, csrfToken, rbac.GetSessionID(r.Context())) {
 				slog.Warn("Invalid CSRF token",
 					"method", r.Method,
 					"path", r.URL.Path,
@@ -371,8 +374,11 @@ func CSRFProtection(cfg *config.Config) func(http.Handler) http.Handler {
 
 // validateCSRFToken validates a CSRF token using HMAC-SHA256.
 // Token format: timestamp:signature
-// The signature is HMAC-SHA256(key, timestamp) to prevent forgery.
-func validateCSRFToken(key []byte, token string) bool {
+// The signature is HMAC-SHA256(key, sessionID+":"+timestamp) so tokens are
+// bound to the authenticated session and cannot be replayed across sessions.
+// An empty sessionID is tolerated for requests without a session claim
+// (legacy tokens), in which case the binding material is simply empty.
+func validateCSRFToken(key []byte, token, sessionID string) bool {
 	parts := strings.SplitN(token, ":", 2)
 	if len(parts) != 2 {
 		return false
@@ -380,8 +386,10 @@ func validateCSRFToken(key []byte, token string) bool {
 
 	timestampStr, signature := parts[0], parts[1]
 
-	// Verify the HMAC signature.
+	// Verify the HMAC signature over sessionID + ":" + timestamp.
 	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(sessionID))
+	mac.Write([]byte(":"))
 	mac.Write([]byte(timestampStr))
 	expectedSig := hex.EncodeToString(mac.Sum(nil))
 
@@ -405,10 +413,14 @@ func validateCSRFToken(key []byte, token string) bool {
 }
 
 // GenerateCSRFToken generates a new CSRF token for use in browser sessions.
-// Token format: timestamp:HMAC-SHA256(key, timestamp)
-func GenerateCSRFToken(key []byte) string {
+// Token format: timestamp:HMAC-SHA256(key, sessionID+":"+timestamp)
+// The token is bound to the given session ID; validateCSRFToken enforces the
+// same binding during verification.
+func GenerateCSRFToken(key []byte, sessionID string) string {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(sessionID))
+	mac.Write([]byte(":"))
 	mac.Write([]byte(timestamp))
 	signature := hex.EncodeToString(mac.Sum(nil))
 	return timestamp + ":" + signature

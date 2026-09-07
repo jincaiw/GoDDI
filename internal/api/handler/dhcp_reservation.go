@@ -31,7 +31,7 @@ func ListDHCPReservations(w http.ResponseWriter, r *http.Request) {
 
 	reservations, total, err := DHCPServices.ReservMgr.ListReservations(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -99,7 +99,7 @@ func CreateDHCPReservation(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, reservation.ErrOutOfRange), errors.Is(err, reservation.ErrInvalidData):
 			response.BadRequest(w, err.Error())
 		default:
-			response.InternalError(w, "创建保留失败: "+err.Error())
+			response.InternalErrorWithLog(w, "创建保留失败", err)
 		}
 		return
 	}
@@ -156,7 +156,7 @@ func UpdateDHCPReservation(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, reservation.ErrOutOfRange), errors.Is(err, reservation.ErrInvalidData):
 			response.BadRequest(w, err.Error())
 		default:
-			response.InternalError(w, "更新保留失败: "+err.Error())
+			response.InternalErrorWithLog(w, "更新保留失败", err)
 		}
 		return
 	}
@@ -178,7 +178,7 @@ func DeleteDHCPReservation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DHCPServices.ReservMgr.DeleteReservation(id); err != nil {
-		response.InternalError(w, "删除保留失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除保留失败", err)
 		return
 	}
 

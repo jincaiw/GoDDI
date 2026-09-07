@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"container/heap"
 	"container/list"
 	"encoding/json"
+	"hash/fnv"
 	"log/slog"
 	"math"
 	"sort"
@@ -14,6 +16,13 @@ import (
 
 	"github.com/miekg/dns"
 )
+
+// numShards is the number of independent lock domains. Each shard owns
+// its own mutex, map and LRU list so a hot lookup on one shard never
+// contends with lookups on the other shards. 32 is a power of two (fast
+// modulo) and keeps per-shard memory overhead negligible even for small
+// caches.
+const numShards = 32
 
 // entry represents a cached DNS response. The in-memory representation
 // carries one extra field (prefetching) that is not part of the JSON
@@ -59,13 +68,33 @@ type lruItem struct {
 	entry *entry
 }
 
-// Cache is a thread-safe DNS response cache with O(1) LRU eviction
-// and an atomic prefetch latch.
-type Cache struct {
+// cacheShard is one independently locked slice of the cache. All map
+// and LRU-list mutations for keys hashing to this shard happen under
+// the shard's own mutex, so cross-shard lookups run fully in parallel.
+type cacheShard struct {
 	mu         sync.RWMutex
 	entries    map[string]*list.Element // key -> list element holding *lruItem
 	lru        *list.List               // front = most recent, back = least recent
-	maxEntries int
+	maxEntries int                      // per-shard capacity
+}
+
+// Cache is a thread-safe, sharded DNS response cache with O(1) LRU
+// eviction and an atomic prefetch latch.
+//
+// Locking model:
+//   - each shard's map/list is guarded by that shard's mutex;
+//   - the hot-updatable tunables (serve-stale, TTL clamps, prefetch,
+//     callback) are guarded by cfgMu and snapshotted by readers;
+//   - hits/misses are atomic counters.
+type Cache struct {
+	shards [numShards]cacheShard
+
+	// shardCount is the number of shards actually in use. Very small
+	// caches (maxEntries < numShards) reduce the shard count so the
+	// global capacity is still honored (one entry per shard minimum).
+	shardCount int
+
+	cfgMu      sync.RWMutex
 	minTTL     int
 	maxTTL     int
 	negTTL     int
@@ -73,11 +102,13 @@ type Cache struct {
 	staleTTL   int
 	prefetch   bool
 
-	hits   int64
-	misses int64
-
 	// Callback for prefetching; if set, called when an entry is about to expire.
 	onPrefetch func(qname string, qtype uint16)
+
+	maxEntries int // total capacity across all shards
+
+	hits   atomic.Int64
+	misses atomic.Int64
 }
 
 // Config holds cache configuration.
@@ -116,9 +147,8 @@ func New(cfg Config) *Cache {
 		staleTTL = 3600
 	}
 
-	return &Cache{
-		entries:    make(map[string]*list.Element),
-		lru:        list.New(),
+	c := &Cache{
+		shardCount: numShards,
 		maxEntries: maxEntries,
 		minTTL:     minTTL,
 		maxTTL:     maxTTL,
@@ -127,21 +157,70 @@ func New(cfg Config) *Cache {
 		staleTTL:   staleTTL,
 		prefetch:   cfg.Prefetch,
 	}
+	if maxEntries < c.shardCount {
+		c.shardCount = maxEntries
+	}
+
+	perShard := maxEntries / c.shardCount
+	if perShard < 1 {
+		perShard = 1
+	}
+	for i := 0; i < c.shardCount; i++ {
+		c.shards[i].entries = make(map[string]*list.Element)
+		c.shards[i].lru = list.New()
+		c.shards[i].maxEntries = perShard
+	}
+	return c
+}
+
+// shardFor returns the shard owning the given cache key. FNV-1a is
+// cheap, well-distributed for short ASCII keys and needs no seed.
+func (c *Cache) shardFor(key string) *cacheShard {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return &c.shards[h.Sum32()%uint32(c.shardCount)]
+}
+
+// tunables is an immutable snapshot of the hot-updatable settings.
+type tunables struct {
+	serveStale bool
+	staleTTL   int
+	minTTL     int
+	maxTTL     int
+	negTTL     int
+	prefetch   bool
+	onPrefetch func(qname string, qtype uint16)
+}
+
+// currentTunables snapshots the tunables under cfgMu so readers never
+// access the live fields unsynchronized.
+func (c *Cache) currentTunables() tunables {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return tunables{
+		serveStale: c.serveStale,
+		staleTTL:   c.staleTTL,
+		minTTL:     c.minTTL,
+		maxTTL:     c.maxTTL,
+		negTTL:     c.negTTL,
+		prefetch:   c.prefetch,
+		onPrefetch: c.onPrefetch,
+	}
 }
 
 // SetPrefetchCallback sets the callback for prefetching.
 func (c *Cache) SetPrefetchCallback(fn func(qname string, qtype uint16)) {
-	c.mu.Lock()
+	c.cfgMu.Lock()
 	c.onPrefetch = fn
-	c.mu.Unlock()
+	c.cfgMu.Unlock()
 }
 
 // Configure hot-updates the tunable cache settings (Technitium v13/v14
 // parity: serve-stale, prefetch and TTL clamps are runtime-adjustable).
 // Non-positive values keep the current setting.
 func (c *Cache) Configure(serveStale *bool, staleTTL, minTTL, maxTTL int, prefetch *bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.cfgMu.Lock()
+	defer c.cfgMu.Unlock()
 	if serveStale != nil {
 		c.serveStale = *serveStale
 	}
@@ -174,12 +253,14 @@ func cacheKey(qname string, qtype uint16) string {
 // Returns the cached message, whether it was a hit, and whether it was served stale.
 func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 	key := cacheKey(qname, qtype)
+	t := c.currentTunables()
+	s := c.shardFor(key)
 
-	c.mu.Lock()
-	elem, ok := c.entries[key]
+	s.mu.Lock()
+	elem, ok := s.entries[key]
 	if !ok {
-		c.misses++
-		c.mu.Unlock()
+		c.misses.Add(1)
+		s.mu.Unlock()
 		return nil, false, false
 	}
 
@@ -191,19 +272,19 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 	// Check if entry is expired.
 	if now.After(e.ExpiresAt) {
 		// If serve-stale is enabled and within stale window, return stale entry.
-		if c.serveStale && now.Before(e.StaleUntil) {
-			c.hits++
+		if t.serveStale && now.Before(e.StaleUntil) {
+			c.hits.Add(1)
 			e.HitCount++
 			e.LastAccess = now
 			// Move to front (still touched).
-			c.lru.MoveToFront(elem)
+			s.lru.MoveToFront(elem)
 
 			msg := new(dns.Msg)
 			if err := msg.Unpack(e.Msg); err != nil {
-				c.mu.Unlock()
+				s.mu.Unlock()
 				return nil, false, false
 			}
-			c.mu.Unlock()
+			s.mu.Unlock()
 
 			// RFC 8767 §5: stale answers should carry a short TTL so the
 			// client retries quickly instead of pinning the stale data.
@@ -217,18 +298,18 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 		}
 
 		// Entry is expired and not eligible for stale serving.
-		c.misses++
-		delete(c.entries, key)
-		c.lru.Remove(elem)
-		c.mu.Unlock()
+		c.misses.Add(1)
+		delete(s.entries, key)
+		s.lru.Remove(elem)
+		s.mu.Unlock()
 		return nil, false, false
 	}
 
 	// Entry is fresh.
-	c.hits++
+	c.hits.Add(1)
 	e.HitCount++
 	e.LastAccess = now
-	c.lru.MoveToFront(elem)
+	s.lru.MoveToFront(elem)
 
 	// Snapshot the data we need before potentially dropping the lock
 	// during prefetch callback.
@@ -242,12 +323,12 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 	// (staleWindow + remaining) as the denominator, which made the
 	// threshold a function of the stale window rather than the TTL
 	// itself, and in practice almost never fired.
-	shouldPrefetch := c.prefetch && c.onPrefetch != nil &&
+	shouldPrefetch := t.prefetch && t.onPrefetch != nil &&
 		origTTL > 0 && remaining < origTTL/10 &&
 		!e.prefetching.Load()
 
-	callback := c.onPrefetch
-	c.mu.Unlock()
+	callback := t.onPrefetch
+	s.mu.Unlock()
 
 	if err := msg.Unpack(e.Msg); err != nil {
 		return nil, false, false
@@ -302,9 +383,10 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 		return
 	}
 
+	t := c.currentTunables()
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(ttl) * time.Second)
-	staleUntil := expiresAt.Add(time.Duration(c.staleTTL) * time.Second)
+	staleUntil := expiresAt.Add(time.Duration(t.staleTTL) * time.Second)
 
 	e := &entry{
 		Key:         key,
@@ -318,24 +400,25 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 		LastAccess:  now,
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	s := c.shardFor(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Evict entries if at capacity. The eviction step uses the LRU
 	// list to drop entries from the back (oldest first) in O(1) per
 	// removal.
-	if len(c.entries) >= c.maxEntries {
-		c.evict()
+	if len(s.entries) >= s.maxEntries {
+		s.evict()
 	}
 
 	// If the key already exists, remove the old list element so we
 	// don't end up with two entries for the same key.
-	if old, ok := c.entries[key]; ok {
-		c.lru.Remove(old)
+	if old, ok := s.entries[key]; ok {
+		s.lru.Remove(old)
 	}
 
-	elem := c.lru.PushFront(&lruItem{key: key, entry: e})
-	c.entries[key] = elem
+	elem := s.lru.PushFront(&lruItem{key: key, entry: e})
+	s.entries[key] = elem
 }
 
 // adjustTTL rewrites the TTL of every cached RR (all sections) to the
@@ -358,11 +441,13 @@ func adjustTTL(msg *dns.Msg, remaining uint32) {
 
 // effectiveTTL computes the effective TTL for a DNS response.
 func (c *Cache) effectiveTTL(msg *dns.Msg) int {
+	t := c.currentTunables()
+
 	if len(msg.Answer) == 0 && len(msg.Ns) == 0 {
 		// Negative response: only cache NXDOMAIN and NODATA (NOERROR with no answers).
 		switch msg.Rcode {
 		case dns.RcodeNameError, dns.RcodeSuccess:
-			return c.negTTL
+			return t.negTTL
 		default:
 			// SERVFAIL, REFUSED, etc. — do not cache or use very short TTL.
 			return 5
@@ -382,11 +467,11 @@ func (c *Cache) effectiveTTL(msg *dns.Msg) int {
 	}
 
 	ttl := int(minTTL)
-	if ttl < c.minTTL {
-		ttl = c.minTTL
+	if ttl < t.minTTL {
+		ttl = t.minTTL
 	}
-	if ttl > c.maxTTL {
-		ttl = c.maxTTL
+	if ttl > t.maxTTL {
+		ttl = t.maxTTL
 	}
 	return ttl
 }
@@ -396,66 +481,76 @@ func (c *Cache) effectiveTTL(msg *dns.Msg) int {
 // cache, because we walk the LRU list from the back instead of doing
 // a full sort over the map.
 //
-// Must be called with c.mu held.
-func (c *Cache) evict() {
-	toRemove := c.maxEntries / 10
+// Must be called with s.mu held.
+func (s *cacheShard) evict() {
+	toRemove := s.maxEntries / 10
 	if toRemove < 1 {
 		toRemove = 1
 	}
 	for i := 0; i < toRemove; i++ {
-		elem := c.lru.Back()
+		elem := s.lru.Back()
 		if elem == nil {
 			return
 		}
 		item := elem.Value.(*lruItem)
-		delete(c.entries, item.key)
-		c.lru.Remove(elem)
+		delete(s.entries, item.key)
+		s.lru.Remove(elem)
 	}
 }
 
 // Remove removes a specific entry from the cache.
 func (c *Cache) Remove(qname string, qtype uint16) {
 	key := cacheKey(qname, qtype)
-	c.mu.Lock()
-	if elem, ok := c.entries[key]; ok {
-		delete(c.entries, key)
-		c.lru.Remove(elem)
+	s := c.shardFor(key)
+	s.mu.Lock()
+	if elem, ok := s.entries[key]; ok {
+		delete(s.entries, key)
+		s.lru.Remove(elem)
 	}
-	c.mu.Unlock()
+	s.mu.Unlock()
 }
 
 // Flush removes all entries from the cache.
 func (c *Cache) Flush() {
-	c.mu.Lock()
-	c.entries = make(map[string]*list.Element)
-	c.lru.Init()
-	c.hits = 0
-	c.misses = 0
-	c.mu.Unlock()
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.Lock()
+		s.entries = make(map[string]*list.Element)
+		s.lru.Init()
+		s.mu.Unlock()
+	}
+	c.hits.Store(0)
+	c.misses.Store(0)
 }
 
 // Stats returns cache statistics.
 func (c *Cache) Stats() Stats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var sizeBytes int64
-	for _, e := range c.entries {
-		item := e.Value.(*lruItem)
-		sizeBytes += int64(len(item.entry.Msg))
+	var entries int64
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, e := range s.entries {
+			item := e.Value.(*lruItem)
+			sizeBytes += int64(len(item.entry.Msg))
+		}
+		entries += int64(len(s.entries))
+		s.mu.RUnlock()
 	}
 
-	total := c.hits + c.misses
+	hits := c.hits.Load()
+	misses := c.misses.Load()
+	total := hits + misses
 	var hitRate float64
 	if total > 0 {
-		hitRate = float64(c.hits) / float64(total) * 100
+		hitRate = float64(hits) / float64(total) * 100
 	}
 
 	return Stats{
-		Entries:    int64(len(c.entries)),
+		Entries:    entries,
 		MaxEntries: int64(c.maxEntries),
-		Hits:       c.hits,
-		Misses:     c.misses,
+		Hits:       hits,
+		Misses:     misses,
 		HitRate:    math.Round(hitRate*100) / 100,
 		MissRate:   math.Round((100-hitRate)*100) / 100,
 		SizeBytes:  sizeBytes,
@@ -464,25 +559,27 @@ func (c *Cache) Stats() Stats {
 
 // CleanExpired removes all expired entries.
 func (c *Cache) CleanExpired() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	now := time.Now()
 	count := 0
-	// Walk the LRU list from the back (oldest) forward and remove any
-	// entries whose stale window has elapsed. Because the list is
-	// ordered by recency, the iteration is well-defined: we visit
-	// every entry exactly once and stop as soon as we encounter a
-	// still-fresh one.
-	for elem := c.lru.Back(); elem != nil; {
-		prev := elem.Prev()
-		item := elem.Value.(*lruItem)
-		if now.After(item.entry.StaleUntil) {
-			delete(c.entries, item.key)
-			c.lru.Remove(elem)
-			count++
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.Lock()
+		// Walk the LRU list from the back (oldest) forward and remove any
+		// entries whose stale window has elapsed. Because the list is
+		// ordered by recency, the iteration is well-defined: we visit
+		// every entry exactly once and stop as soon as we encounter a
+		// still-fresh one.
+		for elem := s.lru.Back(); elem != nil; {
+			prev := elem.Prev()
+			item := elem.Value.(*lruItem)
+			if now.After(item.entry.StaleUntil) {
+				delete(s.entries, item.key)
+				s.lru.Remove(elem)
+				count++
+			}
+			elem = prev
 		}
-		elem = prev
+		s.mu.Unlock()
 	}
 	return count
 }
@@ -491,13 +588,15 @@ func (c *Cache) CleanExpired() int {
 // Pointers are returned (rather than values) because the entry struct
 // contains a sync/atomic field that must not be copied.
 func (c *Cache) Entries() []*entry {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	result := make([]*entry, 0, len(c.entries))
-	for _, e := range c.entries {
-		item := e.Value.(*lruItem)
-		result = append(result, item.entry)
+	var result []*entry
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, e := range s.entries {
+			item := e.Value.(*lruItem)
+			result = append(result, item.entry)
+		}
+		s.mu.RUnlock()
 	}
 	return result
 }
@@ -531,40 +630,44 @@ func (c *Cache) ListEntries(qnameFilter, qtypeFilter string, limit, offset int) 
 	qnameFilter = strings.ToLower(qnameFilter)
 	qtypeFilter = strings.ToUpper(qtypeFilter)
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	const maxScan = 200000
 	scanned := 0
 
 	all := make([]EntryInfo, 0, 256)
-	for _, e := range c.entries {
-		item := e.Value.(*lruItem)
-		if scanned++; scanned > maxScan {
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, e := range s.entries {
+			item := e.Value.(*lruItem)
+			if scanned++; scanned > maxScan {
+				break
+			}
+			name := dns.TypeToString[item.entry.QType]
+			if qtypeFilter != "" && name != qtypeFilter {
+				continue
+			}
+			if qnameFilter != "" && !strings.Contains(strings.ToLower(item.entry.QName), qnameFilter) {
+				continue
+			}
+			all = append(all, EntryInfo{
+				QName:      strings.TrimSuffix(item.entry.QName, "."),
+				QType:      name,
+				TTLLeft:    int(time.Until(item.entry.ExpiresAt).Seconds()),
+				ExpiresAt:  item.entry.ExpiresAt,
+				StaleUntil: item.entry.StaleUntil,
+				HitCount:   item.entry.HitCount,
+				LastAccess: item.entry.LastAccess,
+				SizeBytes:  len(item.entry.Msg),
+			})
+		}
+		s.mu.RUnlock()
+		if scanned > maxScan {
 			break
 		}
-		name := dns.TypeToString[item.entry.QType]
-		if qtypeFilter != "" && name != qtypeFilter {
-			continue
-		}
-		if qnameFilter != "" && !strings.Contains(strings.ToLower(item.entry.QName), qnameFilter) {
-			continue
-		}
-		all = append(all, EntryInfo{
-			QName:      strings.TrimSuffix(item.entry.QName, "."),
-			QType:      name,
-			TTLLeft:    int(time.Until(item.entry.ExpiresAt).Seconds()),
-			ExpiresAt:  item.entry.ExpiresAt,
-			StaleUntil: item.entry.StaleUntil,
-			HitCount:   item.entry.HitCount,
-			LastAccess: item.entry.LastAccess,
-			SizeBytes:  len(item.entry.Msg),
-		})
 	}
 
 	total := len(all)
-	// Selection sort by hit count is O(n^2) — too slow for large result
-	// sets. Sort the (already filtered, typically small) slice instead.
+	// O(n log n) sort of the (already filtered, typically small) slice.
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].HitCount != all[j].HitCount {
 			return all[i].HitCount > all[j].HitCount
@@ -582,38 +685,65 @@ func (c *Cache) ListEntries(qnameFilter, qtypeFilter string, limit, offset int) 
 	return all[offset:end], total
 }
 
-// PopularEntries returns the most frequently accessed entries. The
-// implementation uses a simple selection sort (the input is typically
-// small, and popular-entry queries are infrequent) so we don't need
-// an additional heap just for this. Pointers are returned to avoid
-// copying the entry's atomic prefetch latch.
+// hitKV is one candidate for the PopularEntries top-n selection.
+type hitKV struct {
+	key   string
+	entry *entry
+	hits  int64
+}
+
+// topNHeap is a min-heap keyed on hit count: the root is the *least*
+// popular of the current top-n candidates, so an incoming entry only
+// needs one O(log n) comparison against the root. Selecting the top n
+// out of m entries therefore costs O(m log n) instead of the previous
+// selection sort's O(n·m) — for m=1M, n=10 that is ~20M vs ~10G ops.
+type topNHeap []hitKV
+
+func (h topNHeap) Len() int            { return len(h) }
+func (h topNHeap) Less(i, j int) bool  { return h[i].hits < h[j].hits }
+func (h topNHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *topNHeap) Push(x interface{}) { *h = append(*h, x.(hitKV)) }
+func (h *topNHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+// PopularEntries returns the n most frequently accessed entries. It
+// maintains a bounded min-heap while walking every shard once, so the
+// whole selection is O(m log n) over m total entries. Pointers are
+// returned to avoid copying the entry's atomic prefetch latch.
 func (c *Cache) PopularEntries(n int) []*entry {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	type kv struct {
-		key   string
-		entry *entry
-		hits  int64
+	if n <= 0 {
+		return nil
 	}
 
-	sorted := make([]kv, 0, len(c.entries))
-	for _, e := range c.entries {
-		item := e.Value.(*lruItem)
-		sorted = append(sorted, kv{item.key, item.entry, item.entry.HitCount})
-	}
-
-	for i := 0; i < n && i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].hits > sorted[i].hits {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
+	h := &topNHeap{}
+	for i := 0; i < c.shardCount; i++ {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, e := range s.entries {
+			item := e.Value.(*lruItem)
+			cand := hitKV{item.key, item.entry, item.entry.HitCount}
+			if h.Len() < n {
+				heap.Push(h, cand)
+			} else if cand.hits > (*h)[0].hits {
+				heap.Pop(h)
+				heap.Push(h, cand)
 			}
 		}
+		s.mu.RUnlock()
 	}
 
-	result := make([]*entry, 0, n)
-	for i := 0; i < n && i < len(sorted); i++ {
-		result = append(result, sorted[i].entry)
+	result := make([]*entry, 0, h.Len())
+	for h.Len() > 0 {
+		result = append(result, heap.Pop(h).(hitKV).entry)
+	}
+	// heap.Pop yields ascending hits; reverse to most-popular-first.
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
 	}
 	return result
 }

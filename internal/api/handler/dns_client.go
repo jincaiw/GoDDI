@@ -82,7 +82,7 @@ func ExecuteDNSQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, _, err := dnsClient.Query(req.Name, qtype, req.Upstream)
 	if err != nil {
-		response.InternalError(w, "DNS查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "DNS查询失败", err)
 		return
 	}
 
@@ -121,6 +121,9 @@ func validateDNSName(name string) error {
 		if r < 0x20 || r == 0x7f {
 			return fmt.Errorf("name contains a control character")
 		}
+		if r == ' ' || r == '\t' {
+			return fmt.Errorf("name contains whitespace")
+		}
 	}
 	// Each label between dots must be 1..63 octets and consist of
 	// LDH (letters, digits, hyphen). We don't enforce hyphen placement
@@ -146,7 +149,19 @@ func validateDNSName(name string) error {
 // record could change between validation and the actual DNS query. A future
 // improvement should enforce private-IP rejection at the dialer level using a
 // custom net.Dialer with a Control function that inspects the actual dialed IP.
+// dnsAllowPrivateUpstream reports whether private/internal upstream addresses
+// are permitted (dns.allow_private_upstream, default true).
+func dnsAllowPrivateUpstream() bool {
+	return DNSServices == nil || DNSServices.Config == nil || DNSServices.Config.DNS.AllowPrivateUpstream
+}
+
 func validateUpstreamAddress(addr string) error {
+	// Internal-resolver forwarding is a legitimate deployment; the config
+	// switch turns the private-address guard off for those setups.
+	if DNSServices != nil && DNSServices.Config != nil && DNSServices.Config.DNS.AllowPrivateUpstream {
+		return nil
+	}
+
 	// Split host and port.
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -177,8 +192,14 @@ func validateUpstreamAddress(addr string) error {
 	return nil
 }
 
-// isPrivateIP checks if an IP address is private, loopback, or link-local.
+// isPrivateIP checks if an IP address is private, loopback, link-local,
+// or unspecified ("this host" — e.g. 0.0.0.0), all of which must be
+// rejected as upstream targets when private upstreams are disallowed.
 func isPrivateIP(ip net.IP) bool {
+	// Check unspecified (0.0.0.0 / ::).
+	if ip.IsUnspecified() {
+		return true
+	}
 	// Check loopback.
 	if ip.IsLoopback() {
 		return true

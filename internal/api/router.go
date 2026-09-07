@@ -49,6 +49,9 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Timeout(60 * time.Second))
 	r.Use(middleware.CORS(cfg))
+	// Security headers. HSTS is only sent when the server itself terminates
+	// TLS; behind a TLS-terminating reverse proxy the proxy should emit it.
+	r.Use(securityHeaders(cfg.Server.TLS.Enabled))
 	// Record API request metrics (method/route-pattern/status labels).
 	r.Use(metrics.MetricsMiddleware)
 
@@ -63,8 +66,12 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	// Health check.
 	r.Get("/health", handler.Health)
 
-	// OpenAPI documentation (public, no sensitive data).
-	r.Get("/api/v1/openapi.json", OpenAPIHandler)
+	// OpenAPI documentation (public, no sensitive data). Can be disabled
+	// for hardened deployments via server.expose_openapi / env
+	// GODDI_SERVER_EXPOSE_OPENAPI.
+	if cfg.Server.ExposeOpenAPI {
+		r.Get("/api/v1/openapi.json", OpenAPIHandler)
+	}
 
 	// Prometheus metrics endpoint.
 	// Authenticated: the payload exposes request volumes, route patterns and
@@ -92,6 +99,11 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.Post("/auth/logout", h.Logout)
 			r.Get("/auth/me", h.GetCurrentUser)
 			r.Post("/auth/change-password", h.ChangePassword)
+			// Login lockout administration: an account locked out by repeated
+			// failures cannot log in to unlock itself, so an administrator
+			// must be able to list and clear lockouts.
+			r.With(rbac.RequirePermission(rbacMgr, "user", "read")).Get("/auth/lockouts", h.ListLockouts)
+			r.With(rbac.RequirePermission(rbacMgr, "user", "write")).Post("/auth/unlock", h.UnlockUser)
 			r.Post("/auth/totp/setup", h.SetupTOTP)
 			r.Post("/auth/totp/verify", h.VerifyAndEnableTOTP)
 			r.Post("/auth/totp/disable", h.DisableTOTPHandler)
@@ -436,4 +448,32 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	})
 
 	return r
+}
+
+// securityHeaders sets baseline HTTP security headers on every response.
+//
+// HSTS is emitted only when this process terminates TLS itself (server.tls.enabled);
+// behind a TLS-terminating reverse proxy the proxy owns HSTS and sending it
+// from the app would advertise HTTPS for plaintext responses.
+func securityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			// Prevent browsers from MIME-sniffing API/SPA responses.
+			h.Set("X-Content-Type-Options", "nosniff")
+			// Never render the management UI inside a frame; mitigates
+			// clickjacking against the admin console.
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "no-referrer")
+			// Isolate the admin console from other origins' side channels.
+			h.Set("Cross-Origin-Opener-Policy", "same-origin")
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+			if tlsEnabled {
+				// Two years, preload-eligible; subdomains included because a
+				// compromised sibling host must not be able to cookie-scope in.
+				h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

@@ -31,13 +31,35 @@ type Config struct {
 }
 
 // ServerConfig holds HTTP server configuration.
+// ServerTLSConfig holds the TLS settings for the HTTP management plane.
+//
+// Without TLS the admin UI and API transport credentials, JWTs and API tokens
+// in cleartext; enabling it is strongly recommended for any non-localhost
+// deployment. When TLS is disabled here, terminate it at a reverse proxy and
+// keep the management port off untrusted networks.
+type ServerTLSConfig struct {
+	// Enabled serves the management UI/API over HTTPS.
+	Enabled bool `yaml:"enabled"`
+	// CertFile and KeyFile are the PEM-encoded certificate chain and key.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+	// MinVersion is the minimum acceptable TLS version: "1.2" (default) or "1.3".
+	MinVersion string `yaml:"min_version"`
+}
+
 type ServerConfig struct {
-	Name      string `yaml:"name" validate:"required"`
-	HTTPAddr  string `yaml:"http_addr" validate:"required"`
-	PublicURL string `yaml:"public_url" validate:"required,url"`
-	DataDir   string `yaml:"data_dir" validate:"required"`
-	Language  string `yaml:"language"`
-	DarkMode  bool   `yaml:"dark_mode"`
+	Name      string          `yaml:"name" validate:"required"`
+	HTTPAddr  string          `yaml:"http_addr" validate:"required"`
+	PublicURL string          `yaml:"public_url" validate:"required,url"`
+	DataDir   string          `yaml:"data_dir" validate:"required"`
+	Language  string          `yaml:"language"`
+	DarkMode  bool            `yaml:"dark_mode"`
+	TLS       ServerTLSConfig `yaml:"tls"`
+	// ExposeOpenAPI controls whether /api/v1/openapi.json is served.
+	// It defaults to true (the schema contains no secrets and the web
+	// console tooling uses it); set it to false on hardened deployments
+	// to reduce the API surface visible to unauthenticated probes.
+	ExposeOpenAPI bool `yaml:"expose_openapi"`
 }
 
 // DatabaseConfig holds database connection configuration.
@@ -47,6 +69,20 @@ type DatabaseConfig struct {
 }
 
 // DNSConfig holds DNS service configuration.
+// DNSSECConfig holds the DNSSEC feature gate.
+//
+// DNSSEC is currently experimental: enabling it on a zone marks the zone as
+// DNSSEC-enabled and generates keys, but the authoritative answers do not yet
+// carry RRSIG/DNSKEY records. Presenting that as production-ready DNSSEC would
+// make validating resolvers treat the zone as Bogus, so the feature is gated
+// off by default and must be opted into explicitly.
+type DNSSECConfig struct {
+	// Enabled allows zones to be marked DNSSEC-enabled. Defaults to false
+	// until real signing (RRSIG/NSEC) is implemented.
+	Enabled bool `yaml:"enabled"`
+}
+
+// DNSConfig holds DNS server configuration.
 type DNSConfig struct {
 	Enabled       bool                   `yaml:"enabled"`
 	Domain        string                 `yaml:"domain"`
@@ -55,6 +91,13 @@ type DNSConfig struct {
 	Listeners     DNSListenersConfig     `yaml:"listeners"`
 	RateLimit     DNSRateLimitConfig     `yaml:"rate_limit"`
 	DynamicUpdate DNSDynamicUpdateConfig `yaml:"dynamic_update"`
+	DNSSEC        DNSSECConfig           `yaml:"dnssec"`
+	// AllowPrivateUpstream permits upstream forwarders and debug queries to
+	// target loopback/private/link-local addresses. It defaults to true so
+	// forwarding to internal resolvers (a core enterprise DDI use case) keeps
+	// working; set it to false on internet-facing deployments to close the
+	// remaining SSRF surface.
+	AllowPrivateUpstream bool `yaml:"allow_private_upstream"`
 }
 
 // DNSRateLimitConfig holds DNS query/response rate limiting configuration.
@@ -212,6 +255,17 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvBool("GODDI_DNS_RATE_LIMIT_ENABLED", &cfg.DNS.RateLimit.Enabled)
 	setEnvInt("GODDI_DNS_RATE_LIMIT_CLIENT_QPS", &cfg.DNS.RateLimit.ClientQPS)
 	setEnvInt("GODDI_DNS_RATE_LIMIT_RRL_THRESHOLD", &cfg.DNS.RateLimit.RRLThreshold)
+	setEnvBool("GODDI_DNS_DNSSEC_ENABLED", &cfg.DNS.DNSSEC.Enabled)
+	setEnvBool("GODDI_DNS_ALLOW_PRIVATE_UPSTREAM", &cfg.DNS.AllowPrivateUpstream)
+	// Listener address overrides (useful for CI and multi-instance hosts
+	// where binding the default :53 requires root).
+	setEnvString("GODDI_DNS_LISTENERS_UDP_ADDR", &cfg.DNS.Listeners.UDP.Address)
+	setEnvString("GODDI_DNS_LISTENERS_TCP_ADDR", &cfg.DNS.Listeners.TCP.Address)
+
+	setEnvBool("GODDI_SERVER_TLS_ENABLED", &cfg.Server.TLS.Enabled)
+	setEnvBool("GODDI_SERVER_EXPOSE_OPENAPI", &cfg.Server.ExposeOpenAPI)
+	setEnvString("GODDI_SERVER_TLS_CERT_FILE", &cfg.Server.TLS.CertFile)
+	setEnvString("GODDI_SERVER_TLS_KEY_FILE", &cfg.Server.TLS.KeyFile)
 
 	setEnvBool("GODDI_CACHE_ENABLED", &cfg.Cache.Enabled)
 	setEnvInt("GODDI_CACHE_MAX_ENTRIES", &cfg.Cache.MaxEntries)
@@ -262,6 +316,24 @@ func Validate(cfg *Config) error {
 		slog.Warn("JWT secret is shorter than 16 characters, which may be insecure", "length", len(cfg.Security.JWTSecret))
 	}
 
+	// TLS: when the management plane is served over HTTPS the certificate and
+	// key must be present, and the minimum version must be a known value.
+	if cfg.Server.TLS.Enabled {
+		if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
+			return fmt.Errorf("server.tls.enabled is true but server.tls.cert_file / server.tls.key_file are not set")
+		}
+		for _, f := range []string{cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile} {
+			if _, err := os.Stat(f); err != nil {
+				return fmt.Errorf("server.tls: cannot read %s: %w", f, err)
+			}
+		}
+		switch cfg.Server.TLS.MinVersion {
+		case "", "1.2", "1.3":
+		default:
+			return fmt.Errorf("server.tls.min_version must be \"1.2\" or \"1.3\" (got %q)", cfg.Server.TLS.MinVersion)
+		}
+	}
+
 	return nil
 }
 
@@ -275,6 +347,8 @@ func DefaultConfig() *Config {
 			DataDir:   "./data",
 			Language:  "zh-CN",
 			DarkMode:  false,
+			// Served by default; hardened deployments may switch it off.
+			ExposeOpenAPI: true,
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite",
@@ -304,6 +378,10 @@ func DefaultConfig() *Config {
 			DynamicUpdate: DNSDynamicUpdateConfig{
 				TSIGKeys: map[string]string{},
 			},
+			// Off until real signing (RRSIG/NSEC) is implemented.
+			DNSSEC: DNSSECConfig{Enabled: false},
+			// Keep enterprise internal-resolver forwarding working by default.
+			AllowPrivateUpstream: true,
 		},
 		Cache: CacheConfig{
 			Enabled:        true,

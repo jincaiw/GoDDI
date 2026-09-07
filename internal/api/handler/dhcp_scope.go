@@ -64,7 +64,7 @@ func ListDHCPScopes(w http.ResponseWriter, r *http.Request) {
 
 	scopes, total, err := DHCPServices.ScopeMgr.ListScopes(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -140,7 +140,7 @@ func CreateDHCPScope(w http.ResponseWriter, r *http.Request) {
 
 	sc, err := DHCPServices.ScopeMgr.CreateScope(opts)
 	if err != nil {
-		response.InternalError(w, "创建失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建失败", err)
 		return
 	}
 
@@ -212,7 +212,7 @@ func UpdateDHCPScope(w http.ResponseWriter, r *http.Request) {
 
 	sc, err := DHCPServices.ScopeMgr.UpdateScope(id, opts)
 	if err != nil {
-		response.InternalError(w, "更新失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新失败", err)
 		return
 	}
 
@@ -233,7 +233,7 @@ func DeleteDHCPScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DHCPServices.ScopeMgr.DeleteScope(id); err != nil {
-		response.InternalError(w, "删除失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除失败", err)
 		return
 	}
 

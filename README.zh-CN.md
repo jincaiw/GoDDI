@@ -153,6 +153,21 @@ go build ./cmd/goddi
 
 由于 `web/dist` 会在编译时嵌入 Go 二进制，因此必须先构建前端。
 
+## 首次部署检查清单
+
+生产上线前逐项确认：
+
+1. **密钥**：已通过环境变量设置独立的 `GODDI_SECURITY_JWT_SECRET` 与 `GODDI_SECURITY_ENCRYPTION_KEY`（各 32 字节以上随机值），并已离线备份。
+2. **管理员**：初始管理员使用强密码（默认密码策略要求大小写字母、数字、符号），并为管理员账号启用 TOTP 双因素。
+3. **TLS**：已启用内置 TLS（`server.tls.enabled: true`）或将服务置于 HTTPS 反向代理之后；浏览器登录与 API 令牌不应走明文 HTTP。
+4. **网络边界**：管理端口（默认 6080）未暴露到公网；`/metrics`、`/api/v1/openapi.json`（如不需要，可设 `server.expose_openapi: false`）的访问范围已按需收敛。
+5. **DNS 面硬化**：面向互联网的部署建议设置 `dns.allow_private_upstream: false` 关闭对内网地址的转发；递归白名单 `dns.recursion.allow_nets` 已按实际网段收紧。
+6. **监听端口**：DNS/DHCP 监听地址正确（53/67 需 root 或 `CAP_NET_BIND_SERVICE`），必要时用 `GODDI_DNS_LISTENERS_UDP_ADDR`/`GODDI_DNS_LISTENERS_TCP_ADDR` 覆盖。
+7. **日志与保留**：`log.query_log_enabled` 与 `log.retention_days` 按合规要求配置。
+8. **备份**：确认定时备份任务在运行，并**实际执行一次恢复演练**。
+9. **监控**：已抓取 `/metrics` 并导入告警规则（示例见 [docs/prometheus-alerts.yml](docs/prometheus-alerts.yml)）。
+10. **升级路径**：使用 systemd（`deployments/goddi.service`）或 Docker 管理进程，重启后数据目录与密钥保持不变。
+
 ## 安全建议
 
 - 控制台的“完整备份”包含 DNS、DHCP、IPAM、DNS 安全策略及数据库设置，不包含用户、令牌、审计日志、外部配置和加密密钥。灾难恢复备份应停服后备份整个数据目录、配置和密钥；运行中的 SQLite 数据库应采用支持 SQLite 的一致性备份方式，不要单独复制主数据库文件。
@@ -160,7 +175,7 @@ go build ./cmd/goddi
 - 两个安全密钥应安全持久保存并单独备份，重启和升级时不要重新生成。更改加密密钥会导致已有 TOTP 密文无法解密。
 - 基线测试范围和仍需现场验证的部署场景见 [v0.1.1 生产评审](docs/production-review-v0.1.1.md)。
 
-- 内置 HTTP 服务不负责 TLS 终止，请部署在 HTTPS 反向代理后或可信内网中。
+- 内置 HTTP 服务支持原生 TLS（`server.tls`，默认关闭）。生产环境可在反向代理终止 TLS，或直接启用内置 TLS（HSTS 等安全响应头仅在服务端 TLS 开启时发送）。
 - 通过防火墙或反向代理限制 `/metrics` 与管理控制台访问范围。
 - 定期备份 `/var/lib/goddi`，并实际验证恢复流程。
 - 为 API 令牌设置有效期和 IP 限制，按最小权限分配角色，并为管理员启用 TOTP。

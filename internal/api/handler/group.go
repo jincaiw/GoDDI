@@ -350,7 +350,7 @@ func (h *Handlers) AssignGroupRoles(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := h.rbacMgr.AssignRoleToGroup(groupID, roleID); err != nil {
-			response.InternalError(w, "分配角色失败: "+err.Error())
+			response.InternalErrorWithLog(w, "分配角色失败", err)
 			return
 		}
 	}

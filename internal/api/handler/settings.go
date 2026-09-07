@@ -54,7 +54,7 @@ func ListSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	settings, err := SystemServices.SettingsMgr.ListSettings()
 	if err != nil {
-		response.InternalError(w, "查询系统设置失败: "+err.Error())
+		response.InternalErrorWithLog(w, "查询系统设置失败", err)
 		return
 	}
 
@@ -94,7 +94,7 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := SystemServices.SettingsMgr.BatchUpdateSettings(settings); err != nil {
-		response.InternalError(w, "批量更新设置失败: "+err.Error())
+		response.InternalErrorWithLog(w, "批量更新设置失败", err)
 		return
 	}
 
@@ -201,7 +201,7 @@ func UpdateSingleSettingHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := SystemServices.SettingsMgr.SetSetting(key, req.Value, req.Description); err != nil {
-		response.InternalError(w, "更新设置失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新设置失败", err)
 		return
 	}
 

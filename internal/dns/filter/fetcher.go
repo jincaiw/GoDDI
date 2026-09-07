@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -56,6 +58,28 @@ func NewBlockListFetcher(db *sql.DB, mgr *BlockListManager) *BlockListFetcher {
 		mgr: mgr,
 		client: &http.Client{
 			Timeout: fetchHTTPTimeout,
+			// Blocklist URLs are operator supplied but reachable by any
+			// account holding dns:write. Refuse redirects and reject
+			// loopback/link-local/private targets so the fetcher cannot be
+			// turned into an SSRF probe against the host or the metadata
+			// service (169.254.169.254).
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					host, port, err := net.SplitHostPort(addr)
+					if err != nil {
+						return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+					}
+					if err := assertPublicHost(ctx, host); err != nil {
+						return nil, err
+					}
+					d := &net.Dialer{Timeout: 10 * time.Second}
+					return d.DialContext(ctx, network, net.JoinHostPort(host, port))
+				},
+			},
 		},
 		interval: defaultFetchInterval,
 	}
@@ -157,6 +181,63 @@ func (f *BlockListFetcher) FetchList(ctx context.Context, listID string) error {
 
 	f.recordFetchResult(listID, now, "success", "")
 	slog.Info("blocklist_fetch: list refreshed", "list", list.Name, "entries", len(domains))
+	return nil
+}
+
+// AssertPublicURL validates that rawURL is an http(s) URL whose host is not a
+// loopback, link-local, unspecified or private address. It is used both when a
+// block list is created/updated (fail fast, clear error to the operator) and
+// by the fetcher itself, which re-checks on every dial so a DNS-rebinding race
+// cannot smuggle a private address past the creation-time check.
+func AssertPublicURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parsing URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL scheme must be http or https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL host is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return assertPublicHost(ctx, host)
+}
+
+// assertPublicHost rejects hosts that resolve to (or are) loopback,
+// link-local or private addresses, which are never legitimate blocklist
+// sources and are the usual SSRF targets (cloud metadata service, internal
+// dashboards). Resolution happens per dial so a rebinding race cannot
+// smuggle a private address past the check.
+func assertPublicHost(ctx context.Context, host string) error {
+	if ip := net.ParseIP(host); ip != nil {
+		return assertPublicIP(ip)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolving %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("no addresses for %q", host)
+	}
+	for _, ip := range ips {
+		if err := assertPublicIP(ip.IP); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertPublicIP(ip net.IP) error {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsInterfaceLocalMulticast() {
+		return fmt.Errorf("refusing to fetch from non-public address %s", ip)
+	}
+	if ip.IsPrivate() {
+		return fmt.Errorf("refusing to fetch from private address %s", ip)
+	}
 	return nil
 }
 

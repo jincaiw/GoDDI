@@ -3,6 +3,8 @@ package auth
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -165,7 +167,7 @@ func (rl *RateLimiter) RecordFailedLogin(username, ip string) error {
 		lockedUntil := time.Now().Add(rl.lockDuration).Format(time.RFC3339)
 		_, execErr := rl.db.Exec(`
 			INSERT INTO login_rate_limits (key, attempt_count, locked_until, updated_at)
-			VALUES (?, 1, NULL, ?)
+			VALUES (?, 1, CASE WHEN 1 >= ? THEN ? ELSE NULL END, ?)
 			ON CONFLICT(key) DO UPDATE SET
 				attempt_count = attempt_count + 1,
 				locked_until = CASE
@@ -174,11 +176,12 @@ func (rl *RateLimiter) RecordFailedLogin(username, ip string) error {
 					ELSE locked_until
 				END,
 				updated_at = ?`,
-			key, now, rl.maxAttempts, lockedUntil, now,
+			key, rl.maxAttempts, lockedUntil, now, rl.maxAttempts, lockedUntil, now,
 		)
 		if execErr != nil {
 			return fmt.Errorf("updating rate limit: %w", execErr)
 		}
+		rl.warnIfLocked(key, username, ip)
 		return nil
 	}
 
@@ -195,9 +198,29 @@ func (rl *RateLimiter) RecordFailedLogin(username, ip string) error {
 	rec.lastSeen = time.Now()
 	if rec.count >= rl.maxAttempts {
 		rec.lockedUntil = time.Now().Add(rl.lockDuration)
+		slog.Warn("login lockout engaged", "username", username, "ip", ip,
+			"attempts", rec.count, "locked_until", rec.lockedUntil.Format(time.RFC3339))
 	}
 
 	return nil
+}
+
+// warnIfLocked logs a warning the moment a DB-tracked lockout engages, so
+// operators can tell "user mistyped the password" from "someone is hammering
+// this account" in the request logs.
+func (rl *RateLimiter) warnIfLocked(key, username, ip string) {
+	var attempts int
+	var lockedUntil sql.NullString
+	if err := rl.db.QueryRow(`SELECT attempt_count, locked_until FROM login_rate_limits WHERE key = ?`, key).
+		Scan(&attempts, &lockedUntil); err != nil {
+		return
+	}
+	if lockedUntil.Valid && attempts >= rl.maxAttempts {
+		if until := parseLockTime(lockedUntil); !until.IsZero() && time.Now().Before(until) {
+			slog.Warn("login lockout engaged", "username", username, "ip", ip,
+				"attempts", attempts, "locked_until", until.Format(time.RFC3339))
+		}
+	}
 }
 
 // ResetLoginAttempts resets the login attempt counter for a username and IP.
@@ -214,6 +237,136 @@ func (rl *RateLimiter) ResetLoginAttempts(username, ip string) error {
 	delete(rl.memoryAttempts, key)
 	rl.mu.Unlock()
 	return nil
+}
+
+// ResetUserAttempts clears every rate-limit entry recorded for username,
+// across all source IPs. It backs the admin unlock API and the
+// `goddi unlock` CLI command; without it, an operator locked out by an
+// attacker hammering their username had no recovery path short of editing
+// the database directly.
+// Returns the number of entries removed.
+func (rl *RateLimiter) ResetUserAttempts(username string) (int64, error) {
+	var removed int64
+
+	if rl.db != nil {
+		res, err := rl.db.Exec(`DELETE FROM login_rate_limits WHERE key = ? OR key LIKE ?`,
+			username+":", username+":%")
+		if err != nil {
+			return 0, fmt.Errorf("resetting rate limit for user: %w", err)
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			removed = n
+		}
+	}
+
+	rl.mu.Lock()
+	prefix := username + ":"
+	for k := range rl.memoryAttempts {
+		if strings.HasPrefix(k, prefix) {
+			delete(rl.memoryAttempts, k)
+			removed++
+		}
+	}
+	rl.mu.Unlock()
+
+	slog.Warn("login lockout cleared by operator", "username", username, "entries", removed)
+	return removed, nil
+}
+
+// ResetAllLockouts clears every rate-limit entry for all users. Intended for
+// the `goddi unlock --all` CLI escape hatch.
+func (rl *RateLimiter) ResetAllLockouts() (int64, error) {
+	var removed int64
+
+	if rl.db != nil {
+		res, err := rl.db.Exec(`DELETE FROM login_rate_limits`)
+		if err != nil {
+			return 0, fmt.Errorf("resetting all lockouts: %w", err)
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			removed = n
+		}
+	}
+
+	rl.mu.Lock()
+	removed += int64(len(rl.memoryAttempts))
+	rl.memoryAttempts = make(map[string]*attemptRecord)
+	rl.mu.Unlock()
+
+	slog.Warn("all login lockouts cleared by operator", "entries", removed)
+	return removed, nil
+}
+
+// LockedEntry describes a currently locked username/IP pair.
+type LockedEntry struct {
+	Username    string    `json:"username"`
+	IP          string    `json:"ip"`
+	Attempts    int       `json:"attempts"`
+	LockedUntil time.Time `json:"locked_until"`
+}
+
+// ListLockedEntries returns entries that are currently locked out, for the
+// admin unlock API and the `goddi unlock` CLI listing.
+func (rl *RateLimiter) ListLockedEntries() ([]LockedEntry, error) {
+	now := time.Now()
+	out := make([]LockedEntry, 0)
+
+	if rl.db != nil {
+		rows, err := rl.db.Query(`SELECT key, attempt_count, locked_until FROM login_rate_limits WHERE locked_until IS NOT NULL`)
+		if err != nil {
+			return nil, fmt.Errorf("listing lockouts: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var key string
+			var attempts int
+			var lockedUntil sql.NullString
+			if err := rows.Scan(&key, &attempts, &lockedUntil); err != nil {
+				continue
+			}
+			until := parseLockTime(lockedUntil)
+			if until.IsZero() || !now.Before(until) {
+				continue
+			}
+			username, ip := splitLockKey(key)
+			out = append(out, LockedEntry{Username: username, IP: ip, Attempts: attempts, LockedUntil: until})
+		}
+	}
+
+	rl.mu.Lock()
+	for k, rec := range rl.memoryAttempts {
+		if !rec.lockedUntil.IsZero() && now.Before(rec.lockedUntil) {
+			username, ip := splitLockKey(k)
+			out = append(out, LockedEntry{Username: username, IP: ip, Attempts: rec.count, LockedUntil: rec.lockedUntil})
+		}
+	}
+	rl.mu.Unlock()
+
+	return out, nil
+}
+
+// splitLockKey splits "username:ip" on the FIRST colon. Usernames are
+// identifiers and never contain colons, while IPv6 addresses do — splitting
+// on the first colon keeps "v6user:fe80::1" intact as ("v6user", "fe80::1").
+func splitLockKey(key string) (username, ip string) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return key, ""
+}
+
+// parseLockTime parses the RFC3339 timestamp stored in locked_until.
+func parseLockTime(s sql.NullString) time.Time {
+	if !s.Valid || s.String == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s.String)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func (rl *RateLimiter) key(username, ip string) string {

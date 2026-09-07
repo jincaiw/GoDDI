@@ -37,6 +37,9 @@ const (
 	topMaxEntries  = 100 // per-bucket map cap guard
 )
 
+// topOverflowKey collects counts for entries dropped by the cap above.
+const topOverflowKey = "(other)"
+
 // topBucket aggregates counts for one time slice.
 type topBucket struct {
 	clients map[string]int64
@@ -101,23 +104,41 @@ func (ts *TopStats) RecordWithRcode(clientIP, qname string, blocked bool, rcode 
 
 	for _, b := range []*topBucket{mb, hb, db} {
 		if clientIP != "" {
-			b.clients[clientIP]++
+			bumpCapped(b.clients, clientIP)
 		}
 		if qname != "" {
-			b.domains[qname]++
+			bumpCapped(b.domains, qname)
 		}
 		if blocked {
 			if clientIP != "" {
-				b.blocked[clientIP]++
+				bumpCapped(b.blocked, clientIP)
 			}
 			if qname != "" {
-				b.blocked[qname]++
+				bumpCapped(b.blocked, qname)
 			}
 		}
 		if rcode != "" {
-			b.rcodes[rcode]++
+			bumpCapped(b.rcodes, rcode)
 		}
 	}
+}
+
+// bumpCapped increments counters[key] but refuses to grow the map past
+// topMaxEntries. Without this cap an attacker (or simply a very large
+// deployment with random subdomains) can grow every bucket's map without
+// bound and exhaust memory.
+func bumpCapped(counters map[string]int64, key string) {
+	if _, ok := counters[key]; ok {
+		counters[key]++
+		return
+	}
+	if len(counters) >= topMaxEntries {
+		// Aggregate everything past the cap under a single bucket so the
+		// totals stay meaningful instead of silently diverging.
+		counters[topOverflowKey]++
+		return
+	}
+	counters[key] = 1
 }
 
 // slot returns the bucket for key inside ring, reusing or rotating slots.

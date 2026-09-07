@@ -29,7 +29,7 @@ func ListDHCPLeases(w http.ResponseWriter, r *http.Request) {
 
 	leases, total, err := DHCPServices.LeaseMgr.ListLeases(filter)
 	if err != nil {
-		response.InternalError(w, "列表查询失败: "+err.Error())
+		response.InternalErrorWithLog(w, "列表查询失败", err)
 		return
 	}
 
@@ -76,7 +76,7 @@ func DeleteDHCPLease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DHCPServices.LeaseMgr.ReleaseLease(id); err != nil {
-		response.InternalError(w, "释放租约失败: "+err.Error())
+		response.InternalErrorWithLog(w, "释放租约失败", err)
 		return
 	}
 

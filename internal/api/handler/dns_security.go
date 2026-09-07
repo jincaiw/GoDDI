@@ -90,7 +90,10 @@ func CreateBlockList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Type == "external" && req.URL != "" {
+	// Validate any supplied URL, not only for type=external: the URL is
+	// fetched by the server on refresh, so an internal address would be an
+	// SSRF primitive regardless of how the list is labelled.
+	if req.URL != "" {
 		if err := validateExternalURL(req.URL); err != nil {
 			response.BadRequest(w, "无效的URL: "+err.Error())
 			return
@@ -103,7 +106,7 @@ func CreateBlockList(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?)
 	`, id, req.Name, req.Type, req.URL, true)
 	if err != nil {
-		response.InternalError(w, "创建黑名单失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建黑名单失败", err)
 		return
 	}
 
@@ -118,8 +121,9 @@ func CreateBlockList(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, map[string]string{"id": id, "name": req.Name})
 }
 
-// validateExternalURL validates the URL of an external block list, ensuring
-// it is a syntactically valid http or https URL.
+// validateExternalURL validates the URL of an external block list, ensuring it
+// is a syntactically valid http or https URL that does not point at internal
+// address space (SSRF).
 func validateExternalURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -131,7 +135,7 @@ func validateExternalURL(rawURL string) error {
 	if u.Host == "" {
 		return errInvalidURLHost
 	}
-	return nil
+	return filter.AssertPublicURL(rawURL)
 }
 
 var (
@@ -189,7 +193,7 @@ func UpdateBlockList(w http.ResponseWriter, r *http.Request) {
 		response.BadRequest(w, "无效的黑名单类型，支持: custom, external")
 		return
 	}
-	if req.Type == "external" && req.URL != "" {
+	if req.URL != "" {
 		if err := validateExternalURL(req.URL); err != nil {
 			response.BadRequest(w, "无效的URL: "+err.Error())
 			return
@@ -201,7 +205,7 @@ func UpdateBlockList(w http.ResponseWriter, r *http.Request) {
 		WHERE id=?
 	`, req.Name, req.Type, req.URL, req.Enabled, id)
 	if err != nil {
-		response.InternalError(w, "更新黑名单失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新黑名单失败", err)
 		return
 	}
 
@@ -227,22 +231,22 @@ func DeleteBlockList(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := DNSServices.DB.Begin()
 	if err != nil {
-		response.InternalError(w, "删除黑名单失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除黑名单失败", err)
 		return
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.Exec("DELETE FROM dns_block_rules WHERE list_id=?", id); err != nil {
-		response.InternalError(w, "删除黑名单规则失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除黑名单规则失败", err)
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM dns_block_lists WHERE id=?", id); err != nil {
-		response.InternalError(w, "删除黑名单失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除黑名单失败", err)
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		response.InternalError(w, "删除黑名单失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除黑名单失败", err)
 		return
 	}
 
@@ -336,7 +340,7 @@ func AddBlockRule(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, id, listID, req.Pattern, req.MatchType, req.ResponseType, req.ResponseData, req.Enabled)
 	if err != nil {
-		response.InternalError(w, "添加黑名单规则失败: "+err.Error())
+		response.InternalErrorWithLog(w, "添加黑名单规则失败", err)
 		return
 	}
 
@@ -366,7 +370,7 @@ func DeleteBlockRule(w http.ResponseWriter, r *http.Request) {
 
 	_, err := DNSServices.DB.Exec("DELETE FROM dns_block_rules WHERE id=? AND list_id=?", ruleID, listID)
 	if err != nil {
-		response.InternalError(w, "删除黑名单规则失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除黑名单规则失败", err)
 		return
 	}
 
@@ -439,7 +443,7 @@ func AddAllowRule(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?)
 	`, id, req.Pattern, req.MatchType, req.Enabled)
 	if err != nil {
-		response.InternalError(w, "添加白名单规则失败: "+err.Error())
+		response.InternalErrorWithLog(w, "添加白名单规则失败", err)
 		return
 	}
 
@@ -464,7 +468,7 @@ func DeleteAllowRule(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	_, err := DNSServices.DB.Exec("DELETE FROM dns_allow_rules WHERE id=?", id)
 	if err != nil {
-		response.InternalError(w, "删除白名单规则失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除白名单规则失败", err)
 		return
 	}
 
@@ -528,7 +532,7 @@ func CreateClientPolicy(w http.ResponseWriter, r *http.Request) {
 		var exists int
 		err := DNSServices.DB.QueryRow(`SELECT COUNT(*) FROM dns_block_lists WHERE id = ?`, bid).Scan(&exists)
 		if err != nil {
-			response.InternalError(w, "校验黑名单ID失败: "+err.Error())
+			response.InternalErrorWithLog(w, "校验黑名单ID失败", err)
 			return
 		}
 		if exists == 0 {
@@ -541,7 +545,7 @@ func CreateClientPolicy(w http.ResponseWriter, r *http.Request) {
 		var exists int
 		err := DNSServices.DB.QueryRow(`SELECT COUNT(*) FROM dns_allow_rules WHERE id = ?`, aid).Scan(&exists)
 		if err != nil {
-			response.InternalError(w, "校验白名单规则ID失败: "+err.Error())
+			response.InternalErrorWithLog(w, "校验白名单规则ID失败", err)
 			return
 		}
 		if exists == 0 {
@@ -559,7 +563,7 @@ func CreateClientPolicy(w http.ResponseWriter, r *http.Request) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, req.Name, req.SourceCIDR, req.Action, string(blockIDsJSON), string(allowIDsJSON), req.Priority, req.Enabled)
 	if err != nil {
-		response.InternalError(w, "创建客户端策略失败: "+err.Error())
+		response.InternalErrorWithLog(w, "创建客户端策略失败", err)
 		return
 	}
 
@@ -632,7 +636,7 @@ func UpdateClientPolicy(w http.ResponseWriter, r *http.Request) {
 		WHERE id=?
 	`, req.Name, req.SourceCIDR, req.Action, string(blockIDsJSON), string(allowIDsJSON), req.Priority, req.Enabled, id)
 	if err != nil {
-		response.InternalError(w, "更新客户端策略失败: "+err.Error())
+		response.InternalErrorWithLog(w, "更新客户端策略失败", err)
 		return
 	}
 
@@ -678,7 +682,7 @@ func DeleteClientPolicy(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	_, err := DNSServices.DB.Exec("DELETE FROM dns_client_policies WHERE id=?", id)
 	if err != nil {
-		response.InternalError(w, "删除客户端策略失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除客户端策略失败", err)
 		return
 	}
 

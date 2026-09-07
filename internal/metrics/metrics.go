@@ -124,7 +124,73 @@ var (
 		Name: "goddi_backup_jobs_total",
 		Help: "Total number of backup jobs.",
 	}, []string{"status"})
+
+	CacheEntries = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dns_cache_entries",
+		Help: "Current number of DNS cache entries.",
+	})
+
+	CacheMaxEntries = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dns_cache_max_entries",
+		Help: "Configured DNS cache capacity.",
+	})
+
+	CacheSizeBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dns_cache_size_bytes",
+		Help: "Approximate memory used by cached DNS responses.",
+	})
+
+	CacheHitsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dns_cache_hits_total",
+		Help: "Total number of DNS cache hits.",
+	})
+
+	CacheMissesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dns_cache_misses_total",
+		Help: "Total number of DNS cache misses.",
+	})
+
+	QueryLogDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_query_log_dropped_total",
+		Help: "Total number of query-log entries dropped because the log channel was full.",
+	})
 )
+
+// CacheStatsSample is a point-in-time snapshot of cache statistics
+// delivered by the provider registered through RegisterCacheStatsProvider.
+type CacheStatsSample struct {
+	Entries    int64
+	MaxEntries int64
+	SizeBytes  int64
+	Hits       int64
+	Misses     int64
+}
+
+var (
+	// cacheStatsFn, when non-nil, is sampled by the metrics ticker.
+	cacheStatsFn func() CacheStatsSample
+
+	// queryLogDroppedFn, when non-nil, is sampled by the metrics ticker.
+	queryLogDroppedFn func() int64
+
+	// last samples used to convert absolute gauges into counter deltas.
+	lastCacheHits   int64
+	lastCacheMisses int64
+	lastQLogDropped int64
+)
+
+// RegisterCacheStatsProvider registers a callback the metrics ticker
+// samples every tick to publish cache gauges/counters. Call once after
+// the cache is constructed; pass nil to unregister.
+func RegisterCacheStatsProvider(fn func() CacheStatsSample) {
+	cacheStatsFn = fn
+}
+
+// RegisterQueryLogDroppedProvider registers a callback the metrics
+// ticker samples every tick to publish goddi_query_log_dropped_total.
+func RegisterQueryLogDroppedProvider(fn func() int64) {
+	queryLogDroppedFn = fn
+}
 
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
 func InitMetrics() {
@@ -153,6 +219,12 @@ func InitMetrics() {
 			APIRequestDurationSeconds,
 			DBErrorsTotal,
 			BackupJobsTotal,
+			CacheEntries,
+			CacheMaxEntries,
+			CacheSizeBytes,
+			CacheHitsTotal,
+			CacheMissesTotal,
+			QueryLogDroppedTotal,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine
@@ -170,6 +242,34 @@ func InitMetrics() {
 			}
 		}()
 	})
+}
+
+// sampleProviders polls the optional cache / query-log providers and
+// publishes their values. Counter-style metrics are converted from
+// absolute provider values into deltas so restarts of the underlying
+// component do not make the counters jump backwards.
+func sampleProviders() {
+	if fn := cacheStatsFn; fn != nil {
+		s := fn()
+		CacheEntries.Set(float64(s.Entries))
+		CacheMaxEntries.Set(float64(s.MaxEntries))
+		CacheSizeBytes.Set(float64(s.SizeBytes))
+		if d := s.Hits - lastCacheHits; d > 0 {
+			CacheHitsTotal.Add(float64(d))
+		}
+		if d := s.Misses - lastCacheMisses; d > 0 {
+			CacheMissesTotal.Add(float64(d))
+		}
+		lastCacheHits = s.Hits
+		lastCacheMisses = s.Misses
+	}
+	if fn := queryLogDroppedFn; fn != nil {
+		v := fn()
+		if d := v - lastQLogDropped; d > 0 {
+			QueryLogDroppedTotal.Add(float64(d))
+		}
+		lastQLogDropped = v
+	}
 }
 
 // Shutdown stops the background goroutine that updates the uptime gauge.

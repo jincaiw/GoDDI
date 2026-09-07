@@ -30,6 +30,8 @@ var routeDocs = []apiRouteDoc{
 	{"/auth/change-password", "POST", "Auth", "修改密码", true, nil},
 	{"/auth/sessions", "GET", "Auth", "会话列表", true, nil},
 	{"/auth/sessions/{id}", "DELETE", "Auth", "删除会话", true, []string{"id"}},
+	{"/auth/lockouts", "GET", "Auth", "登录锁定列表", true, nil},
+	{"/auth/unlock", "POST", "Auth", "解锁被限速锁定的账号", true, nil},
 
 	{"/users", "GET", "Users", "用户列表", true, nil},
 	{"/users", "POST", "Users", "创建用户", true, nil},

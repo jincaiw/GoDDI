@@ -1,0 +1,95 @@
+# GoDDI Prometheus 告警规则示例（L4）
+#
+# 用法：将本文件拷贝到 Prometheus 服务器的规则目录，例如：
+#   prometheus.yml:
+#     rule_files:
+#       - /etc/prometheus/rules/goddi-alerts.yml
+#
+# 阈值为建议起点，请根据实际流量与 SLO 调整。
+
+groups:
+  - name: goddi-availability
+    rules:
+      - alert: GoDDIInstanceDown
+        expr: up{job="goddi"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GoDDI 实例不可达"
+          description: "Prometheus 抓取 GoDDI /metrics 失败超过 1 分钟，实例可能已宕机。"
+
+      - alert: GoDDIDNSDroppedQueries
+        expr: rate(goddi_dns_dropped_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DNS 查询被丢弃"
+          description: "最近 5 分钟持续出现丢包（限流/熔断触发），检查客户端流量或放宽 rate limit。"
+
+  - name: goddi-dns-quality
+    rules:
+      - alert: GoDDIHighServfailRatio
+        expr: |
+          sum(rate(goddi_dns_servfail_total[5m]))
+            / clamp_min(sum(rate(goddi_dns_queries_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DNS SERVFAIL 比例过高"
+          description: "SERVFAIL 占总查询比例超过 5%，常见原因为全部上游转发器不健康。"
+
+      - alert: GoDDILowCacheHitRate
+        expr: |
+          sum(rate(goddi_dns_cache_hits_total[15m]))
+            / clamp_min(sum(rate(goddi_dns_cache_hits_total[15m])) + sum(rate(goddi_dns_cache_misses_total[15m])), 1e-9) < 0.5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "DNS 缓存命中率偏低"
+          description: "15 分钟窗口命中率低于 50%。若为业务常态可忽略，否则检查查询模式与 TTL 设置。"
+
+      - alert: GoDDIQueryLogDropping
+        expr: rate(goddi_query_log_dropped_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "查询日志通道溢出"
+          description: "查询日志写入队列打满导致条目丢弃，考虑增大队列或降低采样。"
+
+  - name: goddi-database
+    rules:
+      - alert: GoDDIDatabaseErrors
+        expr: increase(goddi_db_errors_total[10m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据库错误突增"
+          description: "10 分钟内数据库错误超过 10 次，检查 SQLite 文件所在磁盘与 busy_timeout。"
+
+      - alert: GoDDIBackupJobFailed
+        expr: increase(goddi_backup_jobs_total{status="failed"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "备份任务失败"
+          description: "过去 1 小时内出现失败的备份任务，检查磁盘空间与 data/backups 目录权限。"
+
+  - name: goddi-api
+    rules:
+      - alert: GoDDIHighAPIErrorRate
+        expr: |
+          sum(rate(goddi_api_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(goddi_api_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx 错误率过高"
+          description: "管理 API 5xx 比例超过 5%，查看服务日志定位异常。"

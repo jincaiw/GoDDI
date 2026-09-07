@@ -20,7 +20,7 @@ func ListTSIGKeysHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := transfer.ListTSIGKeys(DNSServices.DB)
 	if err != nil {
-		response.InternalError(w, "查询TSIG密钥失败: "+err.Error())
+		response.InternalErrorWithLog(w, "查询TSIG密钥失败", err)
 		return
 	}
 	response.OK(w, keys)
@@ -70,7 +70,7 @@ func DeleteTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := transfer.DeleteTSIGKey(DNSServices.DB, id); err != nil {
-		response.InternalError(w, "删除TSIG密钥失败: "+err.Error())
+		response.InternalErrorWithLog(w, "删除TSIG密钥失败", err)
 		return
 	}
 	response.OKWithMessage(w, "TSIG密钥已删除", nil)

@@ -1,6 +1,6 @@
 module github.com/jasonwa/goddi
 
-go 1.26.2
+go 1.26.6
 
 require (
 	github.com/go-chi/chi/v5 v5.3.0
@@ -12,6 +12,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/quic-go/quic-go v0.62.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.54.0
 	golang.org/x/sync v0.22.0
@@ -39,7 +40,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
-	github.com/quic-go/quic-go v0.62.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
