@@ -48,6 +48,12 @@ WORKDIR /app
 # The binary embeds the web UI and database migrations.
 COPY --from=builder /goddi /usr/local/bin/goddi
 
+# The image runs as the non-root "goddi" user but must bind the privileged
+# DNS (:53) and DHCP (:67) ports. A file capability survives exec for
+# non-root users (unlike cap_add, which is dropped on exec for non-root).
+RUN apk add --no-cache libcap \
+    && setcap cap_net_bind_service=+ep /usr/local/bin/goddi
+
 # Create data directory
 RUN mkdir -p /var/lib/goddi && chown -R goddi:goddi /var/lib/goddi
 

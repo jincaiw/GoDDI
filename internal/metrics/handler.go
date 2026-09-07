@@ -44,7 +44,11 @@ func DashboardDataHandler(db *sql.DB, version string) http.HandlerFunc {
 			Uptime: GetUptime().Seconds(),
 		}
 
-		twentyFourHoursAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+		// Use SQLite's native datetime text format (matching the
+		// datetime('now') schema default) and a raw column comparison so
+		// idx_dns_query_logs_created_at is used; wrapping the column with
+		// datetime(created_at) forces a full table scan.
+		twentyFourHoursAgo := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 
 		// Combine the three dns_query_logs aggregations into a single round
 		// trip. The previous implementation issued one COUNT(*) per metric
@@ -63,7 +67,7 @@ func DashboardDataHandler(db *sql.DB, version string) http.HandlerFunc {
 				COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0),
 				COUNT(*)
 			FROM dns_query_logs
-			WHERE datetime(created_at) >= datetime(?)
+			WHERE created_at >= ?
 		`, twentyFourHoursAgo).Scan(&dnsQueriesToday, &cacheHits, &cacheTotal)
 		if err != nil {
 			slog.Warn("metrics: failed to query DNS query stats", "error", err)
@@ -116,7 +120,7 @@ func DashboardDataHandler(db *sql.DB, version string) http.HandlerFunc {
 func getRecentDNSStats(db *sql.DB) []HourlyDNSStats {
 	stats := make([]HourlyDNSStats, 0, 24)
 
-	twentyFourHoursAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	twentyFourHoursAgo := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 
 	rows, err := db.Query(`
 		SELECT
@@ -125,7 +129,7 @@ func getRecentDNSStats(db *sql.DB) []HourlyDNSStats {
 			SUM(CASE WHEN blocked = 1 THEN 1 ELSE 0 END) AS blocked,
 			SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) AS cached
 		FROM dns_query_logs
-		WHERE datetime(created_at) >= datetime(?)
+		WHERE created_at >= ?
 		GROUP BY hour
 		ORDER BY hour ASC
 	`, twentyFourHoursAgo)

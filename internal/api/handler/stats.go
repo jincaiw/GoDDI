@@ -107,6 +107,14 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 
 	startStr := start.UTC().Format(time.RFC3339)
 	endStr := now.UTC().Format(time.RFC3339)
+	// SQL parameters use SQLite's native datetime text format
+	// ("YYYY-MM-DD HH:MM:SS", the format produced by datetime('now') in
+	// the schema default) so the range predicates can use
+	// idx_dns_query_logs_created_at directly. Wrapping the column with
+	// datetime(created_at) defeats the index and forces a full table scan,
+	// which takes minutes on large query-log tables.
+	startSQL := start.UTC().Format("2006-01-02 15:04:05")
+	endSQL := now.UTC().Format("2006-01-02 15:04:05")
 
 	var s StatsSummary
 	err := db.QueryRow(`
@@ -121,8 +129,8 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 			COUNT(DISTINCT client_ip),
 			COALESCE(AVG(response_time_ms), 0)
 		FROM dns_query_logs
-		WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)
-	`, startStr, endStr).Scan(
+		WHERE created_at >= ? AND created_at <= ?
+	`, startSQL, endSQL).Scan(
 		&s.Total, &s.NoError, &s.NXDomain, &s.ServFail, &s.Refused,
 		&s.Blocked, &s.Cached, &s.Clients, &s.AvgResponseMs,
 	)
@@ -139,10 +147,10 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 			SUM(CASE WHEN blocked = 1 THEN 1 ELSE 0 END),
 			SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END)
 		FROM dns_query_logs
-		WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)
+		WHERE created_at >= ? AND created_at <= ?
 		GROUP BY bucket
 		ORDER BY bucket ASC
-	`, bucketFmt, startStr, endStr)
+	`, bucketFmt, startSQL, endSQL)
 	if err != nil {
 		response.InternalErrorWithLog(w, "统计序列查询失败", err)
 		return
