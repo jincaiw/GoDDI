@@ -73,3 +73,6 @@ web-admin/dist/
 .docker/
 GODDI_ENV_LOCAL/
 docker-compose.local.yml
+
+# Local build output
+bin/
