@@ -17,20 +17,29 @@ jobs:
           go-version: '1.26.6'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: web
-        run: npm ci
+          cache: pnpm
+          cache-dependency-path: web-admin/pnpm-lock.yaml
 
       - name: Build frontend
-        working-directory: web
-        run: npm run build
+        working-directory: web-admin
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Sync frontend dist into embed directory
+        run: |
+          rm -rf web/dist
+          mkdir -p web/dist
+          cp -R web-admin/dist/. web/dist/
 
       - name: Run Go tests
         run: go test -race ./...
