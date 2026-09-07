@@ -50,7 +50,11 @@ const naiveDateLocale = computed(() => appStore.locale === 'zh-CN' ? dateZhCN : 
   color-scheme: dark;
 }
 
-.n-config-provider {
+/* Only the app's own provider gets the full-viewport height. The discrete
+   API (router/guards.ts) teleports an empty .n-config-provider directly to
+   <body>; without this scoping it would add a full viewport of blank space
+   below every page. */
+#app > .n-config-provider {
   min-height: 100vh;
 }
 
