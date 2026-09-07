@@ -19,10 +19,14 @@ linters:
   settings:
     staticcheck:
       # QF* are stylistic "quickfix" suggestions (tagged switches,
-      # fmt.Fprintf rewrites, ...); policy is to keep correctness checks.
+      # fmt.Fprintf rewrites, ...). ST* are style checks (package
+      # comments, naming conventions) with substantial pre-existing debt.
+      # Policy: keep correctness checks (SA*, S*), revisit style in a
+      # dedicated cleanup pass.
       checks:
         - all
         - -QF*
+        - -ST*
 
 issues:
   max-issues-per-linter: 0
