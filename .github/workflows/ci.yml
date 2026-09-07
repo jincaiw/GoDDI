@@ -78,10 +78,23 @@ jobs:
           curl -fsS -X POST "http://127.0.0.1:16090/api/v1/dns/zones/${zone_id}/records" "${auth[@]}" \
             -d '{"name":"www.ci.test","type":"A","value":"192.0.2.10","ttl":300}' > /dev/null
 
-          # UDP answer must contain the record value.
-          dig +time=3 +tries=1 @127.0.0.1 -p 15353 www.ci.test A +short | grep -qx '192.0.2.10'
+          # UDP answer must contain the record value. Retry briefly:
+          # the zone store may reload asynchronously after the API write.
+          for attempt in $(seq 1 10); do
+            if dig +time=3 +tries=1 @127.0.0.1 -p 15353 www.ci.test A +short | grep -qx '192.0.2.10'; then
+              udp_ok=1; break
+            fi
+            sleep 1
+          done
+          [ "${udp_ok:-0}" = "1" ] || { echo "UDP answer missing/incorrect"; exit 1; }
           # TCP answer must succeed as well.
-          dig +time=3 +tries=1 +tcp @127.0.0.1 -p 15353 www.ci.test A +short | grep -qx '192.0.2.10'
+          for attempt in $(seq 1 10); do
+            if dig +time=3 +tries=1 +tcp @127.0.0.1 -p 15353 www.ci.test A +short | grep -qx '192.0.2.10'; then
+              tcp_ok=1; break
+            fi
+            sleep 1
+          done
+          [ "${tcp_ok:-0}" = "1" ] || { echo "TCP answer missing/incorrect"; exit 1; }
           echo "DNS integration test passed"
 
       - name: Install browser
@@ -127,7 +140,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned: "latest" resolved to a binary built with Go 1.24,
+          # which refuses configs targeting go 1.26.6.
+          version: v2.13.2
 
   # L2: dependency vulnerability scan against the Go vulnerability DB.
   vulncheck:
