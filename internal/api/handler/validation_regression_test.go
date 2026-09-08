@@ -15,8 +15,8 @@ func TestValidateDNSName(t *testing.T) {
 		"example.com",
 		"www.example.com",
 		"a.b.c.d.example.com",
-		"xn--e1afmkfd.xn--p1ai", // punycode IDN
-		"my-host.example.com",   // LDH label
+		"xn--e1afmkfd.xn--p1ai",                  // punycode IDN
+		"my-host.example.com",                    // LDH label
 		strings.Repeat("a", 63) + ".example.com", // max label length
 	}
 	for _, name := range valid {

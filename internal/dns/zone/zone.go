@@ -22,6 +22,9 @@ const (
 	ZoneTypeReverse   ZoneType = "reverse"
 	ZoneTypeAllowed   ZoneType = "allowed"
 	ZoneTypeBlocked   ZoneType = "blocked"
+	// ZoneTypeCatalog is a Catalog Zone (RFC 9432) listing its member zones
+	// via PTR records under "members".
+	ZoneTypeCatalog ZoneType = "catalog"
 )
 
 // ACL kinds used with ZoneACL.ACLAllows.
@@ -32,11 +35,22 @@ const (
 )
 
 // ValidZoneTypes contains all valid zone types.
-var ValidZoneTypes = []ZoneType{ZoneTypePrimary, ZoneTypeSecondary, ZoneTypeStub, ZoneTypeForward, ZoneTypeReverse, ZoneTypeAllowed, ZoneTypeBlocked}
+var ValidZoneTypes = []ZoneType{ZoneTypePrimary, ZoneTypeSecondary, ZoneTypeStub, ZoneTypeForward, ZoneTypeReverse, ZoneTypeAllowed, ZoneTypeBlocked, ZoneTypeCatalog}
+
+// Query access modes (Technitium parity). The empty value keeps the
+// historic behavior: unrestricted unless AllowQuery lists entries.
+const (
+	QueryAccessDefault                  = ""                            // list-based behavior
+	QueryAccessAllow                    = "allow"                       // allow everyone
+	QueryAccessDeny                     = "deny"                        // deny everyone
+	QueryAccessAllowOnlyPrivateNetworks = "allow_only_private_networks" // RFC1918/ULA/loopback/link-local only
+)
 
 // ZoneACL controls per-zone access. Empty lists mean unrestricted for the
 // corresponding kind; a configured list accepts both single IPs and CIDRs.
 type ZoneACL struct {
+	// QueryAccess overrides list-based query control when set.
+	QueryAccess   string   `json:"query_access,omitempty"`
 	AllowQuery    []string `json:"allow_query,omitempty"`
 	AllowTransfer []string `json:"allow_transfer,omitempty"`
 	AllowUpdate   []string `json:"allow_update,omitempty"`
@@ -49,6 +63,16 @@ type ZoneACL struct {
 func (a *ZoneACL) ACLAllows(kind, ip string) bool {
 	if a == nil {
 		return true
+	}
+	if kind == ACLQuery {
+		switch a.QueryAccess {
+		case QueryAccessDeny:
+			return false
+		case QueryAccessAllow:
+			return true
+		case QueryAccessAllowOnlyPrivateNetworks:
+			return isPrivateNetworkIP(ip)
+		}
 	}
 	var list []string
 	switch kind {
@@ -86,6 +110,17 @@ func (a *ZoneACL) ACLAllows(kind, ip string) bool {
 	return false
 }
 
+// isPrivateNetworkIP reports whether ip belongs to a private network
+// (RFC 1918 / ULA), loopback or link-local scope.
+func isPrivateNetworkIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() ||
+		parsed.IsLinkLocalMulticast()
+}
+
 // GetNotify returns the NOTIFY target list (nil-safe).
 func (a *ZoneACL) GetNotify() []string {
 	if a == nil {
@@ -121,25 +156,28 @@ func marshalZoneACL(a *ZoneACL) interface{} {
 
 // Zone represents a DNS zone with full metadata.
 type Zone struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Type           string    `json:"type"`
-	Enabled        bool      `json:"enabled"`
-	DNSSECEnabled  bool      `json:"dnssec_enabled"`
-	DefaultTTL     int       `json:"default_ttl"`
-	SOA_MName      string    `json:"soa_mname"`
-	SOA_RName      string    `json:"soa_rname"`
-	Serial         uint32    `json:"serial"`
-	Refresh        int       `json:"refresh"`
-	Retry          int       `json:"retry"`
-	Expire         int       `json:"expire"`
-	Minimum        int       `json:"minimum"`
-	TransferPolicy string    `json:"transfer_policy,omitempty"`
-	UpdatePolicy   string    `json:"update_policy,omitempty"`
-	ACL            *ZoneACL  `json:"acl,omitempty"`
-	RecordsCount   int       `json:"records_count"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Type           string   `json:"type"`
+	Enabled        bool     `json:"enabled"`
+	DNSSECEnabled  bool     `json:"dnssec_enabled"`
+	DefaultTTL     int      `json:"default_ttl"`
+	SOA_MName      string   `json:"soa_mname"`
+	SOA_RName      string   `json:"soa_rname"`
+	Serial         uint32   `json:"serial"`
+	Refresh        int      `json:"refresh"`
+	Retry          int      `json:"retry"`
+	Expire         int      `json:"expire"`
+	Minimum        int      `json:"minimum"`
+	TransferPolicy string   `json:"transfer_policy,omitempty"`
+	UpdatePolicy   string   `json:"update_policy,omitempty"`
+	ACL            *ZoneACL `json:"acl,omitempty"`
+	// Catalog is the name of the catalog zone this zone belongs to
+	// (RFC 9432 membership; empty when not a member).
+	Catalog      string    `json:"catalog,omitempty"`
+	RecordsCount int       `json:"records_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ZoneOptions contains options for creating or updating a zone.
@@ -158,6 +196,8 @@ type ZoneOptions struct {
 	TransferPolicy string   `json:"transfer_policy,omitempty"`
 	UpdatePolicy   string   `json:"update_policy,omitempty"`
 	ACL            *ZoneACL `json:"acl,omitempty"`
+	// Catalog sets the catalog zone membership (name of a catalog zone).
+	Catalog string `json:"catalog,omitempty"`
 }
 
 // ZoneFilter contains filter options for listing zones.
@@ -193,6 +233,16 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	}
 	if !isValidZoneType(opts.Type) {
 		return nil, fmt.Errorf("invalid zone type: %s", opts.Type)
+	}
+	if opts.ACL != nil && !validQueryAccess(opts.ACL.QueryAccess) {
+		return nil, fmt.Errorf("invalid query_access: %s", opts.ACL.QueryAccess)
+	}
+	if opts.Catalog != "" {
+		catalogName := strings.TrimSuffix(strings.ToLower(opts.Catalog), ".") + "."
+		if err := m.validateCatalogMembership(opts.Type, catalogName); err != nil {
+			return nil, err
+		}
+		opts.Catalog = catalogName
 	}
 
 	// Normalize zone name: ensure trailing dot for FQDN.
@@ -260,13 +310,20 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	_, err = m.db.Exec(`
 		INSERT INTO dns_zones (id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, acl)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			transfer_policy, update_policy, acl, catalog)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, name, opts.Type, enabled, false, defaultTTL,
 		soaMName, soaRName, serial, refresh, retry, expire, minimum,
-		opts.TransferPolicy, opts.UpdatePolicy, marshalZoneACL(opts.ACL))
+		opts.TransferPolicy, opts.UpdatePolicy, marshalZoneACL(opts.ACL), opts.Catalog)
 	if err != nil {
 		return nil, fmt.Errorf("inserting zone: %w", err)
+	}
+
+	// RFC 9432 membership: materialise a PTR record inside the catalog zone.
+	if opts.Catalog != "" {
+		if err := m.addCatalogMembership(opts.Catalog, name); err != nil {
+			return nil, fmt.Errorf("adding catalog membership: %w", err)
+		}
 	}
 
 	zone := &Zone{
@@ -286,6 +343,7 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 		TransferPolicy: opts.TransferPolicy,
 		UpdatePolicy:   opts.UpdatePolicy,
 		ACL:            opts.ACL,
+		Catalog:        strings.TrimSuffix(opts.Catalog, "."),
 	}
 
 	// Reload in-memory zone store.
@@ -307,12 +365,12 @@ func (m *ZoneManager) GetZone(id string) (*Zone, error) {
 	err := m.db.QueryRow(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, acl, created_at, updated_at
+			transfer_policy, update_policy, acl, COALESCE(catalog, ''), created_at, updated_at
 		FROM dns_zones WHERE id = ?
 	`, id).Scan(
 		&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 		&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-		&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
+		&transferPolicy, &updatePolicy, &aclJSON, &z.Catalog, &z.CreatedAt, &z.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", id)
@@ -348,12 +406,12 @@ func (m *ZoneManager) GetZoneByName(name string) (*Zone, error) {
 	err := m.db.QueryRow(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, acl, created_at, updated_at
+			transfer_policy, update_policy, acl, COALESCE(catalog, ''), created_at, updated_at
 		FROM dns_zones WHERE name = ?
 	`, name).Scan(
 		&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 		&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-		&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
+		&transferPolicy, &updatePolicy, &aclJSON, &z.Catalog, &z.CreatedAt, &z.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", name)
@@ -427,7 +485,7 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 	querySQL := fmt.Sprintf(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, acl, created_at, updated_at,
+			transfer_policy, update_policy, acl, COALESCE(catalog, ''), created_at, updated_at,
 			(SELECT COUNT(*) FROM dns_records WHERE zone_id = dns_zones.id)
 		FROM dns_zones %s
 		ORDER BY name
@@ -448,7 +506,7 @@ func (m *ZoneManager) ListZones(filter ZoneFilter) ([]Zone, int64, error) {
 		if err := rows.Scan(
 			&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 			&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-			&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
+			&transferPolicy, &updatePolicy, &aclJSON, &z.Catalog, &z.CreatedAt, &z.UpdatedAt,
 			&z.RecordsCount,
 		); err != nil {
 			continue
@@ -566,9 +624,46 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		existing.UpdatePolicy = opts.UpdatePolicy
 	}
 	if opts.ACL != nil {
+		if !validQueryAccess(opts.ACL.QueryAccess) {
+			return nil, fmt.Errorf("invalid query_access: %s", opts.ACL.QueryAccess)
+		}
 		setClauses = append(setClauses, "acl = ?")
 		args = append(args, marshalZoneACL(opts.ACL))
 		existing.ACL = opts.ACL
+	}
+
+	// Catalog membership changes (RFC 9432). opts.Catalog semantics:
+	//   ""       not provided, keep current membership
+	//   "-"|"none"  detach from the current catalog
+	//   <name>   join/switch to the named catalog zone
+	newCatalog := ""
+	switch opts.Catalog {
+	case "":
+		// keep current
+	case "-", "none":
+		if existing.Catalog != "" {
+			if err := m.removeCatalogMembership(existing.Name); err != nil {
+				return nil, fmt.Errorf("detaching catalog: %w", err)
+			}
+		}
+		setClauses = append(setClauses, "catalog = ''")
+		existing.Catalog = ""
+	default:
+		catalogName := strings.TrimSuffix(strings.ToLower(opts.Catalog), ".") + "."
+		if catalogName != existing.Catalog {
+			if err := m.validateCatalogMembership(existing.Type, catalogName); err != nil {
+				return nil, err
+			}
+			if existing.Catalog != "" {
+				if err := m.removeCatalogMembership(existing.Name); err != nil {
+					return nil, fmt.Errorf("detaching catalog: %w", err)
+				}
+			}
+			newCatalog = catalogName
+			setClauses = append(setClauses, "catalog = ?")
+			args = append(args, catalogName)
+			existing.Catalog = catalogName
+		}
 	}
 
 	if len(setClauses) == 0 {
@@ -582,6 +677,13 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	_, err = m.db.Exec(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("updating zone: %w", err)
+	}
+
+	// Materialise new catalog membership after the zone row is committed.
+	if newCatalog != "" {
+		if err := m.addCatalogMembership(newCatalog, existing.Name); err != nil {
+			return nil, fmt.Errorf("adding catalog membership: %w", err)
+		}
 	}
 
 	// Reload in-memory zone store.
@@ -599,9 +701,18 @@ func (m *ZoneManager) DeleteZone(id string) error {
 	}
 
 	// Verify zone exists.
-	_, err := m.GetZone(id)
+	existing, err := m.GetZone(id)
 	if err != nil {
 		return err
+	}
+
+	// Catalog bookkeeping: detach the member (or clear membership pointers
+	// when deleting a catalog zone itself).
+	if existing.Catalog != "" {
+		_ = m.removeCatalogMembership(existing.Name)
+	}
+	if existing.Type == string(ZoneTypeCatalog) {
+		_, _ = m.db.Exec("UPDATE dns_zones SET catalog = '' WHERE catalog = ?", existing.Name)
 	}
 
 	// Use a transaction to ensure atomic deletion of records and zone.
@@ -747,6 +858,15 @@ func generateSerial(db *sql.DB) uint32 {
 	return maxSerial + 1
 }
 
+// validQueryAccess checks whether a QueryAccess mode is supported.
+func validQueryAccess(q string) bool {
+	switch q {
+	case "", QueryAccessAllow, QueryAccessDeny, QueryAccessAllowOnlyPrivateNetworks:
+		return true
+	}
+	return false
+}
+
 // CloneZone copies a zone (including all its records) under a new name.
 // Technitium v13.5 parity. DNSSEC signing state is intentionally not
 // copied: the clone starts unsigned and can be signed independently.
@@ -854,6 +974,9 @@ func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
 	}
 	if z.Type == "allowed" || z.Type == "blocked" {
 		return nil, fmt.Errorf("special zone types cannot be converted")
+	}
+	if z.Type == string(ZoneTypeCatalog) || newType == string(ZoneTypeCatalog) {
+		return nil, fmt.Errorf("catalog zones cannot be type-converted")
 	}
 	if z.Type == newType {
 		return z, nil

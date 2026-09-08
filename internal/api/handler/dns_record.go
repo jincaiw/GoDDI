@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/rbac"
 	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
 
@@ -202,6 +203,12 @@ func BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-zone permission intersection (Technitium parity).
+	if allowed, err := getZoneManager().ZonePermissionAllows(req.ZoneID, rbac.GetUserID(r.Context()), rbac.GetRoleIDs(r.Context()), "modify"); err == nil && !allowed {
+		response.Forbidden(w, "区域权限不足")
+		return
+	}
+
 	records, err := getRecordManager().BatchCreateRecords(req.ZoneID, req.Records)
 	if err != nil {
 		response.BadRequest(w, err.Error())
@@ -233,6 +240,22 @@ func BatchDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.IDs) > 500 {
 		response.BadRequest(w, "批量操作不能超过500条")
+		return
+	}
+
+	// Per-zone permission intersection: resolve each record's zone and
+	// reject records inside zones the caller may not delete from.
+	zm := getZoneManager()
+	denied := 0
+	for _, id := range req.IDs {
+		if rec, err := getRecordManager().GetRecord(id); err == nil {
+			if allowed, err := zm.ZonePermissionAllows(rec.ZoneID, rbac.GetUserID(r.Context()), rbac.GetRoleIDs(r.Context()), "delete"); err == nil && !allowed {
+				denied++
+			}
+		}
+	}
+	if denied > 0 {
+		response.Forbidden(w, "区域权限不足")
 		return
 	}
 

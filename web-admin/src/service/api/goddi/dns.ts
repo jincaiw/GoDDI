@@ -3,6 +3,7 @@ import client, { get, getList, post, put, del } from './client'
 // --- DNS Zones ---
 
 export interface ZoneACL {
+  query_access?: '' | 'allow' | 'deny' | 'allow_only_private_networks'
   allow_query?: string[]
   allow_transfer?: string[]
   allow_update?: string[]
@@ -13,6 +14,7 @@ export interface DNSZone {
   id: string
   name: string
   type: string
+  catalog?: string
   enabled: boolean
   dnssec_enabled: boolean
   default_ttl: number
@@ -40,6 +42,7 @@ export interface CreateDNSZoneRequest {
   retry?: number
   expire?: number
   minimum?: number
+  catalog?: string
   acl?: ZoneACL
 }
 
@@ -75,6 +78,10 @@ export function batchDeleteDNSZones(ids: string[]) {
   return post<{ deleted: number; failed: string[] }>('/dns/zones/batch-delete', { ids })
 }
 
+export function getCatalogMembers(id: string) {
+  return get<string[]>(`/dns/zones/${id}/catalog/members`)
+}
+
 export function importZoneFile(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
@@ -91,6 +98,48 @@ export function syncSecondaryZone(id: string) {
   return post(`/dns/zones/${id}/sync`)
 }
 
+export function enableDNSZone(id: string) {
+  return post<DNSZone>(`/dns/zones/${id}/enable`)
+}
+
+export function disableDNSZone(id: string) {
+  return post<DNSZone>(`/dns/zones/${id}/disable`)
+}
+
+export interface ZoneChangeEntry {
+  id: string
+  zone_id: string
+  serial: number
+  change_type: 'add' | 'delete'
+  name: string
+  type: string
+  value: string
+  ttl: number
+  created_at: string
+}
+
+export function getZoneHistory(id: string, params?: Record<string, unknown>) {
+  return getList<ZoneChangeEntry>(`/dns/zones/${id}/history`, params)
+}
+
+export interface ZonePermission {
+  id?: string
+  zone_id?: string
+  principal_type: 'user' | 'group'
+  principal_id: string
+  can_view: boolean
+  can_modify: boolean
+  can_delete: boolean
+}
+
+export function getZonePermissions(id: string) {
+  return get<ZonePermission[]>(`/dns/zones/${id}/permissions`)
+}
+
+export function setZonePermissions(id: string, permissions: ZonePermission[]) {
+  return put<ZonePermission[]>(`/dns/zones/${id}/permissions`, { permissions })
+}
+
 // --- DNSSEC ---
 
 export interface DNSSECStatus {
@@ -102,8 +151,10 @@ export interface DNSSECKey {
   id: string
   algorithm: string
   key_type: string
+  key_tag?: number
+  enabled?: boolean
   created_at: string
-  expires_at: string
+  expires_at?: string
 }
 
 export function getDNSSECStatus(zoneId: string) {
@@ -120,6 +171,49 @@ export function disableDNSSEC(zoneId: string) {
 
 export function rotateDNSSECKeys(zoneId: string) {
   return post(`/dns/zones/${zoneId}/dnssec/rotate`)
+}
+
+export interface DSInfo {
+  key_tag: number
+  algorithm: string
+  digest_type: number
+  digest: string
+  key_flags: number
+  public_key: string
+}
+
+export function getZoneDSRecords(zoneId: string) {
+  return get<DSInfo[]>(`/dns/zones/${zoneId}/dnssec/ds`)
+}
+
+export function generateDNSSECKey(zoneId: string, keyType: 'KSK' | 'ZSK', algorithm: string) {
+  return post<DNSSECKey>(`/dns/zones/${zoneId}/dnssec/keys`, { key_type: keyType, algorithm })
+}
+
+export function deleteDNSSECKey(zoneId: string, keyId: string) {
+  return del(`/dns/zones/${zoneId}/dnssec/keys/${keyId}`)
+}
+
+export function toggleDNSSECKey(zoneId: string, keyId: string, enabled: boolean) {
+  return put(`/dns/zones/${zoneId}/dnssec/keys/${keyId}`, { enabled })
+}
+
+export function promoteDNSSECStandbyKeys(zoneId: string) {
+  return post(`/dns/zones/${zoneId}/dnssec/keys/promote`)
+}
+
+export interface NSEC3Params {
+  iterations: number
+  salt: string
+  optout: boolean
+}
+
+export function getNSEC3Params(zoneId: string) {
+  return get<NSEC3Params>(`/dns/zones/${zoneId}/dnssec/nsec3`)
+}
+
+export function setNSEC3Params(zoneId: string, params: NSEC3Params) {
+  return put<NSEC3Params>(`/dns/zones/${zoneId}/dnssec/nsec3`, params)
 }
 
 // --- DNS Records ---
@@ -253,6 +347,29 @@ export function updateClientPolicy(id: string, data: Partial<ClientPolicy>) {
 
 export function deleteClientPolicy(id: string) {
   return del(`/dns/security/policies/${id}`)
+}
+
+// --- Top Stats (Technitium stats/getTop parity) ---
+
+export interface TopStatsEntry {
+  entry: string
+  hits: number
+}
+
+export function getTopStats(params: {
+  type: 'clients' | 'domains' | 'blocked'
+  limit?: number
+  range?: 'hour' | 'day' | 'week' | 'month' | 'year' | 'custom'
+  start?: string
+  end?: string
+}) {
+  return get<{
+    type: string
+    range: string
+    start: string
+    end: string
+    top: TopStatsEntry[]
+  }>('/stats/top', params)
 }
 
 // --- DNS Cache ---
@@ -389,6 +506,43 @@ export function addAllowRule(data: Partial<AllowRule>) {
 
 export function deleteAllowRule(id: string) {
   return del(`/dns/security/allowlists/${id}`)
+}
+
+export function flushAllowRules() {
+  return post<{ flushed: number }>('/dns/security/allowlists/flush')
+}
+
+export function exportAllowRules() {
+  return client.get('/dns/security/allowlists/export', { responseType: 'blob' })
+}
+
+export function importAllowRules(text: string, overwrite = false) {
+  return client.post<{ imported: number; skipped: number }>(
+    `/dns/security/allowlists/import${overwrite ? '?overwrite=true' : ''}`,
+    text,
+    { headers: { 'Content-Type': 'text/plain' } },
+  )
+}
+
+export function flushBlockLists() {
+  return post<{ flushed: number }>('/dns/security/blocklists/flush')
+}
+
+// --- Apps (Technitium DNS Apps parity; runtime is a placeholder) ---
+
+export interface DNSApp {
+  id: string
+  name: string
+  version: string
+  enabled: boolean
+}
+
+export function listApps() {
+  return get<DNSApp[]>('/apps')
+}
+
+export function installApp(id: string) {
+  return post(`/apps/${id}/install`)
 }
 
 // --- DNS Query Logs ---

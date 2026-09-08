@@ -188,6 +188,7 @@ const typeOptions = [
 
 const zoneTypeOptions = [
   ...typeOptions,
+  { label: 'Catalog', value: 'catalog' },
   { label: t('dns.zones.typeAllowed'), value: 'allowed' },
   { label: t('dns.zones.typeBlocked'), value: 'blocked' },
 ]

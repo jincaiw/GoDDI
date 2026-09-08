@@ -223,6 +223,51 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'dns_allowed',
+        path: '/dns/allowed',
+        component: 'view.dns_allowed',
+        meta: {
+          title: 'dns_allowed',
+          i18nKey: 'route.dns_allowed',
+          icon: 'mdi:shield-check-outline',
+          order: 3,
+          permission: {
+            resource: 'dns',
+            action: 'read'
+          }
+        }
+      },
+      {
+        name: 'dns_blocked',
+        path: '/dns/blocked',
+        component: 'view.dns_blocked',
+        meta: {
+          title: 'dns_blocked',
+          i18nKey: 'route.dns_blocked',
+          icon: 'mdi:shield-lock',
+          order: 4,
+          permission: {
+            resource: 'dns',
+            action: 'read'
+          }
+        }
+      },
+      {
+        name: 'dns_apps',
+        path: '/dns/apps',
+        component: 'view.dns_apps',
+        meta: {
+          title: 'dns_apps',
+          i18nKey: 'route.dns_apps',
+          icon: 'mdi:apps',
+          order: 7,
+          permission: {
+            resource: 'dns',
+            action: 'read'
+          }
+        }
+      },
+      {
         name: 'dns_cache',
         path: '/dns/cache',
         component: 'view.dns_cache',
@@ -230,7 +275,7 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'dns_cache',
           i18nKey: 'route.dns_cache',
           icon: 'mdi:database-clock',
-          order: 4,
+          order: 6,
           permission: {
             resource: 'dns',
             action: 'read'
@@ -260,7 +305,7 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'dns_security',
           i18nKey: 'route.dns_security',
           icon: 'mdi:shield-check',
-          order: 3,
+          order: 5,
           permission: {
             resource: 'dns',
             action: 'read'

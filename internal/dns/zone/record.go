@@ -65,6 +65,12 @@ type RecordOptions struct {
 	// nil leaves the value unchanged on update; ClearExpiresAt removes it.
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 	ClearExpiresAt bool       `json:"clear_expires_at,omitempty"`
+	// Overwrite replaces any existing record with the same name and type in
+	// the zone instead of adding a second one (Technitium parity).
+	Overwrite bool `json:"overwrite,omitempty"`
+	// ExpiryTTL sets the record to expire this many seconds from now
+	// (Technitium expiryTtl parity). Ignored when ExpiresAt is set.
+	ExpiryTTL *int `json:"expiry_ttl,omitempty"`
 }
 
 // RecordFilter contains filter options for listing records.
@@ -154,6 +160,15 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 	// Normalize record name.
 	name := normalizeRecordName(opts.Name, zone.Name)
 
+	// Overwrite (Technitium parity): drop any existing record with the same
+	// name and type in this zone before adding the new one.
+	if opts.Overwrite {
+		if _, err := m.db.Exec("DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?",
+			zoneID, name, opts.Type); err != nil {
+			return nil, fmt.Errorf("overwriting existing record: %w", err)
+		}
+	}
+
 	// CNAME uniqueness: a name that has a CNAME record cannot have any other records.
 	if opts.Type == "CNAME" {
 		var count int
@@ -180,13 +195,21 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		enabled = *opts.Enabled
 	}
 
+	// Resolve record expiry (Technitium expiryTtl parity): when set, the
+	// record ages out expiryTtl seconds from now.
+	expiresAt := opts.ExpiresAt
+	if expiresAt == nil && opts.ExpiryTTL != nil && *opts.ExpiryTTL > 0 {
+		t := time.Now().Add(time.Duration(*opts.ExpiryTTL) * time.Second)
+		expiresAt = &t
+	}
+
 	id := uuid.New().String()
 	_, err = m.db.Exec(`
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zoneID, name, opts.Type, opts.Value, ttl,
 		nullInt(opts.Priority), nullInt(opts.Weight), nullInt(opts.Port),
-		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, opts.ExpiresAt)
+		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
@@ -472,6 +495,21 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 	if opts.Owner != "" {
 		setClauses = append(setClauses, "owner = ?")
 		args = append(args, opts.Owner)
+	}
+	// Record aging on update (Technitium parity).
+	if opts.ExpiryTTL != nil && opts.ExpiresAt == nil {
+		if *opts.ExpiryTTL > 0 {
+			t := time.Now().Add(time.Duration(*opts.ExpiryTTL) * time.Second)
+			setClauses = append(setClauses, "expires_at = ?")
+			args = append(args, t)
+		}
+	}
+	if opts.ExpiresAt != nil {
+		setClauses = append(setClauses, "expires_at = ?")
+		args = append(args, *opts.ExpiresAt)
+	}
+	if opts.ClearExpiresAt {
+		setClauses = append(setClauses, "expires_at = NULL")
 	}
 
 	if len(setClauses) == 0 {

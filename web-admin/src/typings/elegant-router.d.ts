@@ -33,6 +33,9 @@ declare module "@elegant-router/types" {
     "dhcp_reservations": "/dhcp/reservations";
     "dhcp_scopes": "/dhcp/scopes";
     "dns": "/dns";
+    "dns_allowed": "/dns/allowed";
+    "dns_apps": "/dns/apps";
+    "dns_blocked": "/dns/blocked";
     "dns_cache": "/dns/cache";
     "dns_forwarders": "/dns/forwarders";
     "dns_security": "/dns/security";
@@ -128,6 +131,9 @@ declare module "@elegant-router/types" {
     | "dhcp_options"
     | "dhcp_reservations"
     | "dhcp_scopes"
+    | "dns_allowed"
+    | "dns_apps"
+    | "dns_blocked"
     | "dns_cache"
     | "dns_forwarders"
     | "dns_security"

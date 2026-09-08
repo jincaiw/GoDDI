@@ -23,7 +23,7 @@
         <n-form-item :label="t('dns.forwarders.protocol')">
           <n-select v-model:value="fwdForm.protocol" :options="protocolOptions" />
         </n-form-item>
-        <n-form-item :label="t('dns.forwarders.address')"><n-input v-model:value="fwdForm.address" placeholder="8.8.8.8:53" /></n-form-item>
+        <n-form-item :label="t('dns.forwarders.address')"><n-input v-model:value="fwdForm.address" :placeholder="addressPlaceholder" /></n-form-item>
         <n-form-item :label="t('common.enabled')"><n-switch v-model:value="fwdForm.enabled" /></n-form-item>
         <n-form-item :label="t('common.priority')"><n-input-number v-model:value="fwdForm.priority" :min="0" /></n-form-item>
       </n-form>
@@ -52,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, computed, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
@@ -88,6 +88,16 @@ const protocolOptions = [
 
 const fwdForm = reactive({ name: '', protocol: 'udp', address: '', enabled: true, priority: 0 })
 const condForm = reactive({ domain: '', enabled: true })
+
+// Per-protocol address hints (DoT/DoQ default to :853; DoH is a full URL).
+const addressPlaceholders: Record<string, string> = {
+  udp: '8.8.8.8:53',
+  tcp: '8.8.8.8:53',
+  dot: 'dns.quad9.net:853',
+  doh: 'https://dns.quad9.net/dns-query',
+  doq: 'dns.adguard-dns.com:853',
+}
+const addressPlaceholder = computed(() => addressPlaceholders[fwdForm.protocol] ?? '8.8.8.8:53')
 
 const forwarderColumns = [
   { title: () => t('common.name'), key: 'name' },

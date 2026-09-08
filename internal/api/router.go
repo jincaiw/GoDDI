@@ -170,28 +170,43 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.CreateDNSZone)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Post("/batch-delete", handler.BatchDeleteDNSZones)
 				r.Route("/{id}", func(r chi.Router) {
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.GetDNSZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/", handler.UpdateDNSZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/", handler.DeleteDNSZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/import", handler.ImportZoneFile)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/export", handler.ExportZoneFile)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/sync", handler.SyncSecondaryZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/clone", handler.CloneDNSZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/convert", handler.ConvertDNSZone)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/dnssec", handler.GetDNSSECStatus)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dnssec/enable", handler.EnableDNSSEC)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dnssec/disable", handler.DisableDNSSEC)
-					r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/dnssec/rotate", handler.RotateDNSSECKeys)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/", handler.GetDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/", handler.UpdateDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "delete"), handler.RequireZonePermission("delete")).Delete("/", handler.DeleteDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/import", handler.ImportZoneFile)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/export", handler.ExportZoneFile)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/sync", handler.SyncSecondaryZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("view")).Post("/clone", handler.CloneDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/convert", handler.ConvertDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/dnssec", handler.GetDNSSECStatus)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/dnssec/enable", handler.EnableDNSSEC)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/dnssec/disable", handler.DisableDNSSEC)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/dnssec/rotate", handler.RotateDNSSECKeys)
+					// DNSSEC key lifecycle, DS export and NSEC3 params (Technitium parity).
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/dnssec/ds", handler.GetZoneDSRecords)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/dnssec/keys", handler.GenerateDNSSECKey)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/dnssec/keys/promote", handler.PromoteDNSSECStandbyKeys)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/dnssec/keys/{keyId}", handler.ToggleDNSSECKey)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "delete"), handler.RequireZonePermission("delete")).Delete("/dnssec/keys/{keyId}", handler.DeleteDNSSECKey)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/dnssec/nsec3", handler.GetZoneNSEC3Params)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/dnssec/nsec3", handler.SetZoneNSEC3Params)
+					// Zone enable/disable + history + per-zone permissions (Technitium parity).
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/enable", handler.EnableDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/disable", handler.DisableDNSZone)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/history", handler.GetZoneHistory)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/permissions", handler.GetZonePermissions)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/permissions", handler.SetZonePermissions)
+					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/catalog/members", handler.GetCatalogMembers)
 				})
 			})
 
 			// DNS Records.
 			r.Route("/dns/zones/{zoneId}/records", func(r chi.Router) {
-				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.ListDNSRecords)
-				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.CreateDNSRecord)
-				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/{id}", handler.GetDNSRecord)
-				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/{id}", handler.UpdateDNSRecord)
-				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteDNSRecord)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/", handler.ListDNSRecords)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/", handler.CreateDNSRecord)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/{id}", handler.GetDNSRecord)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/{id}", handler.UpdateDNSRecord)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete"), handler.RequireZonePermission("delete")).Delete("/{id}", handler.DeleteDNSRecord)
 			})
 
 			// TSIG keys (RFC 8945).
@@ -238,6 +253,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.Route("/dns/security/blocklists", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.ListBlockLists)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.CreateBlockList)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Post("/flush", handler.FlushBlockLists)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/{id}", handler.GetBlockList)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Put("/{id}", handler.UpdateBlockList)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteBlockList)
@@ -255,6 +271,9 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.Route("/dns/security/allowlists", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/", handler.ListAllowRules)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/", handler.AddAllowRule)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "write")).Post("/import", handler.ImportAllowRules)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/export", handler.ExportAllowRules)
+				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Post("/flush", handler.FlushAllowRules)
 				r.With(rbac.RequirePermission(rbacMgr, "dns", "delete")).Delete("/{id}", handler.DeleteAllowRule)
 			})
 
@@ -369,6 +388,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard", handler.GetDashboard)
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/dashboard/top", handler.GetDashboardTop)
 			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/stats", handler.GetStats)
+			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/stats/top", handler.GetTopStats)
 
 			// Backup.
 			r.Route("/backup", func(r chi.Router) {

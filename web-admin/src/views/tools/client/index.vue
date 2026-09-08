@@ -32,18 +32,56 @@
         size="small"
       />
     </n-card>
+
+    <!-- Import answer into a local zone (Technitium DNS Client parity) -->
+    <n-modal v-if="showImport" v-model:show="showImport" preset="card" :title="t('dns.client.importToZone')" style="width: 480px;">
+      <n-form :model="importForm" label-placement="left" label-width="100px">
+        <n-form-item :label="t('dns.zones.title')">
+          <n-select
+            v-model:value="importForm.zone_id"
+            :options="zoneOptions"
+            filterable
+            :placeholder="t('dns.client.selectZone')"
+            style="width: 100%;"
+          />
+        </n-form-item>
+        <n-form-item :label="t('dns.records.recordName')">
+          <n-input v-model:value="importForm.name" />
+        </n-form-item>
+        <n-form-item :label="t('dns.records.recordType')">
+          <n-input v-model:value="importForm.type" disabled />
+        </n-form-item>
+        <n-form-item :label="t('dns.records.recordValue')">
+          <n-input v-model:value="importForm.value" type="textarea" :rows="2" />
+        </n-form-item>
+        <n-form-item :label="t('dns.zones.ttl')">
+          <n-input-number v-model:value="importForm.ttl" :min="0" />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="importing" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useMessage } from 'naive-ui'
+import { NButton, NSelect, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
-import { executeDNSQuery, type DNSQueryResponse, type DNSQueryAnswer } from '@/service/api/goddi/dns'
+import {
+  executeDNSQuery, listDNSZones, createDNSRecord,
+  type DNSQueryResponse, type DNSQueryAnswer, type DNSZone,
+} from '@/service/api/goddi/dns'
+import { usePermission } from '@/composables/usePermission'
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 const querying = ref(false)
 const queryResult = ref<DNSQueryResponse | null>(null)
@@ -56,11 +94,32 @@ const queryForm = reactive({
 
 const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(t => ({ label: t, value: t }))
 
+const showImport = ref(false)
+const importing = ref(false)
+const zoneOptions = ref<{ label: string; value: string }[]>([])
+const importForm = reactive({ zone_id: '', name: '', type: 'A', value: '', ttl: 3600 })
+
 const answerColumns = [
   { title: () => t('dns.records.recordName'), key: 'name' },
   { title: () => t('dns.records.recordType'), key: 'type', width: 80 },
   { title: () => t('dns.records.recordValue'), key: 'data' },
   { title: () => t('dns.zones.ttl'), key: 'ttl', width: 80 },
+  {
+    title: () => t('common.actions'),
+    key: 'actions',
+    width: 90,
+    render: (row: DNSQueryAnswer) => h(
+      NButton,
+      {
+        size: 'small',
+        text: true,
+        type: 'primary',
+        disabled: !perm.canWrite('dns'),
+        onClick: () => openImport(row),
+      },
+      { default: () => t('dns.client.importToZone') },
+    ),
+  },
 ]
 
 async function handleQuery() {
@@ -79,6 +138,47 @@ async function handleQuery() {
     message.error(err instanceof Error ? err.message : t('common.failed'))
   } finally {
     querying.value = false
+  }
+}
+
+async function openImport(row: DNSQueryAnswer) {
+  importForm.name = row.name
+  importForm.type = row.type
+  importForm.value = row.data
+  importForm.ttl = row.ttl || 3600
+  showImport.value = true
+  // Lazy-load the zone picker once per modal session.
+  if (zoneOptions.value.length === 0) {
+    try {
+      const result = await listDNSZones({ page: 1, page_size: 100 })
+      zoneOptions.value = (result.data ?? [])
+        .filter((z: DNSZone) => z.type !== 'allowed' && z.type !== 'blocked')
+        .map((z: DNSZone) => ({ label: z.name, value: z.id }))
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : t('common.failed'))
+    }
+  }
+}
+
+async function handleImportSubmit() {
+  if (!importForm.zone_id || !importForm.name || !importForm.value) {
+    message.warning(t('common.required'))
+    return
+  }
+  importing.value = true
+  try {
+    await createDNSRecord(importForm.zone_id, {
+      name: importForm.name,
+      type: importForm.type,
+      value: importForm.value,
+      ttl: importForm.ttl,
+    })
+    message.success(t('common.createSuccess'))
+    showImport.value = false
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    importing.value = false
   }
 }
 </script>

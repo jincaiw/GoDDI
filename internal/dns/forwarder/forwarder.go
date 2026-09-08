@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
 )
 
 // SelectionStrategy defines how upstream servers are selected.
@@ -31,7 +33,7 @@ const (
 type Forwarder struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	Protocol string `json:"protocol"` // udp, tcp
+	Protocol string `json:"protocol"` // udp, tcp, dot, doh, doq
 	Address  string `json:"address"`
 	Enabled  bool   `json:"enabled"`
 	Priority int    `json:"priority"`
@@ -48,6 +50,10 @@ type Forwarder struct {
 	// (and re-derive timeouts) on every exchange. One map per forwarder
 	// keeps SingleInflight dedupe scoped to a single upstream.
 	clients map[string]*dns.Client
+
+	// Encrypted transport state (doh/doq, see upstream_encrypted.go).
+	httpC   *http.Client
+	doqConn *quic.Conn
 }
 
 // IsHealthy returns whether the forwarder is healthy.
@@ -450,9 +456,14 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 
 	start := time.Now()
 
-	client := f.clientFor(proto, fg.timeout)
-
-	resp, _, err := client.ExchangeContext(ctx, msg, parseHostPort(f.Address))
+	var resp *dns.Msg
+	var err error
+	if isEncryptedProtocol(proto) {
+		resp, err = f.exchangeEncrypted(ctx, msg, proto, fg.timeout)
+	} else {
+		client := f.clientFor(proto, fg.timeout)
+		resp, _, err = client.ExchangeContext(ctx, msg, parseHostPort(f.Address))
+	}
 	d := time.Since(start)
 
 	if err != nil {
@@ -525,10 +536,16 @@ func (fg *ForwarderGroup) HealthCheck() {
 		if probeProto == "" {
 			probeProto = "udp"
 		}
-		client := f.clientFor(probeProto, 3*time.Second)
 
 		start := time.Now()
-		resp, _, err := client.Exchange(msg, parseHostPort(f.Address))
+		var resp *dns.Msg
+		var err error
+		if isEncryptedProtocol(probeProto) {
+			resp, err = f.exchangeEncrypted(context.Background(), msg, probeProto, 3*time.Second)
+		} else {
+			client := f.clientFor(probeProto, 3*time.Second)
+			resp, _, err = client.Exchange(msg, parseHostPort(f.Address))
+		}
 		d := time.Since(start)
 
 		f.mu.Lock()

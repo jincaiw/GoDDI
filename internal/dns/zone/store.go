@@ -92,7 +92,7 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	zoneRows, err := s.db.Query(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
-			transfer_policy, update_policy, acl, created_at, updated_at
+			transfer_policy, update_policy, acl, COALESCE(catalog, ''), created_at, updated_at
 		FROM dns_zones WHERE enabled = 1
 	`)
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		if err := zoneRows.Scan(
 			&z.ID, &z.Name, &z.Type, &z.Enabled, &z.DNSSECEnabled, &z.DefaultTTL,
 			&z.SOA_MName, &z.SOA_RName, &z.Serial, &z.Refresh, &z.Retry, &z.Expire, &z.Minimum,
-			&transferPolicy, &updatePolicy, &aclJSON, &z.CreatedAt, &z.UpdatedAt,
+			&transferPolicy, &updatePolicy, &aclJSON, &z.Catalog, &z.CreatedAt, &z.UpdatedAt,
 		); err != nil {
 			slog.Error("zone_store: failed to scan zone", "error", err)
 			continue

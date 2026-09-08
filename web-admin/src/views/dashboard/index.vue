@@ -92,10 +92,16 @@
           <n-radio-button value="hour">{{ t('dashboard.rangeHour') }}</n-radio-button>
           <n-radio-button value="day">{{ t('dashboard.rangeDay') }}</n-radio-button>
           <n-radio-button value="week">{{ t('dashboard.rangeWeek') }}</n-radio-button>
+          <n-radio-button value="month">{{ t('dashboard.rangeMonth') }}</n-radio-button>
+          <n-radio-button value="year">{{ t('dashboard.rangeYear') }}</n-radio-button>
         </n-radio-group>
       </template>
       <n-space v-if="ltStats" :size="24" style="margin-bottom: 8px;" :wrap="true">
         <n-statistic :label="t('dashboard.statsTotal')" :value="ltStats.summary.total" />
+        <n-statistic :label="t('dashboard.statsNoError')" :value="ltStats.summary.noerror" />
+        <n-statistic :label="t('dashboard.statsNxDomain')" :value="ltStats.summary.nxdomain" />
+        <n-statistic :label="t('dashboard.statsServFail')" :value="ltStats.summary.servfail" />
+        <n-statistic :label="t('dashboard.statsRefused')" :value="ltStats.summary.refused" />
         <n-statistic :label="t('dashboard.statsBlocked')" :value="ltStats.summary.blocked" />
         <n-statistic :label="t('dashboard.statsCached')" :value="ltStats.summary.cached" />
         <n-statistic :label="t('dashboard.statsClients')" :value="ltStats.summary.clients" />
@@ -153,7 +159,7 @@ async function loadTop() {
 }
 
 // Long-term statistics (GET /stats, Technitium parity A2).
-const statsRange = ref<'hour' | 'day' | 'week'>('day')
+const statsRange = ref<'hour' | 'day' | 'week' | 'month' | 'year'>('day')
 const ltStats = ref<StatsResponse | null>(null)
 
 async function loadLongTermStats() {

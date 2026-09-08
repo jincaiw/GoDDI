@@ -97,21 +97,6 @@ func CreateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate address format (host:port).
-	if _, _, err := net.SplitHostPort(req.Address); err != nil {
-		response.BadRequest(w, "地址格式无效，应为 host:port 格式")
-		return
-	}
-
-	// SSRF guard: unless dns.allow_private_upstream is enabled, upstreams may
-	// not target loopback/private/link-local addresses.
-	if !dnsAllowPrivateUpstream() {
-		if err := validateUpstreamAddress(req.Address); err != nil {
-			response.BadRequest(w, "无效的上游地址: "+err.Error())
-			return
-		}
-	}
-
 	if req.Protocol == "" {
 		req.Protocol = "udp"
 	}
@@ -120,6 +105,33 @@ func CreateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 	if !validProtocols[req.Protocol] {
 		response.BadRequest(w, "无效的协议类型，支持: udp, tcp, dot, doh, doq")
 		return
+	}
+
+	// Validate address format per protocol: encrypted transports use URL or
+	// host[:port] forms (DoT/DoQ default to port 853), DoH takes a URL.
+	if forwarder.IsEncryptedProtocol(req.Protocol) {
+		// SSRF guard unless dns.allow_private_upstream is enabled.
+		if !dnsAllowPrivateUpstream() {
+			if err := forwarder.ValidateEncryptedAddress(req.Protocol, req.Address); err != nil {
+				response.BadRequest(w, "无效的上游地址: "+err.Error())
+				return
+			}
+		}
+	} else {
+		// Validate address format (host:port).
+		if _, _, err := net.SplitHostPort(req.Address); err != nil {
+			response.BadRequest(w, "地址格式无效，应为 host:port 格式")
+			return
+		}
+
+		// SSRF guard: unless dns.allow_private_upstream is enabled, upstreams may
+		// not target loopback/private/link-local addresses.
+		if !dnsAllowPrivateUpstream() {
+			if err := validateUpstreamAddress(req.Address); err != nil {
+				response.BadRequest(w, "无效的上游地址: "+err.Error())
+				return
+			}
+		}
 	}
 
 	id := uuid.New().String()
@@ -182,24 +194,33 @@ func UpdateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate address format (host:port).
-	if req.Address != "" {
-		if _, _, err := net.SplitHostPort(req.Address); err != nil {
-			response.BadRequest(w, "地址格式无效，应为 host:port 格式")
-			return
-		}
-		if !dnsAllowPrivateUpstream() {
-			if err := validateUpstreamAddress(req.Address); err != nil {
-				response.BadRequest(w, "无效的上游地址: "+err.Error())
-				return
-			}
-		}
-	}
-
 	// Validate protocol.
 	if req.Protocol != "" && !validProtocols[req.Protocol] {
 		response.BadRequest(w, "无效的协议类型，支持: udp, tcp, dot, doh, doq")
 		return
+	}
+
+	// Validate address format per protocol.
+	if req.Address != "" {
+		if forwarder.IsEncryptedProtocol(req.Protocol) {
+			if !dnsAllowPrivateUpstream() {
+				if err := forwarder.ValidateEncryptedAddress(req.Protocol, req.Address); err != nil {
+					response.BadRequest(w, "无效的上游地址: "+err.Error())
+					return
+				}
+			}
+		} else {
+			if _, _, err := net.SplitHostPort(req.Address); err != nil {
+				response.BadRequest(w, "地址格式无效，应为 host:port 格式")
+				return
+			}
+			if !dnsAllowPrivateUpstream() {
+				if err := validateUpstreamAddress(req.Address); err != nil {
+					response.BadRequest(w, "无效的上游地址: "+err.Error())
+					return
+				}
+			}
+		}
 	}
 
 	_, err := DNSServices.DB.Exec(`

@@ -85,12 +85,12 @@ func TestGetStats_RangeAndIndex(t *testing.T) {
 			Start   string `json:"start"`
 			End     string `json:"end"`
 			Summary struct {
-				Total    int64   `json:"total"`
-				NoError  int64   `json:"noerror"`
-				NXDomain int64   `json:"nxdomain"`
-				ServFail int64   `json:"servfail"`
-				Cached   int64   `json:"cached"`
-				Clients  int64   `json:"clients"`
+				Total    int64 `json:"total"`
+				NoError  int64 `json:"noerror"`
+				NXDomain int64 `json:"nxdomain"`
+				ServFail int64 `json:"servfail"`
+				Cached   int64 `json:"cached"`
+				Clients  int64 `json:"clients"`
 			} `json:"summary"`
 			Series []struct {
 				Bucket string `json:"bucket"`

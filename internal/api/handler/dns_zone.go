@@ -12,6 +12,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dns/dnssec"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/rbac"
 	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
 
@@ -580,6 +581,11 @@ func BatchDeleteDNSZones(w http.ResponseWriter, r *http.Request) {
 	mgr := getZoneManager()
 	deleted, failed := 0, make([]string, 0)
 	for _, id := range req.IDs {
+		// Per-zone permission intersection (Technitium parity).
+		if allowed, err := mgr.ZonePermissionAllows(id, rbac.GetUserID(r.Context()), rbac.GetRoleIDs(r.Context()), "delete"); err == nil && !allowed {
+			failed = append(failed, id)
+			continue
+		}
 		if err := mgr.DeleteZone(id); err != nil {
 			failed = append(failed, id)
 			continue

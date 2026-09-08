@@ -3,6 +3,8 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -810,4 +812,141 @@ func LoadClientPoliciesFromDB(db *sql.DB, filterEngine *filter.FilterEngine) err
 
 	filterEngine.PolicyMgr.Reload(policies)
 	return nil
+}
+
+// --- Allowlist / Blocklist flush, import & export (Technitium Allowed /
+// Blocked Zones parity). Import accepts text/plain with one rule per line:
+// "pattern" (default match_type: exact) or "pattern match_type". Lines
+// starting with "#" are comments. ---
+
+// FlushAllowRules deletes every allow rule.
+// POST /api/v1/dns/security/allowlists/flush
+func FlushAllowRules(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil || DNSServices.Filter == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	res, err := DNSServices.DB.Exec("DELETE FROM dns_allow_rules")
+	if err != nil {
+		response.InternalErrorWithLog(w, "清空白名单失败", err)
+		return
+	}
+	deleted, _ := res.RowsAffected()
+	DNSServices.Filter.AllowListMgr.Reload(nil)
+	response.OK(w, map[string]int64{"flushed": deleted})
+}
+
+// ExportAllowRules returns all allow rules as text/plain (one per line).
+// GET /api/v1/dns/security/allowlists/export
+func ExportAllowRules(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.Filter == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	var sb strings.Builder
+	for _, rule := range DNSServices.Filter.AllowListMgr.GetRules() {
+		fmt.Fprintf(&sb, "%s %s\n", rule.Pattern, rule.MatchType)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"allowlist.txt\"")
+	_, _ = w.Write([]byte(sb.String()))
+}
+
+// ImportAllowRules bulk-imports allow rules from a text/plain body.
+// POST /api/v1/dns/security/allowlists/import?overwrite=true
+func ImportAllowRules(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil || DNSServices.Filter == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	overwrite := r.URL.Query().Get("overwrite") == "true"
+	if overwrite {
+		if _, err := DNSServices.DB.Exec("DELETE FROM dns_allow_rules"); err != nil {
+			response.InternalErrorWithLog(w, "清空白名单失败", err)
+			return
+		}
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20)) // 2 MiB cap
+	if err != nil {
+		response.BadRequest(w, "读取请求数据失败")
+		return
+	}
+
+	imported, skipped := 0, 0
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		pattern := fields[0]
+		matchType := "exact"
+		if len(fields) > 1 {
+			matchType = fields[1]
+		}
+		if !validMatchTypes[matchType] || len(pattern) > maxBlockPatternLength {
+			skipped++
+			continue
+		}
+		if matchType == "regex" {
+			if _, err := regexp.Compile(pattern); err != nil {
+				skipped++
+				continue
+			}
+		}
+		if _, err := DNSServices.DB.Exec(
+			"INSERT INTO dns_allow_rules (id, pattern, match_type, enabled) VALUES (?, ?, ?, ?)",
+			uuid.New().String(), pattern, matchType, true); err != nil {
+			skipped++
+			continue
+		}
+		imported++
+	}
+
+	// Rebuild the in-memory allow list from the database.
+	if err := LoadAllowRulesFromDB(DNSServices.DB, DNSServices.Filter); err != nil {
+		slog.Error("import_allow_rules: reload failed", "error", err)
+	}
+	response.OK(w, map[string]int{"imported": imported, "skipped": skipped})
+}
+
+// FlushBlockLists deletes every block list together with its rules.
+// POST /api/v1/dns/security/blocklists/flush
+func FlushBlockLists(w http.ResponseWriter, r *http.Request) {
+	if DNSServices == nil || DNSServices.DB == nil || DNSServices.Filter == nil {
+		response.InternalError(w, "DNS服务未初始化")
+		return
+	}
+
+	tx, err := DNSServices.DB.Begin()
+	if err != nil {
+		response.InternalErrorWithLog(w, "清空黑名单失败", err)
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM dns_block_rules"); err != nil {
+		response.InternalErrorWithLog(w, "清空黑名单规则失败", err)
+		return
+	}
+	res, err := tx.Exec("DELETE FROM dns_block_lists")
+	if err != nil {
+		response.InternalErrorWithLog(w, "清空黑名单失败", err)
+		return
+	}
+	deleted, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		response.InternalErrorWithLog(w, "清空黑名单失败", err)
+		return
+	}
+
+	// Rebuild the in-memory block lists from the database.
+	if err := LoadBlockListsFromDB(DNSServices.DB, DNSServices.Filter); err != nil {
+		slog.Error("flush_block_lists: reload failed", "error", err)
+	}
+	response.OK(w, map[string]int64{"flushed": deleted})
 }

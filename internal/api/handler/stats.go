@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jasonwa/goddi/internal/api/response"
@@ -69,6 +70,12 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	case "week":
 		start = now.AddDate(0, 0, -7)
 		bucketFmt = "%Y-%m-%d %H:00"
+	case "month":
+		start = now.AddDate(0, -1, 0)
+		bucketFmt = "%Y-%m-%d"
+	case "year":
+		start = now.AddDate(-1, 0, 0)
+		bucketFmt = "%Y-%m"
 	case "custom":
 		var err error
 		start, err = time.Parse(time.RFC3339, r.URL.Query().Get("start"))
@@ -180,4 +187,114 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.OK(w, result)
+}
+
+// GetTopStats handles GET /api/v1/stats/top?type=clients|domains|blocked&limit=&range=&start=&end=
+// Aggregates the persistent query log into Top-N lists (Technitium
+// stats/getTop parity). type=clients ranks client IPs; domains ranks
+// queried names; blocked ranks blocked names only.
+func GetTopStats(w http.ResponseWriter, r *http.Request) {
+	if SystemServices == nil || SystemServices.DB == nil {
+		response.InternalError(w, "系统服务未初始化")
+		return
+	}
+	db := SystemServices.DB
+
+	statsType := r.URL.Query().Get("type")
+	switch statsType {
+	case "clients", "domains", "blocked":
+	default:
+		response.BadRequest(w, "type 必须是 clients、domains 或 blocked")
+		return
+	}
+
+	limit := 100
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 1000 {
+		limit = v
+	}
+
+	// Time window: defaults to the last day; same range vocabulary as GetStats.
+	rangeName := r.URL.Query().Get("range")
+	now := time.Now()
+	var start time.Time
+	switch rangeName {
+	case "hour":
+		start = now.Add(-time.Hour)
+	case "week":
+		start = now.AddDate(0, 0, -7)
+	case "month":
+		start = now.AddDate(0, -1, 0)
+	case "year":
+		start = now.AddDate(-1, 0, 0)
+	case "custom":
+		var err error
+		start, err = time.Parse(time.RFC3339, r.URL.Query().Get("start"))
+		if err != nil {
+			response.BadRequest(w, "start 必须是 RFC3339 时间")
+			return
+		}
+		end, err := time.Parse(time.RFC3339, r.URL.Query().Get("end"))
+		if err != nil {
+			response.BadRequest(w, "end 必须是 RFC3339 时间")
+			return
+		}
+		if !end.After(start) {
+			response.BadRequest(w, "end 必须晚于 start")
+			return
+		}
+		now = end
+	default: // "day"
+		start = now.AddDate(0, 0, -1)
+	}
+	startSQL := start.UTC().Format("2006-01-02 15:04:05")
+	endSQL := now.UTC().Format("2006-01-02 15:04:05")
+
+	column := "client_ip"
+	if statsType != "clients" {
+		column = "query_name"
+	}
+
+	query := `
+		SELECT ` + column + ` AS entry, COUNT(*) AS hits
+		FROM dns_query_logs
+		WHERE created_at >= ? AND created_at <= ?`
+	if statsType == "blocked" {
+		query += ` AND blocked = 1`
+	}
+	query += `
+		GROUP BY entry
+		ORDER BY hits DESC
+		LIMIT ?`
+
+	rows, err := db.Query(query, startSQL, endSQL, limit)
+	if err != nil {
+		response.InternalErrorWithLog(w, "Top 统计查询失败", err)
+		return
+	}
+	defer rows.Close()
+
+	type topEntry struct {
+		Entry string `json:"entry"`
+		Hits  int64  `json:"hits"`
+	}
+	entries := make([]topEntry, 0, limit)
+	for rows.Next() {
+		var e topEntry
+		if err := rows.Scan(&e.Entry, &e.Hits); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		response.InternalErrorWithLog(w, "Top 统计迭代失败", err)
+		return
+	}
+
+	response.OK(w, map[string]interface{}{
+		"type":  statsType,
+		"range": rangeName,
+		"start": start.UTC().Format(time.RFC3339),
+		"end":   now.UTC().Format(time.RFC3339),
+		"top":   entries,
+	})
 }

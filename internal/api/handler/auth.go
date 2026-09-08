@@ -373,7 +373,6 @@ func (h *Handlers) UnlockUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 // SetupTOTP handles POST /api/v1/auth/totp/setup
 func (h *Handlers) SetupTOTP(w http.ResponseWriter, r *http.Request) {
 	userID := rbac.GetUserID(r.Context())
