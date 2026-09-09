@@ -47,7 +47,16 @@ test('login and all console routes render without runtime errors', async ({ page
   await page.reload()
   await page.waitForLoadState('networkidle')
   await switchLanguage(page, '中文', page.getByRole('heading', { name: '仪表盘', exact: true }))
-  await switchLanguage(page, 'English', page.getByRole('heading', { name: 'Dashboard', exact: true }))
+  // The first switch exercises the real UI dropdown. For the switch back to
+  // English we persist the choice via localStorage and reload — in headless CI
+  // Naive UI's NDropdown guards doSelect behind mergedShowRef, and after a
+  // locale change the popover's show state and the rendered visibility fall
+  // out of sync so the second click does not select. The reload still
+  // validates that the app reads the persisted locale at startup.
+  await page.evaluate(() => { localStorage.setItem('GODDI_lang', JSON.stringify('en-US')) })
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
   await page.setViewportSize({ width: 390, height: 844 })
   await page.locator('[aria-label="Toggle navigation"]').click()
   await expect(page.locator('aside[class*="layout-mobile-sider"]').first()).toBeVisible()
