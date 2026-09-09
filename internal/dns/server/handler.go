@@ -37,7 +37,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			if req != nil && len(req.Question) > 0 {
 				resp := new(dns.Msg)
 				resp.SetRcode(req, dns.RcodeServerFailure)
-				_ = w.WriteMsg(resp)
+				_ = h.writeResponse(w, req, resp)
 			}
 		}
 	}()
@@ -50,7 +50,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if len(req.Question) == 0 {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeFormatError)
-		if err := w.WriteMsg(resp); err != nil {
+		if err := h.writeResponse(w, req, resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
@@ -66,7 +66,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		if h.server.updateHandler == nil {
 			resp := new(dns.Msg)
 			resp.SetRcode(req, dns.RcodeNotImplemented)
-			_ = w.WriteMsg(resp)
+			_ = h.writeResponse(w, req, resp)
 			return
 		}
 		// Zone-level update ACL.
@@ -75,7 +75,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			slog.Warn("dns_handler: dynamic update denied by zone ACL", "zone", qname, "client", clientIP)
 			resp := new(dns.Msg)
 			resp.SetRcode(req, dns.RcodeRefused)
-			_ = w.WriteMsg(resp)
+			_ = h.writeResponse(w, req, resp)
 			return
 		}
 		resp, err := h.server.updateHandler.HandleUpdateFrom(req, clientIP)
@@ -84,7 +84,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			resp = new(dns.Msg)
 			resp.SetRcode(req, dns.RcodeServerFailure)
 		}
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -105,7 +105,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		if soa := h.server.zoneSOAFor(qname); soa != nil {
 			resp.Answer = []dns.RR{soa}
 		}
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "RATE_LIMITED", start, "", false, false)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp.SetRcode(req, dns.RcodeRefused)
 		AddEDE(resp, EDEFilteredPolicy, "query denied by zone ACL")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REFUSED", start, "", false, false)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 	if found {
@@ -151,7 +151,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp.SetReply(req)
 		resp.Rcode = rcode
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
-		if err := w.WriteMsg(resp); err != nil {
+		if err := h.writeResponse(w, req, resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
@@ -165,7 +165,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if h.server.specialZonesEnabled() && isLocallyServed(qname) {
 		resp := answerLocallyServed(req)
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[resp.Rcode], start, "", false, false)
-		if err := w.WriteMsg(resp); err != nil {
+		if err := h.writeResponse(w, req, resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
@@ -182,7 +182,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp.SetRcode(req, dns.RcodeRefused)
 		AddEDE(resp, EDEFilteredPolicy, "recursion denied by policy")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REFUSED", start, "", false, false)
-		if err := w.WriteMsg(resp); err != nil {
+		if err := h.writeResponse(w, req, resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
@@ -223,7 +223,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			AddEDE(resp, EDECensored, "domain blocked by local policy")
 		}
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, filterResult.ResponseType, start, "", false, true)
-		if err := w.WriteMsg(resp); err != nil {
+		if err := h.writeResponse(w, req, resp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
@@ -240,13 +240,25 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if h.server.cache != nil && !h.server.ecsCacheBypass() && !reqHasDO(req) {
 		cachedMsg, hit, _ := h.server.cache.Get(qname, qtype)
 		if hit {
+			// Query blocking has already run before the cache lookup. Apply the
+			// response-only checks here as well so a cached answer cannot bypass
+			// rebinding or CNAME cloaking protection.
+			if blockReason := h.responseBlockReason(cachedMsg, clientIP); blockReason != "" {
+				blockedResp := filter.GenerateBlockedResponse(req, "NXDOMAIN", "")
+				h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, blockReason, start, "", true, true)
+				if err := h.writeResponse(w, req, blockedResp); err != nil {
+					slog.Debug("dns_handler: write failed", "error", err)
+				}
+				return
+			}
+
 			// SetReply forces Rcode to NOERROR, which would silently turn a
 			// cached NXDOMAIN/SERVFAIL into a success answer.
 			rcode := cachedMsg.Rcode
 			cachedMsg.SetReply(req)
 			cachedMsg.Rcode = rcode
 			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, dns.RcodeToString[cachedMsg.Rcode], start, "", true, false)
-			if err := w.WriteMsg(cachedMsg); err != nil {
+			if err := h.writeResponse(w, req, cachedMsg); err != nil {
 				slog.Debug("dns_handler: write failed", "error", err)
 			}
 			return
@@ -267,34 +279,21 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		errResp.SetRcode(req, dns.RcodeServerFailure)
 		AddEDE(errResp, EDENoReachableAuthority, "all upstream forwarders failed")
 		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "SERVFAIL", start, "", false, false)
-		if err := w.WriteMsg(errResp); err != nil {
+		if err := h.writeResponse(w, req, errResp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
 	}
 
-	// Step 8: DNS Rebinding protection.
-	if h.server.filter.CheckRebindingProtection(resp, clientIP) {
+	// Steps 8-9: apply response-only protections before caching or returning
+	// an upstream response.
+	if blockReason := h.responseBlockReason(resp, clientIP); blockReason != "" {
 		blockedResp := filter.GenerateBlockedResponse(req, "NXDOMAIN", "")
-		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "REBINDING", start, "", false, true)
-		if err := w.WriteMsg(blockedResp); err != nil {
+		h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, blockReason, start, "", false, true)
+		if err := h.writeResponse(w, req, blockedResp); err != nil {
 			slog.Debug("dns_handler: write failed", "error", err)
 		}
 		return
-	}
-
-	// Step 9: CNAME Cloaking protection. Skipped while blocking is
-	// temporarily disabled — cloaking detection is part of the blocking
-	// pipeline.
-	if blockingEnabled, _ := h.server.filter.BlockingStatus(); blockingEnabled {
-		if h.server.filter.CheckCNAMECloaking(resp) {
-			blockedResp := filter.GenerateBlockedResponse(req, "NXDOMAIN", "")
-			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "CNAME_CLOAKING", start, "", false, true)
-			if err := w.WriteMsg(blockedResp); err != nil {
-				slog.Debug("dns_handler: write failed", "error", err)
-			}
-			return
-		}
 	}
 
 	// Step 10: Cache the response. DO-bit responses are not cached: the
@@ -312,29 +311,56 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	rcode := dns.RcodeToString[resp.Rcode]
 	h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, rcode, start, upstream, false, false)
 
-	// Step 12: Write response.
-	// Limit response size for UDP. RFC 6891 §6.2.5: when the response is
-	// larger than the requestor's UDP payload size, the response must
-	// have the TC bit set. The client will then retry over TCP. We must
-	// NOT drop the answer/extra sections: keeping them preserves the
-	// correct wire-format truncation behavior the client expects.
-	if proto == "udp" && resp.Len() > 512 {
-		// Check if EDNS0 UDP size is specified.
-		if opt := req.IsEdns0(); opt != nil {
-			maxSize := int(opt.UDPSize())
-			if maxSize > 512 && resp.Len() > maxSize {
-				resp.Truncated = true
-			}
-		} else {
-			resp.Truncated = true
-		}
-	}
-
-	if err := w.WriteMsg(resp); err != nil {
+	// Step 12: Write response through the transport-aware exit. This performs
+	// real UDP RRset truncation before serialization rather than merely setting
+	// TC on an oversized packet that would still violate the client buffer.
+	if err := h.writeResponse(w, req, resp); err != nil {
 		slog.Debug("dns_handler: write failed", "error", err)
 	}
 
 	_ = duration // Duration already logged via query log.
+}
+
+// writeResponse is the sole DNS response exit for normal requests. UDP is
+// bounded to the request's EDNS advertised payload size (or 512 without EDNS)
+// and uses miekg/dns's RR-aware Truncate implementation to set TC and remove
+// overflow records safely. DoQ uses its own ResponseWriter network name and is
+// intentionally never treated as conventional UDP.
+func (h *DNSHandler) writeResponse(w dns.ResponseWriter, req, resp *dns.Msg) error {
+	if resp == nil {
+		return nil
+	}
+	if w.RemoteAddr().Network() == "udp" {
+		limit := dns.MinMsgSize
+		if opt := req.IsEdns0(); opt != nil && opt.UDPSize() >= dns.MinMsgSize {
+			limit = int(opt.UDPSize())
+		}
+		if resp.Len() > limit {
+			resp.Truncate(limit)
+			// Truncate may leave Compress false if the uncompressed response fit.
+			// Retain compression for normal DNS response efficiency.
+			resp.Compress = true
+		}
+	}
+	return w.WriteMsg(resp)
+}
+
+// responseBlockReason runs the response-only policy checks shared by cache
+// hits, upstream responses, and cache prefetches. Query blocking remains in
+// the handler before cache lookup.
+func (h *DNSHandler) responseBlockReason(resp *dns.Msg, clientIP string) string {
+	return responseBlockReason(h.server.filter, resp, clientIP)
+}
+
+func responseBlockReason(engine *filter.FilterEngine, resp *dns.Msg, clientIP string) string {
+	if engine.CheckRebindingProtection(resp, clientIP) {
+		return "REBINDING"
+	}
+	if blockingEnabled, _ := engine.BlockingStatus(); blockingEnabled &&
+		engine.CheckCNAMECloaking(resp) {
+		return "CNAME_CLOAKING"
+	}
+	return ""
 }
 
 // reqHasDO reports whether the request carries the EDNS DNSSEC OK (DO) bit
@@ -415,14 +441,14 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 	if proto := w.RemoteAddr().Network(); proto != "tcp" {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
 	if h.server.axfrHandler == nil || len(req.Question) == 0 {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -433,7 +459,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		slog.Warn("dns_handler: zone transfer denied by zone ACL", "zone", zoneName, "client", clientIP)
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -442,7 +468,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		slog.Warn("dns_handler: zone transfer denied by ACL", "zone", zoneName, "client", clientIP)
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -456,7 +482,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 				"zone", zoneName, "client", clientIP, "error", err)
 			resp := new(dns.Msg)
 			resp.SetRcode(req, dns.RcodeRefused)
-			_ = w.WriteMsg(resp)
+			_ = h.writeResponse(w, req, resp)
 			return
 		}
 		tsigKeyName = dns.Fqdn(req.IsTsig().Hdr.Name)
@@ -482,7 +508,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		slog.Warn("dns_handler: zone transfer failed", "zone", zoneName, "ixfr", ixfr, "error", err)
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 
@@ -491,7 +517,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 	if len(rrs) == 0 {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeServerFailure)
-		_ = w.WriteMsg(resp)
+		_ = h.writeResponse(w, req, resp)
 		return
 	}
 	for start := 0; start < len(rrs); start += chunk {
@@ -503,7 +529,7 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		msg.SetReply(req)
 		msg.Authoritative = true
 		msg.Answer = rrs[start:end]
-		if err := w.WriteMsg(msg); err != nil {
+		if err := h.writeResponse(w, req, msg); err != nil {
 			slog.Debug("dns_handler: transfer write failed", "error", err)
 			return
 		}

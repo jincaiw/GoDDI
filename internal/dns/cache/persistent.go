@@ -2,7 +2,9 @@ package cache
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -11,9 +13,11 @@ import (
 // PersistentCache wraps Cache with SQLite persistence.
 type PersistentCache struct {
 	*Cache
-	db   *sql.DB
-	quit chan struct{}
-	done chan struct{}
+	db        *sql.DB
+	quit      chan struct{}
+	done      chan struct{}
+	flushMu   sync.Mutex
+	closeOnce sync.Once
 }
 
 // NewPersistentCache creates a cache that persists to SQLite.
@@ -72,7 +76,21 @@ func (pc *PersistentCache) load() {
 			continue
 		}
 
-		pc.Cache.Set(qname, qtype, msg)
+		expiresAt, err := time.ParseInLocation("2006-01-02 15:04:05", expiresAtStr, time.UTC)
+		if err != nil || !expiresAt.After(time.Now()) {
+			continue
+		}
+		t := pc.Cache.currentTunables()
+		pc.Cache.setEntry(&entry{
+			Key:         cacheKey(qname, qtype),
+			QName:       qname,
+			QType:       qtype,
+			Msg:         []byte(responseData),
+			ExpiresAt:   expiresAt,
+			StaleUntil:  expiresAt.Add(time.Duration(t.staleTTL) * time.Second),
+			OriginalTTL: int64(time.Duration(ttl) * time.Second),
+			LastAccess:  time.Now(),
+		})
 		count++
 	}
 	if err := rows.Err(); err != nil {
@@ -92,40 +110,56 @@ func (pc *PersistentCache) flushLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			pc.flush()
+			if err := pc.flush(); err != nil {
+				slog.Error("persistent_cache: periodic flush failed", "error", err)
+			}
 		case <-pc.quit:
 			// Final flush before shutdown.
-			pc.flush()
+			if err := pc.flush(); err != nil {
+				slog.Error("persistent_cache: final flush failed", "error", err)
+			}
 			return
 		}
 	}
 }
 
 // flush writes all cache entries to the database.
-func (pc *PersistentCache) flush() {
+func (pc *PersistentCache) flush() error {
 	if pc.db == nil {
-		return
+		return nil
 	}
 
+	pc.flushMu.Lock()
+	defer pc.flushMu.Unlock()
+
 	entries := pc.Cache.Entries()
-	if len(entries) == 0 {
-		return
-	}
 
 	tx, err := pc.db.Begin()
 	if err != nil {
-		slog.Error("persistent_cache: failed to begin transaction", "error", err)
-		return
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Persistence is an exact snapshot. Removing all rows first prevents
+	// entries deleted from memory (for example by Flush) from reappearing at
+	// the next process start.
+	if _, err := tx.Exec(`DELETE FROM dns_cache`); err != nil {
+		return fmt.Errorf("clear entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit empty snapshot: %w", err)
+		}
+		return nil
+	}
 
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO dns_cache (id, query_name, query_type, response_data, ttl, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		slog.Error("persistent_cache: failed to prepare insert", "error", err)
-		return
+		return fmt.Errorf("prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
@@ -145,21 +179,47 @@ func (pc *PersistentCache) flush() {
 		id := e.Key // Use cache key as ID for simplicity
 
 		if _, err := stmt.Exec(id, e.QName, qtypeStr, string(e.Msg), ttl, e.ExpiresAt.UTC().Format("2006-01-02 15:04:05")); err != nil {
-			slog.Error("persistent_cache: failed to upsert entry", "error", err)
-			continue
+			return fmt.Errorf("upsert entry %q: %w", id, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Error("persistent_cache: failed to commit transaction", "error", err)
-		return
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	slog.Debug("persistent_cache: flushed entries", "count", len(entries))
+	return nil
+}
+
+// Flush removes all in-memory entries and persists the empty snapshot so
+// cleared entries cannot be loaded again after a restart.
+func (pc *PersistentCache) Flush() error {
+	pc.Cache.Flush()
+	return pc.flush()
+}
+
+// Remove deletes a cache entry from memory and SQLite without taking a full
+// persistence snapshot. It is intended for explicit management operations;
+// ordinary internal evictions continue to affect memory only until the next
+// periodic snapshot.
+func (pc *PersistentCache) Remove(qname string, qtype uint16) error {
+	pc.flushMu.Lock()
+	defer pc.flushMu.Unlock()
+
+	pc.Cache.Remove(qname, qtype)
+	if pc.db == nil {
+		return nil
+	}
+	if _, err := pc.db.Exec(`DELETE FROM dns_cache WHERE id = ?`, cacheKey(qname, qtype)); err != nil {
+		return fmt.Errorf("delete entry: %w", err)
+	}
+	return nil
 }
 
 // Close stops the persistent cache and performs a final flush.
 func (pc *PersistentCache) Close() {
-	close(pc.quit)
-	<-pc.done // Wait for flushLoop goroutine to finish.
+	pc.closeOnce.Do(func() {
+		close(pc.quit)
+		<-pc.done // Wait for flushLoop goroutine to finish.
+	})
 }

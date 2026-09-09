@@ -284,16 +284,17 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 				s.mu.Unlock()
 				return nil, false, false
 			}
+			callback := t.onPrefetch
 			s.mu.Unlock()
 
 			// RFC 8767 §5: stale answers should carry a short TTL so the
-			// client retries quickly instead of pinning the stale data.
-			for _, rr := range msg.Answer {
-				rr.Header().Ttl = 30
-			}
-			for _, rr := range msg.Ns {
-				rr.Header().Ttl = 30
-			}
+			// client retries quickly instead of pinning the stale data. Keep
+			// a shorter original TTL short rather than extending it to 30.
+			capTTL(msg, 30)
+			// A stale response must prompt a refresh even when proactive
+			// prefetching is disabled. The shared latch coalesces concurrent
+			// stale hits with any in-flight prefetch for this entry.
+			triggerRefresh(e, callback, qname, qtype)
 			return msg, true, true
 		}
 
@@ -334,37 +335,49 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 		return nil, false, false
 	}
 
-	// RFC 2181 §8: a cache must hand out the *remaining* TTL, not the
-	// TTL it observed when the answer was stored. Without this, every
-	// cache hit renews the original TTL and a client can pin the record
-	// forever by re-querying before expiry.
+	// RFC 2181 §8: a cache must hand out each RR's remaining TTL, not
+	// the TTL observed when the answer was stored. A cache-wide expiry is
+	// still an upper bound, but must not extend shorter RRs in any section.
 	// insertedAt is derived from ExpiresAt - OriginalTTL (see Set).
 	if origTTL > 0 {
 		insertedAt := e.ExpiresAt.Add(-origTTL)
 		elapsed := now.Sub(insertedAt)
 		if elapsed > 0 {
-			remainingSec := uint32((origTTL - elapsed) / time.Second)
-			// Never advertise a TTL past the entry's own expiry.
-			if maxSec := uint32(remaining.Seconds()); remainingSec > maxSec {
-				remainingSec = maxSec
-			}
-			adjustTTL(msg, remainingSec)
+			adjustTTL(msg, elapsed, remaining)
 		}
 	}
 
 	if shouldPrefetch {
-		// Claim the prefetch slot atomically. If two goroutines reach
-		// this point at the same time, exactly one of them wins the
-		// CAS and the other skips the prefetch.
-		if e.prefetching.CompareAndSwap(false, true) {
-			go func() {
-				defer e.prefetching.Store(false)
-				callback(qname, qtype)
-			}()
-		}
+		triggerRefresh(e, callback, qname, qtype)
 	}
 
 	return msg, true, false
+}
+
+// triggerRefresh starts one background refresh for an entry. Its latch is
+// shared by proactive prefetching and stale serving so concurrent callers do
+// not issue duplicate refreshes.
+func triggerRefresh(e *entry, callback func(qname string, qtype uint16), qname string, qtype uint16) {
+	if callback == nil || !e.prefetching.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer e.prefetching.Store(false)
+		callback(qname, qtype)
+	}()
+}
+
+func capTTL(msg *dns.Msg, maximum uint32) {
+	for _, rr := range msg.Answer {
+		if rr.Header().Ttl > maximum {
+			rr.Header().Ttl = maximum
+		}
+	}
+	for _, rr := range msg.Ns {
+		if rr.Header().Ttl > maximum {
+			rr.Header().Ttl = maximum
+		}
+	}
 }
 
 // Set stores a DNS response in the cache.
@@ -400,7 +413,13 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 		LastAccess:  now,
 	}
 
-	s := c.shardFor(key)
+	c.setEntry(e)
+}
+
+// setEntry inserts an entry without changing its absolute expiry. It is used
+// by persistence loading, where recomputing an expiry would revive old data.
+func (c *Cache) setEntry(e *entry) {
+	s := c.shardFor(e.Key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -413,29 +432,55 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 
 	// If the key already exists, remove the old list element so we
 	// don't end up with two entries for the same key.
-	if old, ok := s.entries[key]; ok {
+	if old, ok := s.entries[e.Key]; ok {
 		s.lru.Remove(old)
 	}
 
-	elem := s.lru.PushFront(&lruItem{key: key, entry: e})
-	s.entries[key] = elem
+	elem := s.lru.PushFront(&lruItem{key: e.Key, entry: e})
+	s.entries[e.Key] = elem
 }
 
-// adjustTTL rewrites the TTL of every cached RR (all sections) to the
-// remaining lifetime of the cache entry. OPT pseudo-records are skipped:
-// their TTL field carries EDNS flags, not a lifetime.
-func adjustTTL(msg *dns.Msg, remaining uint32) {
+// adjustTTL reduces every cached RR by elapsed time, capped at the entry's
+// remaining lifetime. This preserves each RR's original TTL and prevents a
+// shorter RRset from being extended by a longer one. OPT pseudo-records are
+// skipped because their TTL field carries EDNS flags, not a lifetime.
+func adjustTTL(msg *dns.Msg, elapsed, entryRemaining time.Duration) {
+	remaining := durationSeconds(entryRemaining)
 	for _, rr := range msg.Answer {
-		rr.Header().Ttl = remaining
+		adjustRRTTL(rr, elapsed, remaining)
 	}
 	for _, rr := range msg.Ns {
-		rr.Header().Ttl = remaining
+		adjustRRTTL(rr, elapsed, remaining)
 	}
 	for _, rr := range msg.Extra {
-		if rr.Header().Rrtype == dns.TypeOPT {
-			continue
+		if rr.Header().Rrtype != dns.TypeOPT {
+			adjustRRTTL(rr, elapsed, remaining)
 		}
-		rr.Header().Ttl = remaining
+	}
+}
+
+func adjustRRTTL(rr dns.RR, elapsed time.Duration, entryRemaining uint32) {
+	elapsedSeconds := durationSeconds(elapsed)
+	ttl := rr.Header().Ttl
+	if elapsedSeconds >= ttl {
+		ttl = 0
+	} else {
+		ttl -= elapsedSeconds
+	}
+	if ttl > entryRemaining {
+		ttl = entryRemaining
+	}
+	rr.Header().Ttl = ttl
+}
+
+func durationSeconds(d time.Duration) uint32 {
+	if d <= 0 {
+		return 0
+	}
+	if seconds := d / time.Second; seconds > time.Duration(math.MaxUint32) {
+		return math.MaxUint32
+	} else {
+		return uint32(seconds)
 	}
 }
 
@@ -443,14 +488,28 @@ func adjustTTL(msg *dns.Msg, remaining uint32) {
 func (c *Cache) effectiveTTL(msg *dns.Msg) int {
 	t := c.currentTunables()
 
-	if len(msg.Answer) == 0 && len(msg.Ns) == 0 {
-		// Negative response: only cache NXDOMAIN and NODATA (NOERROR with no answers).
+	if len(msg.Answer) == 0 {
+		// Negative response: RFC 2308 requires the authority SOA's TTL and
+		// MINIMUM field to bound the cache lifetime. The configured negative
+		// TTL is only a fallback when no SOA is present. A NOERROR referral
+		// has NS records but no SOA and must retain normal positive handling.
 		switch msg.Rcode {
-		case dns.RcodeNameError, dns.RcodeSuccess:
-			return t.negTTL
+		case dns.RcodeNameError:
+			return negativeTTL(msg.Ns, t.negTTL)
+		case dns.RcodeSuccess:
+			for _, rr := range msg.Ns {
+				if _, ok := rr.(*dns.SOA); ok {
+					return negativeTTL(msg.Ns, t.negTTL)
+				}
+			}
+			if len(msg.Ns) == 0 {
+				return t.negTTL
+			}
 		default:
-			// SERVFAIL, REFUSED, etc. — do not cache or use very short TTL.
-			return 5
+			if len(msg.Ns) == 0 {
+				// SERVFAIL, REFUSED, etc. — do not cache or use very short TTL.
+				return 5
+			}
 		}
 	}
 
@@ -474,6 +533,15 @@ func (c *Cache) effectiveTTL(msg *dns.Msg) int {
 		ttl = t.maxTTL
 	}
 	return ttl
+}
+
+func negativeTTL(authority []dns.RR, fallback int) int {
+	for _, rr := range authority {
+		if soa, ok := rr.(*dns.SOA); ok {
+			return int(min(soa.Hdr.Ttl, soa.Minttl))
+		}
+	}
+	return fallback
 }
 
 // evict removes the oldest 10% of entries (LRU). The work is O(k)

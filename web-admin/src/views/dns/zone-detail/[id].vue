@@ -13,7 +13,6 @@
       <n-tabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
         <!-- Records -->
         <n-tab-pane name="records" :tab="t('dns.zones.tabRecords')" display-directive="show">
-          <template #tab-extra />
           <n-space justify="end" style="margin-bottom: 12px;">
             <n-input v-model:value="recordSearch" :placeholder="t('common.search')" clearable style="width: 200px;" @keyup.enter="loadRecords">
               <template #prefix><n-icon><search-outline /></n-icon></template>

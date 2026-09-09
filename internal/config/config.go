@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -198,6 +200,10 @@ type SecurityConfig struct {
 	LoginRateWindow     int    `yaml:"login_rate_window_seconds"` // lockout window in seconds (0 = default 900s)
 	TOTPEnabled         bool   `yaml:"totp_enabled"`
 	RebindingProtection bool   `yaml:"rebinding_protection"`
+	// TrustedProxyCIDRs lists reverse-proxy source networks whose forwarding
+	// headers may identify the original client. Empty means direct-peer mode:
+	// X-Forwarded-For/X-Real-IP are ignored.
+	TrustedProxyCIDRs []string `yaml:"trusted_proxy_cidrs"`
 }
 
 // ProxyConfig holds proxy configuration.
@@ -228,7 +234,9 @@ func LoadFromYAML(path string) (*Config, error) {
 	}
 
 	cfg := DefaultConfig()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parsing config file %s: %w", path, err)
 	}
 
@@ -257,6 +265,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvInt("GODDI_DNS_RATE_LIMIT_RRL_THRESHOLD", &cfg.DNS.RateLimit.RRLThreshold)
 	setEnvBool("GODDI_DNS_DNSSEC_ENABLED", &cfg.DNS.DNSSEC.Enabled)
 	setEnvBool("GODDI_DNS_ALLOW_PRIVATE_UPSTREAM", &cfg.DNS.AllowPrivateUpstream)
+	setEnvStringSlice("GODDI_SECURITY_TRUSTED_PROXY_CIDRS", &cfg.Security.TrustedProxyCIDRs)
 	// Listener address overrides (useful for CI and multi-instance hosts
 	// where binding the default :53 requires root).
 	setEnvString("GODDI_DNS_LISTENERS_UDP_ADDR", &cfg.DNS.Listeners.UDP.Address)
@@ -318,6 +327,12 @@ func Validate(cfg *Config) error {
 
 	// TLS: when the management plane is served over HTTPS the certificate and
 	// key must be present, and the minimum version must be a known value.
+	for _, cidr := range cfg.Security.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("security.trusted_proxy_cidrs contains invalid CIDR %q: %w", cidr, err)
+		}
+	}
+
 	if cfg.Server.TLS.Enabled {
 		if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
 			return fmt.Errorf("server.tls.enabled is true but server.tls.cert_file / server.tls.key_file are not set")
@@ -418,6 +433,7 @@ func DefaultConfig() *Config {
 			LoginRateLimit:      5,
 			TOTPEnabled:         true,
 			RebindingProtection: true,
+			TrustedProxyCIDRs:   nil,
 		},
 		Proxy: ProxyConfig{
 			Enabled: false,
@@ -446,6 +462,21 @@ func setEnvString(key string, target *string) {
 	if val := os.Getenv(key); val != "" {
 		*target = val
 	}
+}
+
+func setEnvStringSlice(key string, target *[]string) {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return
+	}
+	parts := strings.Split(val, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	*target = out
 }
 
 func setEnvBool(key string, target *bool) {

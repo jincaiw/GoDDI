@@ -39,11 +39,6 @@ dns:
     udp:
       enabled: true
       address: ":53"
-  # DNSSEC is EXPERIMENTAL: enabling a zone only flags it and generates keys;
-  # answers carry no RRSIG/DNSKEY yet, so validating resolvers treat the zone
-  # as Bogus. Keep disabled unless you accept that.
-  dnssec:
-    enabled: false
     tcp:
       enabled: true
       address: ":53"
@@ -62,6 +57,11 @@ dns:
       address: ":853"
       cert_file: ""
       key_file: ""
+  # DNSSEC is EXPERIMENTAL: enabling a zone only flags it and generates keys;
+  # answers carry no RRSIG/DNSKEY yet, so validating resolvers treat the zone
+  # as Bogus. Keep disabled unless you accept that.
+  dnssec:
+    enabled: false
 
 cache:
   enabled: true
@@ -101,6 +101,9 @@ security:
   login_rate_limit: 5                       # Max login attempts per minute per IP
   totp_enabled: true
   rebinding_protection: true
+  # Reverse-proxy source CIDRs allowed to supply X-Forwarded-For/X-Real-IP.
+  # Keep empty for direct management-plane access; clients cannot spoof IPs.
+  trusted_proxy_cidrs: []
 
 proxy:
   enabled: false

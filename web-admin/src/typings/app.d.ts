@@ -575,12 +575,18 @@ declare namespace App {
         rangeHour: string;
         rangeDay: string;
         rangeWeek: string;
+        rangeMonth: string;
+        rangeYear: string;
         topClients: string;
         topDomains: string;
         topBlocked: string;
         rcodes: string;
         longTermStats: string;
         statsTotal: string;
+        statsNoError: string;
+        statsNxDomain: string;
+        statsServFail: string;
+        statsRefused: string;
         statsBlocked: string;
         statsCached: string;
         statsClients: string;
@@ -605,6 +611,32 @@ declare namespace App {
           aclAllowUpdate: string;
           aclNotify: string;
           aclHint: string;
+          queryAccess: string;
+          queryAccessDefault: string;
+          queryAccessAllow: string;
+          queryAccessDeny: string;
+          queryAccessPrivate: string;
+          tabRecords: string;
+          tabOptions: string;
+          tabPermissions: string;
+          tabHistory: string;
+          tabDnssec: string;
+          permAdd: string;
+          permPrincipalType: string;
+          permPrincipalUser: string;
+          permPrincipalGroup: string;
+          permPrincipalId: string;
+          permView: string;
+          permModify: string;
+          permDelete: string;
+          permHint: string;
+          catalogTitle: string;
+          catalogJoin: string;
+          catalogNone: string;
+          catalogHint: string;
+          catalogMembers: string;
+          catalogMembersEmpty: string;
+          historyEmpty: string;
           records: string;
           dnssec: string;
           createZone: string;
@@ -623,6 +655,15 @@ declare namespace App {
           enableDnssec: string;
           disableDnssec: string;
           rotateKeys: string;
+          dnssecGenerateKey: string;
+          dnssecPromote: string;
+          dnssecShowDs: string;
+          dnssecDsTitle: string;
+          dnssecNsec3Title: string;
+          dnssecNsec3Iterations: string;
+          dnssecNsec3Salt: string;
+          dnssecNsec3Optout: string;
+          dnssecNsec3Hint: string;
           dnssecExperimentalHint: string;
           clone: string;
           cloneTitle: string;
@@ -656,6 +697,11 @@ declare namespace App {
           createForwarder: string;
           createConditional: string;
         }
+        apps: {
+          title: string;
+          notAvailable: string;
+          hint: string;
+        }
         security: {
           title: string;
           blockLists: string;
@@ -683,6 +729,14 @@ declare namespace App {
           fetchFailed: string;
           refresh: string;
           refreshSuccess: string;
+          allowedTitle: string;
+          blockedTitle: string;
+          flush: string;
+          flushConfirm: string;
+          flushSuccess: string;
+          importRules: string;
+          exportRules: string;
+          importSuccess: string;
         }
         cache: {
           title: string;
@@ -710,6 +764,8 @@ declare namespace App {
           response: string;
           queryTime: string;
           server: string;
+          importToZone: string;
+          selectZone: string;
         }
       };
       dhcp: {

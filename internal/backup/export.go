@@ -10,12 +10,20 @@ import (
 func ExportDNS(db *sql.DB) (json.RawMessage, error) {
 	data := map[string]interface{}{}
 
-	// Export zones.
-	zones, err := exportTable(db, "SELECT id, name, type, enabled, dnssec_enabled, default_ttl, soa_mname, soa_rname, serial, refresh, retry, expire, minimum, transfer_policy, update_policy, created_at, updated_at FROM dns_zones")
+	// Export zones, including ACLs. A missing ACL field during restore is
+	// rejected rather than interpreted as an unrestricted zone.
+	zones, err := exportTable(db, "SELECT id, name, type, enabled, dnssec_enabled, default_ttl, soa_mname, soa_rname, serial, refresh, retry, expire, minimum, transfer_policy, update_policy, acl, created_at, updated_at FROM dns_zones")
 	if err != nil {
 		return nil, fmt.Errorf("exporting zones: %w", err)
 	}
 	data["zones"] = zones
+
+	// Export per-zone authorization rows after their parent zones.
+	zonePermissions, err := exportTable(db, "SELECT id, zone_id, principal_type, principal_id, can_view, can_modify, can_delete, created_at, updated_at FROM dns_zone_permissions")
+	if err != nil {
+		return nil, fmt.Errorf("exporting zone permissions: %w", err)
+	}
+	data["zone_permissions"] = zonePermissions
 
 	// Export records.
 	records, err := exportTable(db, "SELECT id, zone_id, name, type, value, ttl, priority, weight, port, enabled, comment, tags, tag, flag, owner, expires_at, created_at, updated_at FROM dns_records")

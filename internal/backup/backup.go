@@ -588,6 +588,7 @@ type execOrQuery interface {
 func restoreDNS(db execOrQuery, data json.RawMessage) error {
 	var d struct {
 		Zones                 []map[string]interface{} `json:"zones"`
+		ZonePermissions       json.RawMessage          `json:"zone_permissions"`
 		Records               []map[string]interface{} `json:"records"`
 		Forwarders            []map[string]interface{} `json:"forwarders"`
 		ConditionalForwarders []map[string]interface{} `json:"conditional_forwarders"`
@@ -595,14 +596,31 @@ func restoreDNS(db execOrQuery, data json.RawMessage) error {
 	if err := json.Unmarshal(data, &d); err != nil {
 		return fmt.Errorf("parsing DNS backup: %w", err)
 	}
-	for _, table := range []string{"dns_records", "dns_conditional_forwarders", "dns_forwarders", "dns_zones"} {
+	if len(d.ZonePermissions) == 0 || strings.TrimSpace(string(d.ZonePermissions)) == "null" {
+		return errors.New("DNS backup lacks zone_permissions; refusing restore because it could remove existing per-zone access restrictions")
+	}
+	var zonePermissions []map[string]interface{}
+	if err := json.Unmarshal(d.ZonePermissions, &zonePermissions); err != nil {
+		return fmt.Errorf("parsing DNS zone permissions: %w", err)
+	}
+	for i, zone := range d.Zones {
+		if _, ok := zone["acl"]; !ok {
+			return fmt.Errorf("DNS backup zone %d lacks acl; refusing restore because it could remove existing zone ACL restrictions", i)
+		}
+	}
+	for _, table := range []string{"dns_zone_permissions", "dns_records", "dns_conditional_forwarders", "dns_forwarders", "dns_zones"} {
 		if _, err := db.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("clearing %s: %w", table, err)
 		}
 	}
 	if err := restoreRows(db, "dns_zones", d.Zones,
-		[]string{"id", "name", "type", "enabled", "dnssec_enabled", "default_ttl", "soa_mname", "soa_rname", "serial", "refresh", "retry", "expire", "minimum", "transfer_policy", "update_policy", "created_at", "updated_at"},
+		[]string{"id", "name", "type", "enabled", "dnssec_enabled", "default_ttl", "soa_mname", "soa_rname", "serial", "refresh", "retry", "expire", "minimum", "transfer_policy", "update_policy", "acl", "created_at", "updated_at"},
 		map[string]interface{}{"enabled": true, "dnssec_enabled": false, "default_ttl": 3600, "soa_mname": "ns1.example.com", "soa_rname": "admin.example.com", "serial": 1, "refresh": 3600, "retry": 600, "expire": 86400, "minimum": 300}); err != nil {
+		return err
+	}
+	if err := restoreRows(db, "dns_zone_permissions", zonePermissions,
+		[]string{"id", "zone_id", "principal_type", "principal_id", "can_view", "can_modify", "can_delete", "created_at", "updated_at"},
+		map[string]interface{}{"can_view": true, "can_modify": false, "can_delete": false}); err != nil {
 		return err
 	}
 	if err := restoreRows(db, "dns_records", d.Records,

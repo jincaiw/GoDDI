@@ -47,6 +47,13 @@ func (d *DoHServer) ListenAndServeTLS() error {
 	return d.httpSrv.ListenAndServeTLS("", "")
 }
 
+// ServeTLS serves HTTPS using an already-bound listener. Binding is kept
+// outside the serving goroutine so the DNS startup path can report an address
+// conflict before it reports the service as ready.
+func (d *DoHServer) ServeTLS(listener net.Listener) error {
+	return d.httpSrv.ServeTLS(listener, "", "")
+}
+
 // Shutdown gracefully stops the HTTP listener.
 func (d *DoHServer) Shutdown(ctx context.Context) error {
 	return d.httpSrv.Shutdown(ctx)

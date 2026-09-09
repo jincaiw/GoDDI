@@ -107,7 +107,8 @@ async function handleImportFile(e: Event) {
   try {
     const text = await file.text()
     const res = await importAllowRules(text)
-    message.success(`${t('dns.security.importSuccess')} (${res.imported}, skipped ${res.skipped})`)
+    const result = res.data
+    message.success(`${t('dns.security.importSuccess')} (${result.imported}, skipped ${result.skipped})`)
     load()
   } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally {
     input.value = ''

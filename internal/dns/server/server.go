@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -323,6 +324,13 @@ func (s *Server) Prefetch(qname string, qtype uint16) {
 	if err != nil || resp == nil {
 		return
 	}
+
+	// Prefetch has no client context. Use a public sentinel so rebinding
+	// protection rejects private-address responses before they can enter the
+	// shared cache; client-specific enforcement still runs on every hit.
+	if responseBlockReason(s.filter, resp, "8.8.8.8") != "" {
+		return
+	}
 	s.cache.Set(qname, qtype, resp)
 }
 
@@ -400,8 +408,14 @@ func (s *Server) tsigSnapshot() map[string]string {
 	return out
 }
 
-// Start starts the DNS server (UDP and TCP listeners).
-func (s *Server) Start(ctx context.Context) error {
+// Start binds every enabled listener before serving requests. This makes a
+// successful return a readiness guarantee: no configured listener can fail its
+// initial bind asynchronously after the process has announced itself running.
+func (s *Server) Start(ctx context.Context) (err error) {
+	if err := s.validateTLSListenerConfigs(); err != nil {
+		return err
+	}
+
 	handler := &DNSHandler{server: s}
 	s.handler = handler
 
@@ -409,65 +423,123 @@ func (s *Server) Start(ctx context.Context) error {
 	tsigSecrets := s.tsigSecrets
 	s.tsigMu.Unlock()
 
-	// Start UDP listener.
+	var udpConn net.PacketConn
+	var tcpListener, dotListener net.Listener
+	var dohListener net.Listener
+	var doqConn net.PacketConn
+	cleanupBound := func() {
+		for _, closer := range []io.Closer{udpConn, tcpListener, dotListener, dohListener, doqConn} {
+			if closer != nil {
+				_ = closer.Close()
+			}
+		}
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		cleanupBound()
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if s.dotServer != nil {
+			_ = s.dotServer.ShutdownContext(rollbackCtx)
+			s.dotServer = nil
+		}
+		if s.dohServer != nil {
+			_ = s.dohServer.Shutdown(rollbackCtx)
+			s.dohServer = nil
+		}
+		if s.doqServer != nil {
+			_ = s.doqServer.Shutdown()
+			s.doqServer = nil
+		}
+		s.udpServer = nil
+		s.tcpServer = nil
+		s.handler = nil
+	}()
+
 	if s.cfg.DNS.Listeners.UDP.Enabled {
-		s.udpServer = &dns.Server{
-			Addr:    s.cfg.DNS.Listeners.UDP.Address,
-			Net:     "udp",
-			Handler: handler,
+		udpConn, err = net.ListenPacket("udp", s.cfg.DNS.Listeners.UDP.Address)
+		if err != nil {
+			return fmt.Errorf("binding UDP listener %s: %w", s.cfg.DNS.Listeners.UDP.Address, err)
 		}
-		go func() {
-			slog.Info("dns_server: starting UDP listener", "addr", s.cfg.DNS.Listeners.UDP.Address)
-			if err := s.udpServer.ListenAndServe(); err != nil {
-				slog.Error("dns_server: UDP listener error", "error", err)
-			}
-		}()
+		s.udpServer = &dns.Server{PacketConn: udpConn, Handler: handler}
 	}
-
-	// Start TCP listener.
 	if s.cfg.DNS.Listeners.TCP.Enabled {
-		s.tcpServer = &dns.Server{
-			Addr:    s.cfg.DNS.Listeners.TCP.Address,
-			Net:     "tcp",
-			Handler: handler,
-			// RFC 8945: verify inbound TSIG-signed requests and sign
-			// the matching responses (zone transfers, NOTIFY).
-			TsigSecret: tsigSecrets,
+		tcpListener, err = net.Listen("tcp", s.cfg.DNS.Listeners.TCP.Address)
+		if err != nil {
+			return fmt.Errorf("binding TCP listener %s: %w", s.cfg.DNS.Listeners.TCP.Address, err)
 		}
-		go func() {
-			slog.Info("dns_server: starting TCP listener", "addr", s.cfg.DNS.Listeners.TCP.Address)
-			if err := s.tcpServer.ListenAndServe(); err != nil {
-				slog.Error("dns_server: TCP listener error", "error", err)
-			}
-		}()
+		s.tcpServer = &dns.Server{Listener: tcpListener, Handler: handler, TsigSecret: tsigSecrets}
 	}
-
-	// Start DoT (DNS-over-TLS, RFC 7858) listener.
 	if s.cfg.DNS.Listeners.DOT.Enabled {
-		if err := s.startDoT(handler); err != nil {
-			slog.Error("dns_server: DoT listener failed to start", "error", err)
+		dotListener, err = net.Listen("tcp", s.cfg.DNS.Listeners.DOT.Address)
+		if err != nil {
+			return fmt.Errorf("binding DoT listener %s: %w", s.cfg.DNS.Listeners.DOT.Address, err)
+		}
+		if err := s.startDoTWithListener(handler, dotListener); err != nil {
+			return fmt.Errorf("starting DoT listener: %w", err)
 		}
 	}
-
-	// Start DoH (DNS-over-HTTPS, RFC 8484) listener.
 	if s.cfg.DNS.Listeners.DOH.Enabled {
-		if err := s.startDoH(handler); err != nil {
-			slog.Error("dns_server: DoH listener failed to start", "error", err)
+		dohListener, err = net.Listen("tcp", s.cfg.DNS.Listeners.DOH.Address)
+		if err != nil {
+			return fmt.Errorf("binding DoH listener %s: %w", s.cfg.DNS.Listeners.DOH.Address, err)
+		}
+		if err := s.startDoHWithListener(handler, dohListener); err != nil {
+			return fmt.Errorf("starting DoH listener: %w", err)
+		}
+	}
+	if s.cfg.DNS.Listeners.DOQ.Enabled {
+		doqConn, err = net.ListenPacket("udp", s.cfg.DNS.Listeners.DOQ.Address)
+		if err != nil {
+			return fmt.Errorf("binding DoQ listener %s: %w", s.cfg.DNS.Listeners.DOQ.Address, err)
+		}
+		if err := s.startDoQWithConn(handler, doqConn); err != nil {
+			return fmt.Errorf("starting DoQ listener: %w", err)
 		}
 	}
 
-	// Start DoQ (DNS-over-QUIC, RFC 9250) listener.
-	if s.cfg.DNS.Listeners.DOQ.Enabled {
-		if err := s.startDoQ(handler); err != nil {
-			slog.Error("dns_server: DoQ listener failed to start", "error", err)
-		}
+	if s.udpServer != nil {
+		go s.serveDNSServer("UDP", s.udpServer)
+	}
+	if s.tcpServer != nil {
+		go s.serveDNSServer("TCP", s.tcpServer)
 	}
 
 	s.mu.Lock()
 	s.running = true
 	s.mu.Unlock()
-
 	slog.Info("dns_server: started successfully")
+	return nil
+}
+
+func (s *Server) serveDNSServer(name string, server *dns.Server) {
+	slog.Info("dns_server: starting listener", "listener", name, "addr", server.Addr)
+	if err := server.ActivateAndServe(); err != nil {
+		slog.Error("dns_server: listener error", "listener", name, "error", err)
+	}
+}
+
+// validateTLSListenerConfigs verifies certificate material before any listener
+// starts so Start cannot report success with an unusable encrypted endpoint.
+func (s *Server) validateTLSListenerConfigs() error {
+	listeners := []struct {
+		name string
+		cfg  config.DNSListenerTLSConfig
+	}{
+		{name: "DoT", cfg: s.cfg.DNS.Listeners.DOT},
+		{name: "DoH", cfg: s.cfg.DNS.Listeners.DOH},
+		{name: "DoQ", cfg: s.cfg.DNS.Listeners.DOQ},
+	}
+	for _, listener := range listeners {
+		if !listener.cfg.Enabled {
+			continue
+		}
+		if _, err := loadTLSConfig(listener.cfg.CertFile, listener.cfg.KeyFile); err != nil {
+			return fmt.Errorf("invalid %s TLS configuration: %w", listener.name, err)
+		}
+	}
 	return nil
 }
 
@@ -486,28 +558,49 @@ func loadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 // startDoT starts the DNS-over-TLS listener (tcp-tls).
 func (s *Server) startDoT(handler dns.Handler) error {
 	cfg := s.cfg.DNS.Listeners.DOT
+	listener, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		return err
+	}
+	if err := s.startDoTWithListener(handler, listener); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) startDoTWithListener(handler dns.Handler, listener net.Listener) error {
+	cfg := s.cfg.DNS.Listeners.DOT
 	tlsCfg, err := loadTLSConfig(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
 		return err
 	}
 	s.dotServer = &dns.Server{
-		Addr:       cfg.Address,
+		Listener:   listener,
 		Net:        "tcp-tls",
 		Handler:    handler,
 		TLSConfig:  tlsCfg,
 		TsigSecret: s.tsigSnapshot(),
 	}
-	go func() {
-		slog.Info("dns_server: starting DoT listener", "addr", cfg.Address)
-		if err := s.dotServer.ListenAndServe(); err != nil {
-			slog.Error("dns_server: DoT listener error", "error", err)
-		}
-	}()
+	go s.serveDNSServer("DoT", s.dotServer)
 	return nil
 }
 
 // startDoQ starts the DNS-over-QUIC listener (RFC 9250).
 func (s *Server) startDoQ(handler dns.Handler) error {
+	cfg := s.cfg.DNS.Listeners.DOQ
+	conn, err := net.ListenPacket("udp", cfg.Address)
+	if err != nil {
+		return err
+	}
+	if err := s.startDoQWithConn(handler, conn); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) startDoQWithConn(handler dns.Handler, conn net.PacketConn) error {
 	cfg := s.cfg.DNS.Listeners.DOQ
 	tlsCfg, err := loadTLSConfig(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
@@ -515,7 +608,7 @@ func (s *Server) startDoQ(handler dns.Handler) error {
 	}
 	s.doqServer = NewDoQServer(cfg.Address, tlsCfg, handler)
 	go func() {
-		if err := s.doqServer.ListenAndServe(); err != nil {
+		if err := s.doqServer.Serve(conn); err != nil {
 			slog.Error("dns_server: DoQ listener error", "error", err)
 		}
 	}()
@@ -525,26 +618,63 @@ func (s *Server) startDoQ(handler dns.Handler) error {
 // startDoH starts the DNS-over-HTTPS listener (RFC 8484).
 func (s *Server) startDoH(handler dns.Handler) error {
 	cfg := s.cfg.DNS.Listeners.DOH
+	listener, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		return err
+	}
+	if err := s.startDoHWithListener(handler, listener); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) startDoHWithListener(handler dns.Handler, listener net.Listener) error {
+	cfg := s.cfg.DNS.Listeners.DOH
 	tlsCfg, err := loadTLSConfig(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
 		return err
 	}
 	s.dohServer = NewDoHServer(cfg.Address, tlsCfg, handler)
 	go func() {
-		slog.Info("dns_server: starting DoH listener", "addr", cfg.Address)
-		if err := s.dohServer.ListenAndServeTLS(); err != nil && err != http.ErrServerClosed {
+		slog.Info("dns_server: starting DoH listener", "addr", listener.Addr())
+		if err := s.dohServer.ServeTLS(listener); err != nil && err != http.ErrServerClosed {
 			slog.Error("dns_server: DoH listener error", "error", err)
 		}
 	}()
 	return nil
 }
 
-// SetListenerConfig hot-updates the DoT ("dot") or DoH ("doh") listener
-// configuration. The change takes effect immediately when followed by
-// RestartListener, or on next startup otherwise.
+// SetListenerConfig validates an encrypted listener configuration before
+// storing it. It does not restart the listener; callers should normally use
+// ApplyListenerConfig for an atomic validate/start/swap update.
 func (s *Server) SetListenerConfig(kind string, cfg config.DNSListenerTLSConfig) error {
 	s.listenerMu.Lock()
 	defer s.listenerMu.Unlock()
+	if err := validateListenerKind(kind, cfg); err != nil {
+		return err
+	}
+	s.setListenerConfig(kind, cfg)
+	return nil
+}
+
+func validateListenerKind(kind string, cfg config.DNSListenerTLSConfig) error {
+	switch kind {
+	case "dot", "doh", "doq":
+	default:
+		return fmt.Errorf("unknown listener kind: %s", kind)
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.Address == "" {
+		return fmt.Errorf("%s listener requires address", kind)
+	}
+	_, err := loadTLSConfig(cfg.CertFile, cfg.KeyFile)
+	return err
+}
+
+func (s *Server) setListenerConfig(kind string, cfg config.DNSListenerTLSConfig) {
 	switch kind {
 	case "dot":
 		s.cfg.DNS.Listeners.DOT = cfg
@@ -552,10 +682,146 @@ func (s *Server) SetListenerConfig(kind string, cfg config.DNSListenerTLSConfig)
 		s.cfg.DNS.Listeners.DOH = cfg
 	case "doq":
 		s.cfg.DNS.Listeners.DOQ = cfg
+	}
+}
+
+// ApplyListenerConfig validates the replacement, starts it on its new socket,
+// then stops the prior listener. If validation or the new bind fails, the
+// existing listener and its in-memory configuration remain intact.
+func (s *Server) ApplyListenerConfig(kind string, cfg config.DNSListenerTLSConfig) error {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	if err := validateListenerKind(kind, cfg); err != nil {
+		return err
+	}
+	if s.handler == nil {
+		s.setListenerConfig(kind, cfg)
+		return nil
+	}
+
+	previous := s.listenerConfig(kind)
+	// A persisted update is also delivered through the settings subscriber
+	// after the API has already applied it. Treat the identical configuration
+	// as a no-op so that confirmation persistence never causes a second
+	// stop/start cycle or unnecessary availability gap.
+	if previous == cfg {
+		return nil
+	}
+	if !cfg.Enabled {
+		if err := s.stopListenerLocked(kind); err != nil {
+			return err
+		}
+		s.setListenerConfig(kind, cfg)
+		return nil
+	}
+
+	// Binding the same address while the old listener is active is impossible.
+	// Stop only in this special case, and restore the old endpoint if the new
+	// listener then fails to launch.
+	if previous.Enabled && previous.Address == cfg.Address {
+		if err := s.stopListenerLocked(kind); err != nil {
+			return err
+		}
+		s.setListenerConfig(kind, cfg)
+		if err := s.startListenerLocked(kind); err != nil {
+			s.setListenerConfig(kind, previous)
+			if rollbackErr := s.startListenerLocked(kind); rollbackErr != nil {
+				return fmt.Errorf("starting replacement: %w; restoring prior listener: %v", err, rollbackErr)
+			}
+			return fmt.Errorf("starting replacement: %w", err)
+		}
+		return nil
+	}
+
+	// Different-address replacement can bind first, avoiding downtime on an
+	// invalid or occupied new address.
+	oldServer := s.detachListener(kind)
+	s.setListenerConfig(kind, cfg)
+	if err := s.startListenerLocked(kind); err != nil {
+		s.setListenerConfig(kind, previous)
+		s.restoreListener(kind, oldServer)
+		return fmt.Errorf("starting replacement: %w", err)
+	}
+	if err := shutdownDetachedListener(kind, oldServer); err != nil {
+		slog.Warn("dns_server: prior listener shutdown warning", "kind", kind, "error", err)
+	}
+	return nil
+}
+
+func (s *Server) listenerConfig(kind string) config.DNSListenerTLSConfig {
+	switch kind {
+	case "dot":
+		return s.cfg.DNS.Listeners.DOT
+	case "doh":
+		return s.cfg.DNS.Listeners.DOH
+	default:
+		return s.cfg.DNS.Listeners.DOQ
+	}
+}
+
+func (s *Server) detachListener(kind string) any {
+	switch kind {
+	case "dot":
+		old := s.dotServer
+		s.dotServer = nil
+		return old
+	case "doh":
+		old := s.dohServer
+		s.dohServer = nil
+		return old
+	default:
+		old := s.doqServer
+		s.doqServer = nil
+		return old
+	}
+}
+
+func (s *Server) restoreListener(kind string, old any) {
+	switch kind {
+	case "dot":
+		s.dotServer, _ = old.(*dns.Server)
+	case "doh":
+		s.dohServer, _ = old.(*DoHServer)
+	case "doq":
+		s.doqServer, _ = old.(*DoQServer)
+	}
+}
+
+func shutdownDetachedListener(kind string, old any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	switch srv := old.(type) {
+	case *dns.Server:
+		if srv != nil {
+			return srv.ShutdownContext(ctx)
+		}
+	case *DoHServer:
+		if srv != nil {
+			return srv.Shutdown(ctx)
+		}
+	case *DoQServer:
+		if srv != nil {
+			return srv.Shutdown()
+		}
+	}
+	return nil
+}
+
+func (s *Server) stopListenerLocked(kind string) error {
+	return shutdownDetachedListener(kind, s.detachListener(kind))
+}
+
+func (s *Server) startListenerLocked(kind string) error {
+	switch kind {
+	case "dot":
+		return s.startDoT(s.handler)
+	case "doh":
+		return s.startDoH(s.handler)
+	case "doq":
+		return s.startDoQ(s.handler)
 	default:
 		return fmt.Errorf("unknown listener kind: %s", kind)
 	}
-	return nil
 }
 
 // RestartListener stops and (if enabled) restarts the encrypted listener
@@ -742,9 +1008,12 @@ func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string
 			resp.Authoritative = true
 			return resp, false, true
 		}
-		// Zone match but no record: answer authoritatively (NXDOMAIN or
-		// NODATA with SOA). Returning false here would leak queries for
-		// names inside local zones to upstream resolvers.
+		// Forward and stub zones delegate record misses to their configured
+		// upstreams. Other local zone types retain authoritative negative
+		// answers to avoid leaking names to recursive resolution.
+		if s.zoneStore.IsForwardingZone(qname) {
+			return nil, false, false
+		}
 		if zoneName := s.zoneStore.MatchingZone(qname); zoneName != "" {
 			resp := new(dns.Msg)
 			resp.Authoritative = true

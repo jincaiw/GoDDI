@@ -122,72 +122,102 @@ func CORS(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// buildCORSWhitelist builds the list of allowed origins from config.
-// In development mode (localhost/127.0.0.1), all localhost origins on any
-// port are allowed. Production mode (GODDI_ENV=production) NEVER enables
-// the wildcard localhost dev convenience.
-func buildCORSWhitelist(cfg *config.Config) []string {
-	origins := []string{cfg.Server.PublicURL}
+type corsOrigin struct {
+	scheme  string
+	host    string
+	port    string
+	anyPort bool
+}
 
-	// Production environments must never get the dev-mode wildcard.
+// buildCORSWhitelist builds the list of allowed origins from config.
+// In development mode, a loopback PublicURL explicitly enables all ports for
+// localhost, 127.0.0.1, and ::1. Production mode (GODDI_ENV=production) never
+// enables this development convenience.
+func buildCORSWhitelist(cfg *config.Config) []corsOrigin {
+	origins := make([]corsOrigin, 0, 7)
+	if configuredOrigin, ok := parseCORSOrigin(cfg.Server.PublicURL, false); ok {
+		origins = append(origins, configuredOrigin)
+	}
+
 	if os.Getenv("GODDI_ENV") == "production" {
 		return origins
 	}
 
-	// Parse PublicURL and compare hostnames. Only treat as "dev" when the
-	// configured origin's hostname is exactly localhost or an IPv4 loopback
-	// (127.0.0.1). This avoids accidentally enabling dev mode for a
-	// hostname that merely contains the substring "localhost".
-	pubURL := cfg.Server.PublicURL
-	parsed, err := url.Parse(pubURL)
-	isDev := false
-	if err == nil && parsed.Hostname() != "" {
-		host := parsed.Hostname()
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-			isDev = true
-		}
-	}
-	if isDev {
-		// Allow any localhost origin on any port in development.
-		for _, scheme := range []string{"http", "https"} {
-			for _, host := range []string{"localhost", "127.0.0.1"} {
-				origins = append(origins, scheme+"://"+host)
-			}
-		}
+	configuredOrigin, ok := parseCORSOrigin(cfg.Server.PublicURL, false)
+	if !ok || !isLoopbackOriginHost(configuredOrigin.host) {
+		return origins
 	}
 
+	for _, scheme := range []string{"http", "https"} {
+		for _, host := range []string{"localhost", "127.0.0.1", "::1"} {
+			origins = append(origins, corsOrigin{scheme: scheme, host: host, anyPort: true})
+		}
+	}
 	return origins
 }
 
-// isOriginAllowed checks whether the given origin matches any entry in the whitelist.
-// For development mode entries (without port), any port on that host is accepted.
-func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	originLower := strings.ToLower(origin)
+func isLoopbackOriginHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
 
-	for _, allowed := range allowedOrigins {
-		allowedLower := strings.ToLower(allowed)
-
-		// Exact match.
-		if originLower == allowedLower {
-			return true
-		}
-
-		// Prefix match for development mode: if the allowed entry is a scheme+host
-		// WITHOUT a port (e.g. "http://localhost"), then any port on that host is
-		// acceptable. If the allowed entry specifies a port, it must match exactly —
-		// otherwise any same-host service on a different port would be trusted
-		// while Allow-Credentials is on.
-		parsed, err := url.Parse(originLower)
-		parsedAllowed, errA := url.Parse(allowedLower)
-		if err == nil && errA == nil {
-			if parsed.Scheme == parsedAllowed.Scheme && parsed.Hostname() == parsedAllowed.Hostname() {
-				if parsedAllowed.Port() == "" || parsed.Port() == parsedAllowed.Port() {
-					return true
-				}
-			}
-		}
+// parseCORSOrigin parses an origin into its scheme, host, and effective port.
+// Request Origin values must be bare origins; configured public URLs may have a
+// path because deployments can be mounted below a reverse-proxy path.
+func parseCORSOrigin(raw string, requireBareOrigin bool) (corsOrigin, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return corsOrigin{}, false
+	}
+	if requireBareOrigin && (parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "") {
+		return corsOrigin{}, false
 	}
 
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return corsOrigin{}, false
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return corsOrigin{}, false
+		}
+	}
+	return corsOrigin{
+		scheme: strings.ToLower(parsed.Scheme),
+		host:   host,
+		port:   effectiveOriginPort(parsed),
+	}, true
+}
+
+func effectiveOriginPort(parsed *url.URL) string {
+	if port := parsed.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+// isOriginAllowed requires an exact scheme, host, and effective-port match.
+// Only explicitly added loopback development entries accept arbitrary ports.
+func isOriginAllowed(origin string, allowedOrigins []corsOrigin) bool {
+	parsedOrigin, ok := parseCORSOrigin(origin, true)
+	if !ok {
+		return false
+	}
+	for _, allowed := range allowedOrigins {
+		if parsedOrigin.scheme != allowed.scheme || parsedOrigin.host != allowed.host {
+			continue
+		}
+		if allowed.anyPort || parsedOrigin.port == allowed.port {
+			return true
+		}
+	}
 	return false
 }
 

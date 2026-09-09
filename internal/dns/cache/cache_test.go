@@ -1,12 +1,15 @@
 package cache
 
 import (
+	"database/sql"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+	_ "modernc.org/sqlite"
 )
 
 func newTestCache() *Cache {
@@ -441,5 +444,159 @@ func TestCache_Eviction(t *testing.T) {
 	// After eviction, entries should be at or below maxEntries
 	if stats.Entries > 5 {
 		t.Errorf("entries = %d, should be at or below maxEntries=5 after eviction", stats.Entries)
+	}
+}
+
+func TestCache_EffectiveTTL_NegativeSOA(t *testing.T) {
+	c := New(Config{MinTTL: 1, MaxTTL: 3600, NegativeTTL: 300})
+	msg := new(dns.Msg)
+	msg.SetQuestion("missing.example.", dns.TypeA)
+	msg.Rcode = dns.RcodeNameError
+	soa, err := dns.NewRR("example. 600 IN SOA ns.example. admin.example. 1 3600 600 86400 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Ns = []dns.RR{soa}
+
+	if got := c.effectiveTTL(msg); got != 30 {
+		t.Fatalf("negative TTL = %d, want SOA min(TTL, MINIMUM) = 30", got)
+	}
+}
+
+func TestCache_GetDoesNotExtendIndividualRRTTL(t *testing.T) {
+	c := New(Config{MinTTL: 1, MaxTTL: 3600})
+	msg := newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"})
+	extra, err := dns.NewRR("ns.example. 10 IN A 192.0.2.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Extra = []dns.RR{extra}
+	c.Set("www.example.", dns.TypeA, msg)
+
+	got, hit, _ := c.Get("www.example.", dns.TypeA)
+	if !hit {
+		t.Fatal("expected cache hit")
+	}
+	if ttl := got.Extra[0].Header().Ttl; ttl > 10 {
+		t.Fatalf("additional RR TTL extended from 10 to %d", ttl)
+	}
+}
+
+func TestCache_StaleHitTriggersRefresh(t *testing.T) {
+	var calls atomic.Int32
+	called := make(chan struct{}, 1)
+	c := New(Config{MinTTL: 1, MaxTTL: 300, ServeStale: true, StaleTTL: 300})
+	c.SetPrefetchCallback(func(string, uint16) {
+		calls.Add(1)
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+	})
+	c.Set("www.example.", dns.TypeA, newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"}))
+
+	key := cacheKey("www.example.", dns.TypeA)
+	s := c.shardFor(key)
+	s.mu.Lock()
+	e := s.entries[key].Value.(*lruItem).entry
+	e.ExpiresAt = time.Now().Add(-time.Second)
+	e.StaleUntil = time.Now().Add(time.Minute)
+	s.mu.Unlock()
+
+	_, hit, stale := c.Get("www.example.", dns.TypeA)
+	if !hit || !stale {
+		t.Fatal("expected stale cache response")
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatalf("stale hit did not trigger refresh; calls=%d", calls.Load())
+	}
+}
+
+func newPersistentTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TABLE dns_cache (id TEXT PRIMARY KEY, query_name TEXT, query_type TEXT, response_data TEXT, ttl INTEGER, expires_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestPersistentCache_LoadPreservesAbsoluteExpiry(t *testing.T) {
+	db := newPersistentTestDB(t)
+	msg := newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"})
+	wire, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Now().UTC().Add(20 * time.Second).Truncate(time.Second)
+	if _, err := db.Exec(`INSERT INTO dns_cache VALUES (?, ?, ?, ?, ?, ?)`, "www.example./A", "www.example.", "A", string(wire), 20, expiresAt.Format("2006-01-02 15:04:05")); err != nil {
+		t.Fatal(err)
+	}
+
+	c := newTestCache()
+	pc := &PersistentCache{Cache: c, db: db}
+	pc.load()
+	entries := c.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("loaded entries = %d, want 1", len(entries))
+	}
+	if !entries[0].ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("loaded expiry = %s, want persisted expiry %s", entries[0].ExpiresAt, expiresAt)
+	}
+
+	got, hit, _ := c.Get("www.example.", dns.TypeA)
+	if !hit {
+		t.Fatal("expected persisted cache hit")
+	}
+	if ttl := got.Answer[0].Header().Ttl; ttl > 20 {
+		t.Fatalf("persisted remaining TTL was renewed to %d", ttl)
+	}
+}
+
+func TestPersistentCache_FlushDoesNotResurrectEntries(t *testing.T) {
+	db := newPersistentTestDB(t)
+	pc := &PersistentCache{Cache: newTestCache(), db: db}
+	pc.Set("www.example.", dns.TypeA, newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"}))
+	if err := pc.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := &PersistentCache{Cache: newTestCache(), db: db}
+	reloaded.load()
+	if _, hit, _ := reloaded.Get("www.example.", dns.TypeA); hit {
+		t.Fatal("flushed cache entry resurrected from SQLite")
+	}
+}
+
+func TestPersistentCache_RemoveDoesNotResurrectEntry(t *testing.T) {
+	db := newPersistentTestDB(t)
+	pc := &PersistentCache{Cache: newTestCache(), db: db}
+	pc.Set("www.example.", dns.TypeA, newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"}))
+	pc.Set("keep.example.", dns.TypeA, newDNSMsg("keep.example.", dns.TypeA, 300, []string{"192.0.2.2"}))
+	if err := pc.flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pc.Remove("www.example.", dns.TypeA); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := &PersistentCache{Cache: newTestCache(), db: db}
+	reloaded.load()
+	if _, hit, _ := reloaded.Get("www.example.", dns.TypeA); hit {
+		t.Fatal("removed cache entry resurrected from SQLite")
+	}
+	if _, hit, _ := reloaded.Get("keep.example.", dns.TypeA); !hit {
+		t.Fatal("removing one cache entry deleted other persisted entries")
 	}
 }

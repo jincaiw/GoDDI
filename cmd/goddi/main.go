@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -49,7 +50,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.3.0"
+	Version   = "0.3.1"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -362,6 +363,7 @@ func runServer(configPath string) error {
 	handler.InitDNSServices(&handler.DNSServiceContainer{
 		DB:               db.DB,
 		Cache:            dnsCache,
+		PersistentCache:  persistentCache,
 		Filter:           filterEngine,
 		Forwarder:        fwdGroup,
 		Conditional:      condManager,
@@ -410,6 +412,10 @@ func runServer(configPath string) error {
 	})
 
 	// --- Initialize System API handler services ---
+	// Assigned after the runtime settings applier is constructed below. The
+	// restore hook calls it to reconcile persisted settings with in-memory DNS
+	// components after a successful config-section restore.
+	var applyPersistedSettings func() error
 	handler.InitSystemServices(&handler.SystemServiceContainer{
 		DB:          db.DB,
 		SettingsMgr: settingsMgr,
@@ -435,6 +441,11 @@ func runServer(configPath string) error {
 			fwdGroup.SetForwarders(restored.GetForwarders())
 			condManager.SetConditionals(conditionals.GetConditionals())
 			condManager.RebuildGroups(fwdGroup.GetForwarders())
+			if applyPersistedSettings != nil {
+				if err := applyPersistedSettings(); err != nil {
+					return fmt.Errorf("reconciling restored settings: %w", err)
+				}
+			}
 			return nil
 		},
 	})
@@ -491,11 +502,11 @@ func runServer(configPath string) error {
 				}
 				var lc config.DNSListenerTLSConfig
 				if err := json.Unmarshal([]byte(value), &lc); err == nil {
-					if err := dnsSrv.SetListenerConfig(kind, lc); err == nil {
-						if err := dnsSrv.RestartListener(kind); err != nil {
-							slog.Warn("listener restart failed", "kind", kind, "error", err)
-						}
+					if err := dnsSrv.ApplyListenerConfig(kind, lc); err != nil {
+						slog.Warn("listener replacement failed; retaining active listener", "kind", kind, "error", err)
 					}
+				} else {
+					slog.Warn("invalid persisted listener configuration", "kind", kind, "error", err)
 				}
 			}
 		case "dns_cache_serve_stale", "dns_cache_stale_ttl", "dns_cache_prefetch",
@@ -522,17 +533,23 @@ func runServer(configPath string) error {
 			}
 		}
 	}
-	for _, key := range []string{
-		"dns_recursion", "security_rebinding", "dns_blocking_enabled",
-		"dns_rate_limit_qps", "dns_blocklist_refresh_hours",
-		"dns_ecs_mode", "dns_ecs_ipv4_prefix_length", "dns_ecs_ipv6_prefix_length",
-		"dns_dot_config", "dns_doh_config", "dns_doq_config",
-		"dns_cache_serve_stale", "dns_cache_stale_ttl", "dns_cache_prefetch",
-		"dns_cache_min_ttl", "dns_cache_max_ttl", "dns_special_zones",
-	} {
-		if v, err := settingsMgr.GetSetting(key); err == nil {
-			applySetting(key, v)
+	applyPersistedSettings = func() error {
+		for _, key := range []string{
+			"dns_recursion", "security_rebinding", "dns_blocking_enabled",
+			"dns_rate_limit_qps", "dns_blocklist_refresh_hours",
+			"dns_ecs_mode", "dns_ecs_ipv4_prefix_length", "dns_ecs_ipv6_prefix_length",
+			"dns_dot_config", "dns_doh_config", "dns_doq_config",
+			"dns_cache_serve_stale", "dns_cache_stale_ttl", "dns_cache_prefetch",
+			"dns_cache_min_ttl", "dns_cache_max_ttl", "dns_special_zones",
+		} {
+			if v, err := settingsMgr.GetSetting(key); err == nil {
+				applySetting(key, v)
+			}
 		}
+		return nil
+	}
+	if err := applyPersistedSettings(); err != nil {
+		return fmt.Errorf("applying persisted settings: %w", err)
 	}
 	settingsMgr.Subscribe(applySetting)
 
@@ -590,6 +607,13 @@ func runServer(configPath string) error {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  120 * time.Second,
+	}
+	if cfg.Server.TLS.Enabled {
+		minVersion := uint16(tls.VersionTLS12)
+		if cfg.Server.TLS.MinVersion == "1.3" {
+			minVersion = tls.VersionTLS13
+		}
+		srv.TLSConfig = &tls.Config{MinVersion: minVersion}
 	}
 
 	// Start HTTP server in a goroutine.

@@ -62,9 +62,15 @@ type settingDefault struct {
 type Manager struct {
 	db *sql.DB
 
-	// mu guards the subscriber list.
+	// mu guards the subscriber list and callback dispatch order.
 	mu       sync.RWMutex
 	watchers []func(key, value string)
+	updates  chan settingUpdate
+}
+
+type settingUpdate struct {
+	key   string
+	value string
 }
 
 // Subscribe registers a callback invoked (asynchronously) after every
@@ -76,22 +82,32 @@ func (m *Manager) Subscribe(fn func(key, value string)) {
 	m.mu.Unlock()
 }
 
-// notify dispatches a changed key to all subscribers. Callbacks run in
-// their own goroutine so a slow consumer cannot block the settings API.
+// notify serializes setting notifications. A single ordered dispatcher keeps
+// dependent runtime updates (for example a listener config followed by an
+// enable flag) from being observed out of order. SetSetting remains fast: the
+// bounded queue applies explicit backpressure instead of silently dropping a
+// successful persisted update.
 func (m *Manager) notify(key, value string) {
-	m.mu.RLock()
-	watchers := make([]func(key, value string), len(m.watchers))
-	copy(watchers, m.watchers)
-	m.mu.RUnlock()
+	m.updates <- settingUpdate{key: key, value: value}
+}
 
-	for _, fn := range watchers {
-		go fn(key, value)
+func (m *Manager) dispatchUpdates() {
+	for update := range m.updates {
+		m.mu.RLock()
+		watchers := make([]func(key, value string), len(m.watchers))
+		copy(watchers, m.watchers)
+		m.mu.RUnlock()
+		for _, fn := range watchers {
+			fn(update.key, update.value)
+		}
 	}
 }
 
 // NewManager creates a new system settings manager.
 func NewManager(db *sql.DB) *Manager {
-	return &Manager{db: db}
+	m := &Manager{db: db, updates: make(chan settingUpdate, 64)}
+	go m.dispatchUpdates()
+	return m
 }
 
 // EnsureDefaults inserts default settings if they do not exist.

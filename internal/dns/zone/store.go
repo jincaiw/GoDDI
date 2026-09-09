@@ -370,6 +370,32 @@ func (s *Store) MatchSpecial(qname string) string {
 	}
 }
 
+// IsForwardingZone reports whether qname belongs to the most specific
+// forward or stub zone. Such zones defer record misses to the forwarding path
+// rather than producing an authoritative negative response.
+func (s *Store) IsForwardingZone(qname string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	name := dns.Fqdn(strings.ToLower(qname))
+	for {
+		if zd, ok := s.zones[name]; ok && zd.special == "" {
+			return zd.zone.Type == string(ZoneTypeForward) || zd.zone.Type == string(ZoneTypeStub)
+		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 || idx >= len(name)-1 {
+			return false
+		}
+		name = name[idx+1:]
+		if name == "." {
+			if zd, ok := s.zones["."]; ok && zd.special == "" {
+				return zd.zone.Type == string(ZoneTypeForward) || zd.zone.Type == string(ZoneTypeStub)
+			}
+			return false
+		}
+	}
+}
+
 // ForwardTargets returns the upstream addresses configured for the most
 // specific forward/stub zone matching qname, plus its kind. Forward zones
 // take their upstreams from the ACL Notify list (reused as target list);

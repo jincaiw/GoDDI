@@ -59,7 +59,14 @@ func configureListener(w http.ResponseWriter, r *http.Request, kind string) {
 		}
 	}
 
-	// Persist for restarts.
+	// Apply the runtime replacement first. Persist only after success so an
+	// unusable address or certificate cannot survive a restart as the active
+	// configuration.
+	if err := DNSServices.DNSServer.ApplyListenerConfig(kind, req); err != nil {
+		response.InternalErrorWithLog(w, "监听器替换失败；原配置保持生效", err)
+		return
+	}
+
 	payload, err := json.Marshal(req)
 	if err != nil {
 		response.InternalError(w, "序列化监听配置失败")
@@ -67,19 +74,7 @@ func configureListener(w http.ResponseWriter, r *http.Request, kind string) {
 	}
 	settingKey := listenerSettingKeys[kind]
 	if err := SystemServices.SettingsMgr.SetSetting(settingKey, string(payload), kind+" listener config"); err != nil {
-		response.InternalErrorWithLog(w, "保存监听配置失败", err)
-		return
-	}
-
-	// Apply at runtime (hot restart).
-	if err := DNSServices.DNSServer.SetListenerConfig(kind, req); err != nil {
-		response.InternalError(w, err.Error())
-		return
-	}
-	if err := DNSServices.DNSServer.RestartListener(kind); err != nil {
-		// The config is persisted but the listener failed to start; surface
-		// the error so the operator can fix cert paths etc.
-		response.InternalErrorWithLog(w, "监听器重启失败", err)
+		response.InternalErrorWithLog(w, "监听器已切换，但保存配置失败；请重试以确保重启后保留", err)
 		return
 	}
 

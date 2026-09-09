@@ -114,6 +114,20 @@ func TestValidate_MissingJWTSecret(t *testing.T) {
 	}
 }
 
+func TestValidate_TrustedProxyCIDRs(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Security.JWTSecret = "a-sufficiently-long-test-secret"
+	cfg.Security.TrustedProxyCIDRs = []string{"10.0.0.0/8", "fd00::/8"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() valid trusted proxies: %v", err)
+	}
+
+	cfg.Security.TrustedProxyCIDRs = []string{"not-a-cidr"}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() invalid trusted proxy CIDR = nil, want error")
+	}
+}
+
 func TestValidate_InvalidProxyType(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.Proxy.Enabled = true
@@ -311,6 +325,87 @@ security:
 	}
 	if cfg.Server.HTTPAddr != ":9999" {
 		t.Errorf("Server.HTTPAddr = %q, want %q", cfg.Server.HTTPAddr, ":9999")
+	}
+}
+
+func TestLoadFromYAML_RejectsUnknownFields(t *testing.T) {
+	content := []byte(`
+server:
+  name: TestGoDDI
+  unknown_setting: true
+`)
+	tmpFile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(content); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
+
+	_, err = LoadFromYAML(tmpFile.Name())
+	if err == nil {
+		t.Fatal("LoadFromYAML() should reject unknown fields")
+	}
+	if !strings.Contains(err.Error(), "field unknown_setting not found") {
+		t.Errorf("LoadFromYAML() error = %q, want unknown field detail", err)
+	}
+}
+
+func TestLoadFromYAML_ParsesDNSListeners(t *testing.T) {
+	content := []byte(`
+dns:
+  listeners:
+    tcp:
+      enabled: true
+      address: ":5353"
+    dot:
+      enabled: true
+      address: ":8853"
+    doh:
+      enabled: true
+      address: ":8443"
+    doq:
+      enabled: true
+      address: ":8854"
+  dnssec:
+    enabled: true
+`)
+	tmpFile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(content); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
+
+	cfg, err := LoadFromYAML(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("LoadFromYAML() error = %v", err)
+	}
+	if !cfg.DNS.Listeners.TCP.Enabled || cfg.DNS.Listeners.TCP.Address != ":5353" {
+		t.Errorf("TCP listener = %#v, want enabled on :5353", cfg.DNS.Listeners.TCP)
+	}
+	if !cfg.DNS.Listeners.DOT.Enabled || cfg.DNS.Listeners.DOT.Address != ":8853" {
+		t.Errorf("DoT listener = %#v, want enabled on :8853", cfg.DNS.Listeners.DOT)
+	}
+	if !cfg.DNS.Listeners.DOH.Enabled || cfg.DNS.Listeners.DOH.Address != ":8443" {
+		t.Errorf("DoH listener = %#v, want enabled on :8443", cfg.DNS.Listeners.DOH)
+	}
+	if !cfg.DNS.Listeners.DOQ.Enabled || cfg.DNS.Listeners.DOQ.Address != ":8854" {
+		t.Errorf("DoQ listener = %#v, want enabled on :8854", cfg.DNS.Listeners.DOQ)
+	}
+	if !cfg.DNS.DNSSEC.Enabled {
+		t.Error("DNSSEC should remain independently configured")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,11 +133,17 @@ func NewForwarderGroup(strategy SelectionStrategy, timeout time.Duration) *Forwa
 	}
 }
 
-// SetForwarders replaces the list of forwarders.
+// SetForwarders replaces the list of forwarders. Priority is an operator
+// contract: lower values are attempted first, and equal priorities keep their
+// supplied order so configuration produces deterministic failover.
 func (fg *ForwarderGroup) SetForwarders(forwarders []*Forwarder) {
+	sorted := append([]*Forwarder(nil), forwarders...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Priority < sorted[j].Priority
+	})
 	fg.mu.Lock()
 	defer fg.mu.Unlock()
-	fg.forwarders = forwarders
+	fg.forwarders = sorted
 }
 
 // AddForwarder adds a forwarder to the group.
@@ -149,6 +156,9 @@ func (fg *ForwarderGroup) AddForwarder(f *Forwarder) error {
 	defer fg.mu.Unlock()
 	f.healthy.Store(true)
 	fg.forwarders = append(fg.forwarders, f)
+	sort.SliceStable(fg.forwarders, func(i, j int) bool {
+		return fg.forwarders[i].Priority < fg.forwarders[j].Priority
+	})
 	return nil
 }
 
@@ -395,13 +405,11 @@ func (fg *ForwarderGroup) forwardHealthAware(ctx context.Context, msg *dns.Msg, 
 			if time.Since(f.lastHealthCheck) > 30*time.Second {
 				f.lastHealthCheck = time.Now()
 				f.mu.Unlock()
-				// Try this forwarder as a health probe.
+				// queryUpstream performs exactly one success/failure accounting.
 				resp, d, err := fg.queryUpstream(ctx, msg, f)
 				if err == nil {
-					f.recordSuccess(d)
 					return resp, f, d, nil
 				}
-				f.recordFailure()
 				lastErr = err
 				continue
 			}
@@ -411,10 +419,8 @@ func (fg *ForwarderGroup) forwardHealthAware(ctx context.Context, msg *dns.Msg, 
 
 		resp, d, err := fg.queryUpstream(ctx, msg, f)
 		if err == nil {
-			f.recordSuccess(d)
 			return resp, f, d, nil
 		}
-		f.recordFailure()
 		lastErr = err
 	}
 

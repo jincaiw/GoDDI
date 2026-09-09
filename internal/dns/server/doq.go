@@ -60,6 +60,17 @@ func NewDoQServer(addr string, tlsConf *tls.Config, handler dns.Handler) *DoQSer
 
 // ListenAndServe starts accepting QUIC connections until Shutdown is called.
 func (s *DoQServer) ListenAndServe() error {
+	conn, err := net.ListenPacket("udp", s.addr)
+	if err != nil {
+		return fmt.Errorf("doq: listen %s: %w", s.addr, err)
+	}
+	return s.Serve(conn)
+}
+
+// Serve accepts QUIC connections using an already-bound UDP socket. Binding
+// is deliberately separate from serving so the caller can make readiness
+// depend on every enabled listener being bound successfully.
+func (s *DoQServer) Serve(conn net.PacketConn) error {
 	tc := s.tlsConf.Clone()
 	tc.NextProtos = []string{doqALPN}
 
@@ -71,8 +82,9 @@ func (s *DoQServer) ListenAndServe() error {
 		KeepAlivePeriod: 30 * time.Second,
 	}
 
-	listener, err := quic.ListenAddr(s.addr, tc, qcfg)
+	listener, err := quic.Listen(conn, tc, qcfg)
 	if err != nil {
+		_ = conn.Close()
 		return fmt.Errorf("doq: listen %s: %w", s.addr, err)
 	}
 	return s.serve(listener)

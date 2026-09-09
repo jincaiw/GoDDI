@@ -193,6 +193,66 @@ func TestCORS_WhitelistedOrigin(t *testing.T) {
 	}
 }
 
+func TestCORS_ConfiguredOriginRequiresExactSchemeHostAndEffectivePort(t *testing.T) {
+	t.Setenv("GODDI_ENV", "production")
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			PublicURL: "https://admin.example.test:8443",
+		},
+	}
+	handler := CORS(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		origin string
+		want   bool
+	}{
+		{origin: "https://admin.example.test:8443", want: true},
+		{origin: "https://admin.example.test", want: false},
+		{origin: "http://admin.example.test:8443", want: false},
+		{origin: "https://other.example.test:8443", want: false},
+		{origin: "https://admin.example.test:0", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("Origin", tt.origin)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			got := rec.Header().Get("Access-Control-Allow-Origin") != ""
+			if got != tt.want {
+				t.Errorf("origin %q allowed = %t, want %t", tt.origin, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCORS_DefaultPortsMatchExplicitAndImplicitForms(t *testing.T) {
+	t.Setenv("GODDI_ENV", "production")
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			PublicURL: "https://admin.example.test",
+		},
+	}
+	handler := CORS(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, origin := range []string{"https://admin.example.test", "https://admin.example.test:443"} {
+		t.Run(origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("Origin", origin)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got == "" {
+				t.Errorf("origin %q should match the HTTPS default port", origin)
+			}
+		})
+	}
+}
+
 func TestCORS_LocalhostDevMode(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -204,23 +264,31 @@ func TestCORS_LocalhostDevMode(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Any localhost port should be allowed in dev mode
-	tests := []string{
-		"http://localhost:3000",
-		"http://localhost:5173",
-		"http://127.0.0.1:3000",
+	// Any loopback port should be allowed in dev mode, but a scheme mismatch
+	// remains rejected.
+	tests := []struct {
+		origin string
+		want   bool
+	}{
+		{origin: "http://localhost:3000", want: true},
+		{origin: "http://localhost:5173", want: true},
+		{origin: "http://127.0.0.1:3000", want: true},
+		{origin: "http://[::1]:3000", want: true},
+		{origin: "https://localhost:3000", want: true},
+		{origin: "ftp://localhost:3000", want: false},
 	}
 
-	for _, origin := range tests {
-		t.Run(origin, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.origin, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/v1/test", nil)
-			req.Header.Set("Origin", origin)
+			req.Header.Set("Origin", tt.origin)
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
 
-			if v := rec.Header().Get("Access-Control-Allow-Origin"); v == "" {
-				t.Errorf("Access-Control-Allow-Origin should be set for dev origin %q", origin)
+			got := rec.Header().Get("Access-Control-Allow-Origin") != ""
+			if got != tt.want {
+				t.Errorf("origin %q allowed = %t, want %t", tt.origin, got, tt.want)
 			}
 		})
 	}

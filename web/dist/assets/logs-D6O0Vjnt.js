@@ -1,1 +1,0 @@
-import{S as e}from"./router-DwARj8rN.js";function t(t){return e(`/logs/audit`,t)}export{t};

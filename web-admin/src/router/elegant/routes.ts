@@ -238,21 +238,6 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
-        name: 'dns_blocked',
-        path: '/dns/blocked',
-        component: 'view.dns_blocked',
-        meta: {
-          title: 'dns_blocked',
-          i18nKey: 'route.dns_blocked',
-          icon: 'mdi:shield-lock',
-          order: 4,
-          permission: {
-            resource: 'dns',
-            action: 'read'
-          }
-        }
-      },
-      {
         name: 'dns_apps',
         path: '/dns/apps',
         component: 'view.dns_apps',
@@ -261,6 +246,21 @@ export const generatedRoutes: GeneratedRoute[] = [
           i18nKey: 'route.dns_apps',
           icon: 'mdi:apps',
           order: 7,
+          permission: {
+            resource: 'dns',
+            action: 'read'
+          }
+        }
+      },
+      {
+        name: 'dns_blocked',
+        path: '/dns/blocked',
+        component: 'view.dns_blocked',
+        meta: {
+          title: 'dns_blocked',
+          i18nKey: 'route.dns_blocked',
+          icon: 'mdi:shield-lock',
+          order: 4,
           permission: {
             resource: 'dns',
             action: 'read'

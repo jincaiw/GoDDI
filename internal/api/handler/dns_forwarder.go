@@ -40,6 +40,7 @@ var dnsInitOnce sync.Once
 type DNSServiceContainer struct {
 	DB               *sql.DB
 	Cache            *cache.Cache
+	PersistentCache  *cache.PersistentCache
 	Filter           *filter.FilterEngine
 	Forwarder        *forwarder.ForwarderGroup
 	Conditional      *forwarder.ConditionalForwarderManager
@@ -58,6 +59,17 @@ func InitDNSServices(svc *DNSServiceContainer) {
 	dnsInitOnce.Do(func() {
 		DNSServices = svc
 	})
+}
+
+// rebuildConditionalForwarderGroups refreshes the groups from the canonical
+// global pool after any forwarder mutation. Conditional groups keep pointers
+// to Forwarder values, so omitting this step can send traffic to an old,
+// removed upstream after an API update.
+func rebuildConditionalForwarderGroups() {
+	if DNSServices == nil || DNSServices.Forwarder == nil || DNSServices.Conditional == nil {
+		return
+	}
+	DNSServices.Conditional.RebuildGroups(DNSServices.Forwarder.GetForwarders())
 }
 
 // --- Forwarder Handlers ---
@@ -166,6 +178,7 @@ func CreateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rebuildConditionalForwarderGroups()
 	response.Created(w, map[string]string{"id": id, "name": req.Name})
 }
 
@@ -263,6 +276,7 @@ func UpdateDNSForwarder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rebuildConditionalForwarderGroups()
 	response.OK(w, map[string]string{"id": id})
 }
 
@@ -318,6 +332,7 @@ func DeleteDNSForwarder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	DNSServices.Forwarder.RemoveForwarder(id)
+	rebuildConditionalForwarderGroups()
 	response.OK(w, map[string]string{"id": id})
 }
 

@@ -28,7 +28,14 @@ func FlushDNSCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	DNSServices.Cache.Flush()
+	if DNSServices.PersistentCache != nil {
+		if err := DNSServices.PersistentCache.Flush(); err != nil {
+			response.InternalErrorWithLog(w, "清空持久化DNS缓存失败", err)
+			return
+		}
+	} else {
+		DNSServices.Cache.Flush()
+	}
 	response.OK(w, map[string]string{"message": "缓存已清空"})
 }
 
@@ -54,6 +61,13 @@ func FlushDNSCacheEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	DNSServices.Cache.Remove(name, qtype)
+	if DNSServices.PersistentCache != nil {
+		if err := DNSServices.PersistentCache.Remove(name, qtype); err != nil {
+			response.InternalErrorWithLog(w, "删除持久化DNS缓存条目失败", err)
+			return
+		}
+	} else {
+		DNSServices.Cache.Remove(name, qtype)
+	}
 	response.OK(w, map[string]string{"message": "缓存条目已清空", "name": name, "type": qtypeStr})
 }

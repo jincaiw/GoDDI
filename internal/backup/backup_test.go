@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jasonwa/goddi/internal/config"
@@ -94,6 +95,98 @@ func TestSecurityBackupRestorePreservesFields(t *testing.T) {
 	}
 	if listType != "remote" || url != "https://example.test/list" || matchType != "suffix" || responseType != "A" || responseData != "0.0.0.0" || action != "allow" || priority != 7 {
 		t.Fatalf("restored fields differ: %q %q %q %q %q %q %d", listType, url, matchType, responseType, responseData, action, priority)
+	}
+}
+
+func TestDNSBackupRestorePreservesACLAndZonePermissions(t *testing.T) {
+	mgr, db := setupBackupTest(t)
+	defer db.Close()
+
+	acl := `{"query":["10.0.0.0/8"],"transfer":["192.0.2.0/24"],"update":["198.51.100.7"]}`
+	if _, err := db.Exec(`
+		INSERT INTO dns_zones (id,name,type,soa_mname,soa_rname,serial,acl) VALUES ('secured-zone','secured.example','primary','ns.secured.example','admin.secured.example',1,?);
+		INSERT INTO dns_zone_permissions (id,zone_id,principal_type,principal_id,can_view,can_modify,can_delete) VALUES ('permission-user','secured-zone','user','user-1',1,1,0);
+		INSERT INTO dns_zone_permissions (id,zone_id,principal_type,principal_id,can_view,can_modify,can_delete) VALUES ('permission-group','secured-zone','group','group-1',1,0,1);
+	`, acl); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := mgr.CreateBackup(BackupOptions{Type: "dns"})
+	if err != nil || job.Status != "completed" {
+		t.Fatalf("CreateBackup() job=%+v err=%v", job, err)
+	}
+	if _, err := db.Exec(`DELETE FROM dns_zone_permissions; DELETE FROM dns_zones`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RestoreBackup(job.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var restoredACL string
+	if err := db.QueryRow(`SELECT acl FROM dns_zones WHERE id = 'secured-zone'`).Scan(&restoredACL); err != nil {
+		t.Fatal(err)
+	}
+	if restoredACL != acl {
+		t.Fatalf("ACL changed during restore: got %q want %q", restoredACL, acl)
+	}
+	var canView, canModify, canDelete bool
+	if err := db.QueryRow(`SELECT can_view,can_modify,can_delete FROM dns_zone_permissions WHERE id = 'permission-user'`).Scan(&canView, &canModify, &canDelete); err != nil {
+		t.Fatal(err)
+	}
+	if !canView || !canModify || canDelete {
+		t.Fatalf("user permission changed during restore: %t %t %t", canView, canModify, canDelete)
+	}
+	if err := db.QueryRow(`SELECT can_view,can_modify,can_delete FROM dns_zone_permissions WHERE id = 'permission-group'`).Scan(&canView, &canModify, &canDelete); err != nil {
+		t.Fatal(err)
+	}
+	if !canView || canModify || !canDelete {
+		t.Fatalf("group permission changed during restore: %t %t %t", canView, canModify, canDelete)
+	}
+}
+
+func TestRestoreLegacyDNSBackupPreservesExistingRestrictions(t *testing.T) {
+	mgr, db := setupBackupTest(t)
+	defer db.Close()
+
+	acl := `{"query":["10.0.0.0/8"]}`
+	if _, err := db.Exec(`
+		INSERT INTO dns_zones (id,name,type,soa_mname,soa_rname,serial,acl) VALUES ('existing-zone','existing.example','primary','ns.existing.example','admin.existing.example',1,?);
+		INSERT INTO dns_zone_permissions (id,zone_id,principal_type,principal_id,can_view,can_modify,can_delete) VALUES ('existing-permission','existing-zone','user','user-1',1,0,0);
+	`, acl); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID := "legacy-dns"
+	backupDir := filepath.Join(mgr.dataDir, "backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(backupDir, "legacy-dns.json")
+	payload := `{"metadata":{"id":"legacy-dns","type":"dns","created_at":"2026-01-01T00:00:00Z","version":"old","description":""},"data":{"dns":{"zones":[{"id":"legacy-zone","name":"legacy.example","type":"primary","enabled":true,"dnssec_enabled":false,"default_ttl":3600,"soa_mname":"ns.legacy.example","soa_rname":"admin.legacy.example","serial":1,"refresh":3600,"retry":600,"expire":86400,"minimum":300}],"records":[],"forwarders":[],"conditional_forwarders":[]}}}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO backup_jobs (id,type,status,file_path,description,created_at) VALUES (?,?,?,?,?,?)`, jobID, "dns", "completed", path, "legacy", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := mgr.RestoreBackup(jobID)
+	if err == nil || !strings.Contains(err.Error(), "lacks zone_permissions") {
+		t.Fatalf("RestoreBackup() error = %v, want missing zone_permissions compatibility error", err)
+	}
+	var restoredACL string
+	if err := db.QueryRow(`SELECT acl FROM dns_zones WHERE id = 'existing-zone'`).Scan(&restoredACL); err != nil {
+		t.Fatal(err)
+	}
+	if restoredACL != acl {
+		t.Fatalf("legacy restore changed ACL: got %q want %q", restoredACL, acl)
+	}
+	var permissions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_permissions WHERE zone_id = 'existing-zone'`).Scan(&permissions); err != nil {
+		t.Fatal(err)
+	}
+	if permissions != 1 {
+		t.Fatalf("legacy restore changed zone permissions: got %d want 1", permissions)
 	}
 }
 
