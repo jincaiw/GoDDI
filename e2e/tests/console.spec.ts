@@ -1,4 +1,20 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
+
+// The language switch is a hover-triggered dropdown. Reset the pointer first so
+// the hover always produces a fresh mouseover, then pick the option out of the
+// currently visible dropdown — a stale detached node would keep the old locale
+// and silently leave the page heading unchanged.
+async function switchLanguage(page: Page, option: string, switched: Locator) {
+  await page.mouse.move(0, 0)
+  await page.locator('[aria-label="Switch language"]').hover()
+  const item = page.locator('.n-dropdown-option:visible').filter({ hasText: new RegExp(`^${option}$`) }).first()
+  await expect(item).toBeVisible()
+  // Click the body label — Naive UI binds select on the inner node, and a
+  // wrapper click can be swallowed by transient hover state on the dropdown
+  // menu container when the pointer has just been reset.
+  await item.locator('.n-dropdown-option-body__label').click()
+  await expect(switched).toBeVisible()
+}
 
 const routes = ['/', '/dns/zones', '/dns/forwarders', '/dns/security', '/dns/cache', '/tools/client',
   '/dhcp/scopes', '/dhcp/leases', '/dhcp/reservations', '/dhcp/options',
@@ -26,12 +42,14 @@ test('login and all console routes render without runtime errors', async ({ page
     }
   }
   await page.goto('/')
-  await page.locator('[aria-label="Switch language"]').hover()
-  await page.getByText('中文', { exact: true }).click()
-  await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible()
-  await page.locator('[aria-label="Switch language"]').hover()
-  await page.getByText('English', { exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+  // Reload between the route loop and the language switch: the dashboard view
+  // accumulates focus/scroll/queued-API state across 22 route visits, and the
+  // second hover-dropdown click can otherwise land on a detached node. A clean
+  // page eliminates the flake without disabling the switch.
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await switchLanguage(page, '中文', page.getByRole('heading', { name: '仪表盘', exact: true }))
+  await switchLanguage(page, 'English', page.getByRole('heading', { name: 'Dashboard', exact: true }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.locator('[aria-label="Toggle navigation"]').click()
   await expect(page.locator('aside[class*="layout-mobile-sider"]').first()).toBeVisible()

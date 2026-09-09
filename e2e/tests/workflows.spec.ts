@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 test.setTimeout(30000)
 
 const modal = (page: Page) => page.locator('.n-modal:visible')
@@ -22,6 +22,28 @@ async function remove(page: Page, name: string) {
   await modal(page).getByRole('button', { name: 'Confirm', exact: true }).click()
   await expect(row(page, name)).toHaveCount(0)
   await expect(modal(page)).toHaveCount(0)
+}
+
+// DNS security records (block lists, allow rules, client policies) delete
+// immediately without a confirmation modal, unlike the generic `remove` helper.
+async function deleteRow(page: Page, name: string) {
+  await row(page, name).getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row(page, name)).toHaveCount(0)
+}
+
+// The language switch is a hover-triggered dropdown: reset the pointer so the
+// hover always produces a fresh mouseover, then click the option from the
+// currently visible dropdown.
+async function switchLanguage(page: Page, option: string, switched: Locator) {
+  await page.mouse.move(0, 0)
+  await page.locator('[aria-label="Switch language"]').hover()
+  const item = page.locator('.n-dropdown-option:visible').filter({ hasText: new RegExp(`^${option}$`) }).first()
+  await expect(item).toBeVisible()
+  // Click the body label — Naive UI binds select on the inner node, and a
+  // wrapper click can be swallowed by transient hover state on the dropdown
+  // menu container when the pointer has just been reset.
+  await item.locator('.n-dropdown-option-body__label').click()
+  await expect(switched).toBeVisible()
 }
 
 const errors = new WeakMap<Page, string[]>()
@@ -89,9 +111,7 @@ test('DNS zone and record lifecycle with search and export', async ({ page }) =>
   await page.getByPlaceholder('Search', { exact: true }).press('Enter')
   await expect(row(page, name)).toBeVisible()
   await remove(page, name)
-  await page.locator('[aria-label="Switch language"]').hover()
-  await page.getByText('中文', { exact: true }).click()
-  await expect(page.getByRole('columnheader', { name: '区域名称', exact: true })).toBeVisible()
+  await switchLanguage(page, '中文', page.getByRole('columnheader', { name: '区域名称', exact: true }))
 })
 
 test('forwarder lifecycle and enabled switch persistence', async ({ page }) => {
@@ -227,28 +247,33 @@ test('user lifecycle and token creation, copy and revocation', async ({ page, co
   await remove(page, name)
 })
 
-test('security lists and policies through all tabs', async ({ page }) => {
+test('block lists, allow rules and client policies lifecycles', async ({ page }) => {
+  test.setTimeout(60000)
   const name = `ui-policy-${Date.now()}`
-  await page.goto('/dns/security')
+
+  // DNS security is split across three dedicated pages (no longer tabs):
+    // /dns/blocked (block lists), /dns/allowed (allow rules), /dns/security (client policies).
+  await page.goto('/dns/blocked')
   await page.getByRole('button', { name: 'Create Block List', exact: true }).click()
   await fill(page, 'Name', name)
   await save(page)
   await expect(row(page, name)).toBeVisible()
-  await row(page, name).getByRole('button', { name: 'Delete', exact: true }).click()
-  await expect(row(page, name)).toHaveCount(0)
-  await page.locator('.n-tabs-tab').filter({ hasText: 'Allow Rules' }).click()
+  await deleteRow(page, name)
+
+  await page.goto('/dns/allowed')
   await page.getByRole('button', { name: 'Add Allow Rule', exact: true }).click()
   await fill(page, 'Pattern', `${name}.example`)
   await save(page)
-  await row(page, name).getByRole('button', { name: 'Delete', exact: true }).click()
-  await expect(row(page, name)).toHaveCount(0)
-  await page.locator('.n-tabs-tab').filter({ hasText: 'Client Policies' }).click()
+  await expect(row(page, `${name}.example`)).toBeVisible()
+  await deleteRow(page, `${name}.example`)
+
+  await page.goto('/dns/security')
   await page.getByRole('button', { name: 'Create Policy', exact: true }).click()
   await fill(page, 'Name', name)
   await fill(page, 'Source CIDR', '192.0.2.0/24')
   await save(page)
-  await row(page, name).getByRole('button', { name: 'Delete', exact: true }).click()
-  await expect(row(page, name)).toHaveCount(0)
+  await expect(row(page, name)).toBeVisible()
+  await deleteRow(page, name)
 })
 
 test('DHCP option lifecycle, cache flush and unchanged setting save', async ({ page }) => {
@@ -317,9 +342,7 @@ test('server pagination shows the next page instead of slicing it twice', async 
 
 test('desktop, dark, mobile and login visual states', async ({ page }) => {
   await page.setViewportSize({ width: 1536, height: 1024 })
-  await page.locator('[aria-label="Switch language"]').hover()
-  await page.getByText('中文', { exact: true }).click()
-  await expect(page.getByRole('heading', { name: '仪表盘', exact: true })).toBeVisible()
+  await switchLanguage(page, '中文', page.getByRole('heading', { name: '仪表盘', exact: true }))
   const capture = async (name: string) => {
     await expect(page.locator('.n-message')).toHaveCount(0)
     if (process.env.GODDI_VISUAL_DIR) await page.screenshot({ path: `${process.env.GODDI_VISUAL_DIR}/${name}.png`, fullPage: true, animations: 'disabled' })
