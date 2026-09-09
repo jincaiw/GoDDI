@@ -1,17 +1,18 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-// The language switch is a hover-triggered dropdown. Reset the pointer first so
-// the hover always produces a fresh mouseover, then pick the option out of the
-// currently visible dropdown — a stale detached node would keep the old locale
-// and silently leave the page heading unchanged.
+// The language switch is a hover-triggered dropdown: reset the pointer so the
+// hover always produces a fresh mouseover, then hover the menu container so
+// the dropdown's hide-timer is cancelled before clicking the option — this
+// avoids a race in headless CI where the trigger mouseleave fires the timer
+// before the menu mouseenter settles.
 async function switchLanguage(page: Page, option: string, switched: Locator) {
   await page.mouse.move(0, 0)
   await page.locator('[aria-label="Switch language"]').hover()
-  const item = page.locator('.n-dropdown-option:visible').filter({ hasText: new RegExp(`^${option}$`) }).first()
+  const menu = page.locator('.n-dropdown-menu:visible').first()
+  await expect(menu).toBeVisible()
+  await menu.hover()
+  const item = menu.locator('.n-dropdown-option').filter({ hasText: new RegExp(`^${option}$`) }).first()
   await expect(item).toBeVisible()
-  // Click the body label — Naive UI binds select on the inner node, and a
-  // wrapper click can be swallowed by transient hover state on the dropdown
-  // menu container when the pointer has just been reset.
   await item.locator('.n-dropdown-option-body__label').click()
   await expect(switched).toBeVisible()
 }
