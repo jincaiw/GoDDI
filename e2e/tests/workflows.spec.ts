@@ -31,18 +31,15 @@ async function deleteRow(page: Page, name: string) {
   await expect(row(page, name)).toHaveCount(0)
 }
 
-// The language switch is a hover-triggered dropdown: reset the pointer so the
-// hover always produces a fresh mouseover, then click the option from the
-// currently visible dropdown.
+// The language switch is a hover-triggered dropdown. A real hover +
+// getByText click is used because Naive UI's NDropdown guards doSelect
+// behind mergedShowRef — only a genuinely shown popover selects, which a
+// real Playwright hover guarantees.
 async function switchLanguage(page: Page, option: string, switched: Locator) {
   await page.mouse.move(0, 0)
   await page.locator('[aria-label="Switch language"]').hover()
-  const item = page.locator('.n-dropdown-option:visible').filter({ hasText: new RegExp(`^${option}$`) }).first()
-  await expect(item).toBeVisible()
-  // Click the body label — Naive UI binds select on the inner node, and a
-  // wrapper click can be swallowed by transient hover state on the dropdown
-  // menu container when the pointer has just been reset.
-  await item.locator('.n-dropdown-option-body__label').click()
+  await expect(page.getByText(option, { exact: true })).toBeVisible()
+  await page.getByText(option, { exact: true }).click()
   await expect(switched).toBeVisible()
 }
 

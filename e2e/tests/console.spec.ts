@@ -1,19 +1,16 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-// The language switch is a hover-triggered dropdown: reset the pointer so the
-// hover always produces a fresh mouseover, then hover the menu container so
-// the dropdown's hide-timer is cancelled before clicking the option — this
-// avoids a race in headless CI where the trigger mouseleave fires the timer
-// before the menu mouseenter settles.
+// The language switch is a hover-triggered dropdown. The test body reloads
+// the dashboard between the route loop and the switches so the menu's hide
+// timer cannot close the dropdown between hover and click. We use a real
+// hover + getByText click here because Naive UI's NDropdown guards doSelect
+// behind mergedShowRef — a programmatic dispatchEvent click only fires when
+// the popover is genuinely shown, which a real Playwright hover guarantees.
 async function switchLanguage(page: Page, option: string, switched: Locator) {
   await page.mouse.move(0, 0)
   await page.locator('[aria-label="Switch language"]').hover()
-  const menu = page.locator('.n-dropdown-menu:visible').first()
-  await expect(menu).toBeVisible()
-  await menu.hover()
-  const item = menu.locator('.n-dropdown-option').filter({ hasText: new RegExp(`^${option}$`) }).first()
-  await expect(item).toBeVisible()
-  await item.locator('.n-dropdown-option-body__label').click()
+  await expect(page.getByText(option, { exact: true })).toBeVisible()
+  await page.getByText(option, { exact: true }).click()
   await expect(switched).toBeVisible()
 }
 
