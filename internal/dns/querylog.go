@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -39,7 +40,29 @@ type QueryLogger struct {
 	flushInterval time.Duration
 	retentionDays int
 
-	droppedCount atomic.Int64
+	droppedCount    atomic.Int64
+	writtenCount    atomic.Int64
+	beginFailures   atomic.Int64
+	prepareFailures atomic.Int64
+	execFailures    atomic.Int64
+	commitFailures  atomic.Int64
+	cleanupFailures atomic.Int64
+}
+
+// QueryLogStats is a point-in-time health snapshot for the asynchronous
+// query-log pipeline. It distinguishes loss at the non-blocking ingress from
+// failures in the SQLite writer so operators do not mistake partial logging
+// for a healthy telemetry stream.
+type QueryLogStats struct {
+	QueueDepth      int
+	QueueCapacity   int
+	DroppedFull     int64
+	Written         int64
+	BeginFailures   int64
+	PrepareFailures int64
+	ExecFailures    int64
+	CommitFailures  int64
+	CleanupFailures int64
 }
 
 // NewQueryLogger creates a new async query logger.
@@ -138,16 +161,26 @@ func (ql *QueryLogger) processLoop() {
 
 // flush performs a batch insert of query log entries.
 func (ql *QueryLogger) flush(entries []QueryLogEntry) {
-	if ql.db == nil || len(entries) == 0 {
+	if len(entries) == 0 {
+		return
+	}
+	if ql.db == nil {
+		ql.beginFailures.Add(int64(len(entries)))
 		return
 	}
 
 	tx, err := ql.db.Begin()
 	if err != nil {
+		ql.beginFailures.Add(int64(len(entries)))
 		slog.Error("querylog: failed to begin transaction", "error", err)
 		return
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO dns_query_logs
@@ -156,11 +189,13 @@ func (ql *QueryLogger) flush(entries []QueryLogEntry) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
+		ql.prepareFailures.Add(int64(len(entries)))
 		slog.Error("querylog: failed to prepare statement", "error", err)
 		return
 	}
 	defer stmt.Close()
 
+	written := int64(0)
 	for _, e := range entries {
 		_, err := stmt.Exec(
 			e.ID, e.ClientIP, e.ClientPort, e.Protocol,
@@ -168,16 +203,24 @@ func (ql *QueryLogger) flush(entries []QueryLogEntry) {
 			e.ResponseTimeMs, e.Upstream, e.Cached, e.Blocked,
 		)
 		if err != nil {
+			ql.execFailures.Add(1)
 			slog.Error("querylog: failed to insert entry", "error", err)
+			continue
 		}
+		written++
 	}
 
 	if err := tx.Commit(); err != nil {
+		// SQLite rolls back the entire transaction on a failed commit, so none
+		// of the previously successful Exec calls are durable.
+		ql.commitFailures.Add(int64(len(entries)))
 		slog.Error("querylog: failed to commit transaction", "error", err)
 		return
 	}
+	committed = true
+	ql.writtenCount.Add(written)
 
-	slog.Debug("querylog: flushed entries", "count", len(entries))
+	slog.Debug("querylog: flushed entries", "count", written)
 }
 
 // cleanup removes old query log entries based on retention policy.
@@ -191,6 +234,7 @@ func (ql *QueryLogger) cleanup() {
 		fmt.Sprintf("-%d days", ql.retentionDays),
 	)
 	if err != nil {
+		ql.cleanupFailures.Add(1)
 		slog.Error("querylog: failed to cleanup old entries", "error", err)
 		return
 	}
@@ -212,11 +256,60 @@ func (ql *QueryLogger) DroppedCount() int64 {
 	return ql.droppedCount.Load()
 }
 
+// Stats returns a lock-free snapshot of queue pressure and SQLite writer
+// outcomes. QueueDepth is intentionally sampled rather than synchronously
+// emitted from Log so the DNS query path stays non-blocking.
+func (ql *QueryLogger) Stats() QueryLogStats {
+	return QueryLogStats{
+		QueueDepth:      len(ql.entries),
+		QueueCapacity:   cap(ql.entries),
+		DroppedFull:     ql.droppedCount.Load(),
+		Written:         ql.writtenCount.Load(),
+		BeginFailures:   ql.beginFailures.Load(),
+		PrepareFailures: ql.prepareFailures.Load(),
+		ExecFailures:    ql.execFailures.Load(),
+		CommitFailures:  ql.commitFailures.Load(),
+		CleanupFailures: ql.cleanupFailures.Load(),
+	}
+}
+
 // QueryLogs retrieves query logs from the database with filtering and pagination.
+// It retains the legacy background context for non-HTTP callers; request
+// handlers should use QueryLogsContext so a disconnected client releases the
+// shared SQLite connection promptly.
 func QueryLogs(db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]QueryLogEntry, int64, error) {
+	return QueryLogsContext(context.Background(), db, filters, page, pageSize)
+}
+
+// QueryLogsContext retrieves one paginated log page and its total under ctx.
+func QueryLogsContext(ctx context.Context, db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]QueryLogEntry, int64, error) {
+	whereClause, args := queryLogWhere(filters)
+
+	var total int64
+	countSQL := "SELECT COUNT(*) FROM dns_query_logs " + whereClause
+	if err := db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	entries, err := queryLogRows(ctx, db, whereClause, args, pageSize, (page-1)*pageSize)
+	return entries, total, err
+}
+
+// StreamQueryLogsContext writes matching entries incrementally to consume.
+// Unlike paginated listings it intentionally skips COUNT(*) and does not
+// accumulate rows, making large CSV exports bounded by the database cursor and
+// writer buffering rather than the result set size.
+func StreamQueryLogsContext(ctx context.Context, db *sql.DB, filters QueryLogFilters, limit int, consume func(QueryLogEntry) error) error {
+	if limit <= 0 {
+		return nil
+	}
+	whereClause, args := queryLogWhere(filters)
+	_, err := queryLogRows(ctx, db, whereClause, args, limit, 0, consume)
+	return err
+}
+
+func queryLogWhere(filters QueryLogFilters) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
-
 	if filters.ClientIP != "" {
 		conditions = append(conditions, "client_ip = ?")
 		args = append(args, filters.ClientIP)
@@ -245,51 +338,48 @@ func QueryLogs(db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]Query
 		conditions = append(conditions, "created_at <= ?")
 		args = append(args, filters.EndTime)
 	}
-
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	if len(conditions) == 0 {
+		return "", args
 	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
 
-	// Count total.
-	var total int64
-	countSQL := "SELECT COUNT(*) FROM dns_query_logs " + whereClause
-	err := db.QueryRow(countSQL, args...).Scan(&total)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Fetch page.
-	offset := (page - 1) * pageSize
+func queryLogRows(ctx context.Context, db *sql.DB, whereClause string, args []interface{}, limit, offset int, consume ...func(QueryLogEntry) error) ([]QueryLogEntry, error) {
 	querySQL := "SELECT id, client_ip, client_port, protocol, query_name, query_type, " +
 		"response_code, response_time_ms, upstream, cached, blocked, created_at " +
 		"FROM dns_query_logs " + whereClause +
 		" ORDER BY created_at DESC LIMIT ? OFFSET ?"
-	args = append(args, pageSize, offset)
-
-	rows, err := db.Query(querySQL, args...)
+	queryArgs := append(append([]interface{}(nil), args...), limit, offset)
+	rows, err := db.QueryContext(ctx, querySQL, queryArgs...)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 
 	var entries []QueryLogEntry
+	consumer := (func(QueryLogEntry) error)(nil)
+	if len(consume) > 0 {
+		consumer = consume[0]
+	} else {
+		entries = make([]QueryLogEntry, 0)
+	}
 	for rows.Next() {
 		var e QueryLogEntry
-		if err := rows.Scan(
-			&e.ID, &e.ClientIP, &e.ClientPort, &e.Protocol,
-			&e.QueryName, &e.QueryType, &e.ResponseCode,
-			&e.ResponseTimeMs, &e.Upstream, &e.Cached, &e.Blocked, &e.CreatedAt,
-		); err != nil {
-			return nil, 0, err
+		if err := rows.Scan(&e.ID, &e.ClientIP, &e.ClientPort, &e.Protocol, &e.QueryName, &e.QueryType, &e.ResponseCode, &e.ResponseTimeMs, &e.Upstream, &e.Cached, &e.Blocked, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		if consumer != nil {
+			if err := consumer(e); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterating query log entries: %w", err)
+		return nil, fmt.Errorf("iterating query log entries: %w", err)
 	}
-
-	return entries, total, nil
+	return entries, nil
 }
 
 // QueryLogFilters holds filter parameters for query log queries.

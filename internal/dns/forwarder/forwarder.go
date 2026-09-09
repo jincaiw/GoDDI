@@ -2,6 +2,7 @@ package forwarder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jasonwa/goddi/internal/metrics"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 )
@@ -29,6 +31,18 @@ const (
 	StrategyLatencyBest     SelectionStrategy = "latency_best"
 	StrategyHealthAware     SelectionStrategy = "health_aware"
 )
+
+// ErrRetryableResponse identifies a valid DNS response whose RCODE permits
+// trying the next upstream. It is deliberately distinct from transport or
+// protocol failures so callers can keep DNS failure semantics observable.
+var ErrRetryableResponse = errors.New("retryable upstream DNS response")
+
+// isRetryableRCode defines the minimal failover policy: SERVFAIL usually
+// indicates that another resolver may still answer, whereas NXDOMAIN and
+// REFUSED retain their terminal DNS semantics.
+func isRetryableRCode(rcode int) bool {
+	return rcode == dns.RcodeServerFailure
+}
 
 // Forwarder represents a single upstream DNS server.
 type Forwarder struct {
@@ -109,6 +123,15 @@ func (f *Forwarder) recordFailure() {
 		f.healthy.Store(false)
 		slog.Warn("forwarder: marked unhealthy", "name", f.Name, "address", f.Address, "consecutive_fails", fails)
 	}
+}
+
+func (f *Forwarder) healthSnapshot() (bool, int32) {
+	return f.healthy.Load(), f.consecutiveFails.Load()
+}
+
+func (f *Forwarder) recordMetric(outcome string, duration time.Duration) {
+	healthy, failures := f.healthSnapshot()
+	metrics.RecordUpstreamAttempt(f.ID, outcome, duration, healthy, failures)
 }
 
 // ForwarderGroup manages multiple upstream DNS servers.
@@ -473,12 +496,25 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 	d := time.Since(start)
 
 	if err != nil {
-		f.recordFailure()
+		// Parallel-fastest cancels losing requests after a winner is selected.
+		// That cancellation says nothing about an upstream's health and must not
+		// accumulate toward its failure threshold.
+		outcome := "transport_error"
+		if errors.Is(err, context.Canceled) {
+			outcome = "canceled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			outcome = "timeout"
+		}
+		if outcome != "canceled" {
+			f.recordFailure()
+		}
+		f.recordMetric(outcome, d)
 		return nil, d, fmt.Errorf("query upstream %s (%s): %w", f.Name, f.Address, err)
 	}
 
 	if resp == nil {
 		f.recordFailure()
+		f.recordMetric("invalid_response", d)
 		return nil, d, fmt.Errorf("nil response from upstream %s (%s)", f.Name, f.Address)
 	}
 
@@ -487,10 +523,12 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 	// and must be discarded.
 	if resp.Id != msg.Id {
 		f.recordFailure()
+		f.recordMetric("invalid_response", d)
 		return nil, d, fmt.Errorf("qid mismatch from upstream %s (%s): got %d, want %d", f.Name, f.Address, resp.Id, msg.Id)
 	}
 	if !questionMatches(msg.Question, resp.Question) {
 		f.recordFailure()
+		f.recordMetric("invalid_response", d)
 		return nil, d, fmt.Errorf("question section mismatch from upstream %s (%s)", f.Name, f.Address)
 	}
 
@@ -500,30 +538,53 @@ func (fg *ForwarderGroup) queryUpstream(ctx context.Context, msg *dns.Msg, f *Fo
 		resp, _, err = tcpClient.ExchangeContext(ctx, msg, parseHostPort(f.Address))
 		d = time.Since(start)
 		if err != nil {
-			f.recordFailure()
+			outcome := "transport_error"
+			if errors.Is(err, context.Canceled) {
+				outcome = "canceled"
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				outcome = "timeout"
+			}
+			// The TCP fallback inherits the caller context. A cancellation after
+			// a parallel winner has already been selected is not an upstream
+			// failure, just like cancellation during the initial UDP exchange.
+			if outcome != "canceled" {
+				f.recordFailure()
+			}
+			f.recordMetric(outcome, d)
 			return nil, d, fmt.Errorf("tcp retry upstream %s (%s): %w", f.Name, f.Address, err)
 		}
 		if resp == nil {
 			f.recordFailure()
+			f.recordMetric("invalid_response", d)
 			return nil, d, fmt.Errorf("nil tcp response from upstream %s (%s)", f.Name, f.Address)
 		}
 		// Re-verify correlation after the TCP retry.
 		if resp.Id != msg.Id {
 			f.recordFailure()
+			f.recordMetric("invalid_response", d)
 			return nil, d, fmt.Errorf("qid mismatch on tcp retry from upstream %s (%s): got %d, want %d", f.Name, f.Address, resp.Id, msg.Id)
 		}
 		if !questionMatches(msg.Question, resp.Question) {
 			f.recordFailure()
+			f.recordMetric("invalid_response", d)
 			return nil, d, fmt.Errorf("question section mismatch on tcp retry from upstream %s (%s)", f.Name, f.Address)
 		}
 	}
 
+	if isRetryableRCode(resp.Rcode) {
+		f.recordFailure()
+		f.recordMetric("servfail", d)
+		return nil, d, fmt.Errorf("query upstream %s (%s): %w: %s", f.Name, f.Address, ErrRetryableResponse, dns.RcodeToString[resp.Rcode])
+	}
+
 	f.recordSuccess(d)
+	f.recordMetric("success", d)
 	return resp, d, nil
 }
 
-// HealthCheck probes all forwarders.
-func (fg *ForwarderGroup) HealthCheck() {
+// HealthCheck probes all enabled forwarders using the same correlation,
+// retryable-RCODE, and health-accounting rules as production queries.
+func (fg *ForwarderGroup) HealthCheck(ctx context.Context) {
 	fg.mu.RLock()
 	forwarders := make([]*Forwarder, len(fg.forwarders))
 	copy(forwarders, fg.forwarders)
@@ -533,35 +594,39 @@ func (fg *ForwarderGroup) HealthCheck() {
 		if !f.Enabled {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return
+		}
 
 		msg := new(dns.Msg)
 		msg.SetQuestion(".", dns.TypeNS)
 		msg.RecursionDesired = true
-
-		probeProto := f.Protocol
-		if probeProto == "" {
-			probeProto = "udp"
-		}
-
-		start := time.Now()
-		var resp *dns.Msg
-		var err error
-		if isEncryptedProtocol(probeProto) {
-			resp, err = f.exchangeEncrypted(context.Background(), msg, probeProto, 3*time.Second)
-		} else {
-			client := f.clientFor(probeProto, 3*time.Second)
-			resp, _, err = client.Exchange(msg, parseHostPort(f.Address))
-		}
-		d := time.Since(start)
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, _, _ = fg.queryUpstream(probeCtx, msg, f)
+		cancel()
 
 		f.mu.Lock()
 		f.lastHealthCheck = time.Now()
 		f.mu.Unlock()
+	}
+}
 
-		if err != nil || resp == nil {
-			f.recordFailure()
-		} else {
-			f.recordSuccess(d)
+// RunHealthChecks performs bounded periodic probes until ctx is cancelled.
+// A non-positive interval disables the loop, allowing deployments to rely on
+// passive health accounting only.
+func (fg *ForwarderGroup) RunHealthChecks(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	fg.HealthCheck(ctx)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fg.HealthCheck(ctx)
 		}
 	}
 }

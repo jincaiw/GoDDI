@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/csv"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jasonwa/goddi/internal/api/response"
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
@@ -36,9 +40,11 @@ func ListDNSQueryLogs(w http.ResponseWriter, r *http.Request) {
 		filters.Blocked = &blocked
 	}
 
-	entries, total, err := dnsquerylog.QueryLogs(DNSServices.DB, filters, page, pageSize)
+	ctx, cancel := queryLogRequestContext(r)
+	defer cancel()
+	entries, total, err := dnsquerylog.QueryLogsContext(ctx, DNSServices.DB, filters, page, pageSize)
 	if err != nil {
-		response.InternalErrorWithLog(w, "failed to query logs", err)
+		writeQueryLogQueryError(w, err)
 		return
 	}
 
@@ -73,32 +79,58 @@ func ExportDNSQueryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const maxExportRows = 100000
-	entries, _, err := dnsquerylog.QueryLogs(DNSServices.DB, filters, 1, maxExportRows)
-	if err != nil {
-		response.InternalErrorWithLog(w, "failed to query logs", err)
-		return
-	}
+	ctx, cancel := queryLogRequestContext(r)
+	defer cancel()
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="dns-query-logs.csv"`)
 
-	// csv.Writer over the HTTP body streams each row without buffering the
-	// whole export in memory.
+	// csv.Writer writes each database row immediately. The stream intentionally
+	// avoids the paginated list's COUNT(*) and result slice allocation.
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{
+	if err := cw.Write([]string{
 		"timestamp", "client_ip", "client_port", "protocol",
 		"query_name", "query_type", "response_code",
 		"response_time_ms", "upstream", "cached", "blocked",
-	})
-	for _, e := range entries {
-		_ = cw.Write([]string{
+	}); err != nil {
+		return
+	}
+	err := dnsquerylog.StreamQueryLogsContext(ctx, DNSServices.DB, filters, maxExportRows, func(e dnsquerylog.QueryLogEntry) error {
+		if err := cw.Write([]string{
 			e.CreatedAt, e.ClientIP, strconv.Itoa(e.ClientPort), e.Protocol,
 			e.QueryName, e.QueryType, e.ResponseCode,
 			strconv.FormatFloat(e.ResponseTimeMs, 'f', -1, 64),
 			e.Upstream,
 			strconv.FormatBool(e.Cached),
 			strconv.FormatBool(e.Blocked),
-		})
+		}); err != nil {
+			return err
+		}
+		cw.Flush()
+		return cw.Error()
+	})
+	if err != nil {
+		// Headers and some CSV rows may already be written; do not append a JSON
+		// envelope to a download. The client can retry; context cancellation is
+		// expected when a browser aborts a large download.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			slog.Error("dns query-log export failed", "error", err)
+		}
+		return
 	}
 	cw.Flush()
+}
+
+const queryLogQueryTimeout = 10 * time.Second
+
+func queryLogRequestContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), queryLogQueryTimeout)
+}
+
+func writeQueryLogQueryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		response.ServiceUnavailable(w, "日志查询繁忙或已超时，请缩小时间范围后重试", nil)
+		return
+	}
+	response.InternalErrorWithLog(w, "failed to query logs", err)
 }

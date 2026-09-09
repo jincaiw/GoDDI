@@ -39,7 +39,7 @@ const columns = [
   { title: () => t('logs.dns.queryType'), key: 'query_type', width: 100 },
   { title: () => t('logs.dns.clientIp'), key: 'client_ip', width: 140 },
   { title: () => t('logs.dns.responseCode'), key: 'response_code', width: 130 },
-  { title: () => t('logs.dns.responseTime'), key: 'response_time', width: 110, render: (row: DNSQueryLog) => `${row.response_time} ms` },
+  { title: () => t('logs.dns.responseTime'), key: 'response_time_ms', width: 110, render: (row: DNSQueryLog) => `${row.response_time_ms} ms` },
   { title: () => t('logs.dns.cached'), key: 'cached', width: 100, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.cached ? 'success' : 'default' }, { default: () => row.cached ? t('common.yes') : t('common.no') }) },
   { title: () => t('logs.dns.blocked'), key: 'blocked', width: 100, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.blocked ? 'error' : 'default' }, { default: () => row.blocked ? t('common.yes') : t('common.no') }) },
   { title: () => t('logs.dns.upstream'), key: 'upstream', width: 160, ellipsis: { tooltip: true } },

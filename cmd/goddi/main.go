@@ -50,7 +50,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.3.1"
+	Version   = "0.4.0"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -291,8 +291,21 @@ func runServer(configPath string) error {
 		queryLog = dnsquerylog.NewQueryLogger(db.DB, cfg.Log.RetentionDays)
 		slog.Info("DNS query logger initialized", "retention_days", cfg.Log.RetentionDays)
 
-		// Publish dropped query-log entries to /metrics (L1).
-		metrics.RegisterQueryLogDroppedProvider(queryLog.DroppedCount)
+		// Publish query-log queue pressure and persistence outcomes to /metrics.
+		metrics.RegisterQueryLogStatsProvider(func() metrics.QueryLogStatsSample {
+			st := queryLog.Stats()
+			return metrics.QueryLogStatsSample{
+				QueueDepth:      st.QueueDepth,
+				QueueCapacity:   st.QueueCapacity,
+				DroppedFull:     st.DroppedFull,
+				Written:         st.Written,
+				BeginFailures:   st.BeginFailures,
+				PrepareFailures: st.PrepareFailures,
+				ExecFailures:    st.ExecFailures,
+				CommitFailures:  st.CommitFailures,
+				CleanupFailures: st.CleanupFailures,
+			}
+		})
 	}
 
 	// DNS Client (for debug queries).
@@ -559,6 +572,12 @@ func runServer(configPath string) error {
 
 	// Block list URL subscription refresh.
 	go blockListFetcher.Run(backgroundCtx)
+
+	// Active upstream probes complement passive query accounting. The loop has
+	// its own bounded per-probe timeout and exits with the service context.
+	if interval := time.Duration(cfg.Forwarders.HealthCheckIntervalSeconds) * time.Second; interval > 0 {
+		go fwdGroup.RunHealthChecks(backgroundCtx, interval)
+	}
 
 	// Record aging: delete expired records every 10 minutes.
 	go func() {

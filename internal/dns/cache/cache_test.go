@@ -2,6 +2,7 @@ package cache
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -486,12 +487,13 @@ func TestCache_StaleHitTriggersRefresh(t *testing.T) {
 	var calls atomic.Int32
 	called := make(chan struct{}, 1)
 	c := New(Config{MinTTL: 1, MaxTTL: 300, ServeStale: true, StaleTTL: 300})
-	c.SetPrefetchCallback(func(string, uint16) {
+	c.SetPrefetchCallback(func(string, uint16) error {
 		calls.Add(1)
 		select {
 		case called <- struct{}{}:
 		default:
 		}
+		return nil
 	})
 	c.Set("www.example.", dns.TypeA, newDNSMsg("www.example.", dns.TypeA, 300, []string{"192.0.2.1"}))
 
@@ -511,6 +513,45 @@ func TestCache_StaleHitTriggersRefresh(t *testing.T) {
 	case <-called:
 	case <-time.After(time.Second):
 		t.Fatalf("stale hit did not trigger refresh; calls=%d", calls.Load())
+	}
+}
+
+func TestCache_StaleRefreshFailureBacksOff(t *testing.T) {
+	var calls atomic.Int32
+	first := make(chan struct{}, 1)
+	c := New(Config{MinTTL: 1, MaxTTL: 300, ServeStale: true, StaleTTL: 300})
+	c.SetPrefetchCallback(func(string, uint16) error {
+		calls.Add(1)
+		first <- struct{}{}
+		return errors.New("upstream unavailable")
+	})
+	c.Set("retry.example.", dns.TypeA, newDNSMsg("retry.example.", dns.TypeA, 300, []string{"192.0.2.2"}))
+
+	key := cacheKey("retry.example.", dns.TypeA)
+	s := c.shardFor(key)
+	s.mu.Lock()
+	e := s.entries[key].Value.(*lruItem).entry
+	e.ExpiresAt = time.Now().Add(-time.Second)
+	e.StaleUntil = time.Now().Add(time.Minute)
+	s.mu.Unlock()
+
+	_, hit, stale := c.Get("retry.example.", dns.TypeA)
+	if !hit || !stale {
+		t.Fatal("expected first stale cache response")
+	}
+	select {
+	case <-first:
+	case <-time.After(time.Second):
+		t.Fatal("failed refresh was not called")
+	}
+
+	_, hit, stale = c.Get("retry.example.", dns.TypeA)
+	if !hit || !stale {
+		t.Fatal("expected second stale cache response")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("refresh attempts = %d, want 1 during backoff", got)
 	}
 }
 

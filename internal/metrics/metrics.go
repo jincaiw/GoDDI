@@ -89,6 +89,27 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
+	UpstreamQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goddi_dns_upstream_queries_total",
+		Help: "DNS upstream attempts by stable forwarder ID and outcome.",
+	}, []string{"upstream_id", "outcome"})
+
+	UpstreamDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "goddi_dns_upstream_duration_seconds",
+		Help:    "DNS upstream attempt duration in seconds by stable forwarder ID.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"upstream_id"})
+
+	UpstreamHealthy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dns_upstream_healthy",
+		Help: "Current upstream health state (1 healthy, 0 unhealthy).",
+	}, []string{"upstream_id"})
+
+	UpstreamConsecutiveFailures = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dns_upstream_consecutive_failures",
+		Help: "Current consecutive upstream failure count.",
+	}, []string{"upstream_id"})
+
 	DHCPLeasesActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_leases_active",
 		Help: "Number of active DHCP leases.",
@@ -154,6 +175,26 @@ var (
 		Name: "goddi_query_log_dropped_total",
 		Help: "Total number of query-log entries dropped because the log channel was full.",
 	})
+
+	QueryLogWrittenTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_query_log_written_total",
+		Help: "Total number of query-log entries durably committed to SQLite.",
+	})
+
+	QueryLogWriteFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goddi_query_log_write_failures_total",
+		Help: "Total query-log writer failures by pipeline stage.",
+	}, []string{"stage"})
+
+	QueryLogQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_query_log_queue_depth",
+		Help: "Current number of query-log entries waiting for asynchronous persistence.",
+	})
+
+	QueryLogQueueCapacity = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_query_log_queue_capacity",
+		Help: "Configured capacity of the query-log asynchronous queue.",
+	})
 )
 
 // CacheStatsSample is a point-in-time snapshot of cache statistics
@@ -166,17 +207,37 @@ type CacheStatsSample struct {
 	Misses     int64
 }
 
+// QueryLogStatsSample captures query-log queue pressure and cumulative writer
+// outcomes. It lives in metrics to avoid coupling the exporter to DNS types.
+type QueryLogStatsSample struct {
+	QueueDepth      int
+	QueueCapacity   int
+	DroppedFull     int64
+	Written         int64
+	BeginFailures   int64
+	PrepareFailures int64
+	ExecFailures    int64
+	CommitFailures  int64
+	CleanupFailures int64
+}
+
 var (
 	// cacheStatsFn, when non-nil, is sampled by the metrics ticker.
 	cacheStatsFn func() CacheStatsSample
 
-	// queryLogDroppedFn, when non-nil, is sampled by the metrics ticker.
-	queryLogDroppedFn func() int64
+	// queryLogStatsFn, when non-nil, is sampled by the metrics ticker.
+	queryLogStatsFn func() QueryLogStatsSample
 
 	// last samples used to convert absolute gauges into counter deltas.
-	lastCacheHits   int64
-	lastCacheMisses int64
-	lastQLogDropped int64
+	lastCacheHits           int64
+	lastCacheMisses         int64
+	lastQLogDropped         int64
+	lastQLogWritten         int64
+	lastQLogBeginFailures   int64
+	lastQLogPrepareFailures int64
+	lastQLogExecFailures    int64
+	lastQLogCommitFailures  int64
+	lastQLogCleanupFailures int64
 )
 
 // RegisterCacheStatsProvider registers a callback the metrics ticker
@@ -186,10 +247,10 @@ func RegisterCacheStatsProvider(fn func() CacheStatsSample) {
 	cacheStatsFn = fn
 }
 
-// RegisterQueryLogDroppedProvider registers a callback the metrics
-// ticker samples every tick to publish goddi_query_log_dropped_total.
-func RegisterQueryLogDroppedProvider(fn func() int64) {
-	queryLogDroppedFn = fn
+// RegisterQueryLogStatsProvider registers a callback sampled by the metrics
+// ticker to publish query-log queue pressure and writer outcome metrics.
+func RegisterQueryLogStatsProvider(fn func() QueryLogStatsSample) {
+	queryLogStatsFn = fn
 }
 
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
@@ -212,6 +273,10 @@ func InitMetrics() {
 			DNSDroppedTotal,
 			DNSClientsTotal,
 			DNSResponseDurationSeconds,
+			UpstreamQueriesTotal,
+			UpstreamDurationSeconds,
+			UpstreamHealthy,
+			UpstreamConsecutiveFailures,
 			DHCPLeasesActive,
 			DHCPScopeUsageRatio,
 			ClusterNodesTotal,
@@ -225,6 +290,10 @@ func InitMetrics() {
 			CacheHitsTotal,
 			CacheMissesTotal,
 			QueryLogDroppedTotal,
+			QueryLogWrittenTotal,
+			QueryLogWriteFailuresTotal,
+			QueryLogQueueDepth,
+			QueryLogQueueCapacity,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine
@@ -264,13 +333,25 @@ func sampleProviders() {
 		lastCacheHits = s.Hits
 		lastCacheMisses = s.Misses
 	}
-	if fn := queryLogDroppedFn; fn != nil {
-		v := fn()
-		if d := v - lastQLogDropped; d > 0 {
-			QueryLogDroppedTotal.Add(float64(d))
-		}
-		lastQLogDropped = v
+	if fn := queryLogStatsFn; fn != nil {
+		s := fn()
+		QueryLogQueueDepth.Set(float64(s.QueueDepth))
+		QueryLogQueueCapacity.Set(float64(s.QueueCapacity))
+		addQueryLogDelta(QueryLogDroppedTotal, s.DroppedFull, &lastQLogDropped)
+		addQueryLogDelta(QueryLogWrittenTotal, s.Written, &lastQLogWritten)
+		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("begin"), s.BeginFailures, &lastQLogBeginFailures)
+		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("prepare"), s.PrepareFailures, &lastQLogPrepareFailures)
+		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("exec"), s.ExecFailures, &lastQLogExecFailures)
+		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("commit"), s.CommitFailures, &lastQLogCommitFailures)
+		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("cleanup"), s.CleanupFailures, &lastQLogCleanupFailures)
 	}
+}
+
+func addQueryLogDelta(counter prometheus.Counter, current int64, previous *int64) {
+	if d := current - *previous; d > 0 {
+		counter.Add(float64(d))
+	}
+	*previous = current
 }
 
 // Shutdown stops the background goroutine that updates the uptime gauge.
@@ -308,6 +389,23 @@ func RecordDNSQuery(qtype, rcode string, duration float64, cached, blocked bool)
 	if blocked {
 		DNSBlockedTotal.Inc()
 	}
+}
+
+// RecordUpstreamAttempt records one data-plane upstream attempt. IDs are
+// stable configuration identifiers, rather than names or addresses, to avoid
+// high-cardinality labels and preserve metric identity across address changes.
+func RecordUpstreamAttempt(id, outcome string, duration time.Duration, healthy bool, failures int32) {
+	if id == "" {
+		return
+	}
+	UpstreamQueriesTotal.WithLabelValues(id, outcome).Inc()
+	UpstreamDurationSeconds.WithLabelValues(id).Observe(duration.Seconds())
+	if healthy {
+		UpstreamHealthy.WithLabelValues(id).Set(1)
+	} else {
+		UpstreamHealthy.WithLabelValues(id).Set(0)
+	}
+	UpstreamConsecutiveFailures.WithLabelValues(id).Set(float64(failures))
 }
 
 // RecordDHCPLeaseChange records DHCP lease metrics.

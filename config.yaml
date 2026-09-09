@@ -77,7 +77,8 @@ cache:
   persistent_file: ""
 
 forwarders:
-  mode: "sequential"     # sequential | round_robin | random | parallel_fastest | latency_best | health_aware
+  mode: "health_aware"   # sequential | round_robin | random | parallel_fastest | latency_best | health_aware
+  health_check_interval_seconds: 30 # 0 disables active probes; passive health accounting remains enabled
   servers:
     - name: "google"
       protocol: "udp"

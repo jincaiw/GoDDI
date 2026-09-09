@@ -470,8 +470,11 @@ func TestDefaultConfig_Forwarders(t *testing.T) {
 	t.Parallel()
 
 	cfg := DefaultConfig()
-	if cfg.Forwarders.Mode != "sequential" {
-		t.Errorf("Forwarders.Mode = %q, want %q", cfg.Forwarders.Mode, "sequential")
+	if cfg.Forwarders.Mode != "health_aware" {
+		t.Errorf("Forwarders.Mode = %q, want %q", cfg.Forwarders.Mode, "health_aware")
+	}
+	if cfg.Forwarders.HealthCheckIntervalSeconds != 30 {
+		t.Errorf("Forwarders.HealthCheckIntervalSeconds = %d, want 30", cfg.Forwarders.HealthCheckIntervalSeconds)
 	}
 	if len(cfg.Forwarders.Servers) != 2 {
 		t.Errorf("Forwarders.Servers count = %d, want 2", len(cfg.Forwarders.Servers))

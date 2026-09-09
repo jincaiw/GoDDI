@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -52,6 +54,8 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db := SystemServices.DB
+	ctx, cancel := statsQueryContext(r)
+	defer cancel()
 
 	rangeName := r.URL.Query().Get("range")
 	if rangeName == "" {
@@ -124,7 +128,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	endSQL := now.UTC().Format("2006-01-02 15:04:05")
 
 	var s StatsSummary
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
 			COALESCE(SUM(CASE WHEN response_code = 'NOERROR' THEN 1 ELSE 0 END), 0),
@@ -142,12 +146,12 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		&s.Blocked, &s.Cached, &s.Clients, &s.AvgResponseMs,
 	)
 	if err != nil {
-		response.InternalErrorWithLog(w, "统计查询失败", err)
+		writeStatsQueryError(w, "统计查询失败", err)
 		return
 	}
 
 	series := make([]StatsBucket, 0, 64)
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT
 			strftime(?, created_at) AS bucket,
 			COUNT(*),
@@ -159,7 +163,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		ORDER BY bucket ASC
 	`, bucketFmt, startSQL, endSQL)
 	if err != nil {
-		response.InternalErrorWithLog(w, "统计序列查询失败", err)
+		writeStatsQueryError(w, "统计序列查询失败", err)
 		return
 	}
 	defer rows.Close()
@@ -199,6 +203,8 @@ func GetTopStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db := SystemServices.DB
+	ctx, cancel := statsQueryContext(r)
+	defer cancel()
 
 	statsType := r.URL.Query().Get("type")
 	switch statsType {
@@ -242,6 +248,10 @@ func GetTopStats(w http.ResponseWriter, r *http.Request) {
 			response.BadRequest(w, "end 必须晚于 start")
 			return
 		}
+		if end.Sub(start) > 90*24*time.Hour {
+			response.BadRequest(w, "自定义范围最长 90 天")
+			return
+		}
 		now = end
 	default: // "day"
 		start = now.AddDate(0, 0, -1)
@@ -266,9 +276,9 @@ func GetTopStats(w http.ResponseWriter, r *http.Request) {
 		ORDER BY hits DESC
 		LIMIT ?`
 
-	rows, err := db.Query(query, startSQL, endSQL, limit)
+	rows, err := db.QueryContext(ctx, query, startSQL, endSQL, limit)
 	if err != nil {
-		response.InternalErrorWithLog(w, "Top 统计查询失败", err)
+		writeStatsQueryError(w, "Top 统计查询失败", err)
 		return
 	}
 	defer rows.Close()
@@ -286,7 +296,7 @@ func GetTopStats(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		response.InternalErrorWithLog(w, "Top 统计迭代失败", err)
+		writeStatsQueryError(w, "Top 统计迭代失败", err)
 		return
 	}
 
@@ -297,4 +307,21 @@ func GetTopStats(w http.ResponseWriter, r *http.Request) {
 		"end":   now.UTC().Format(time.RFC3339),
 		"top":   entries,
 	})
+}
+
+const statsQueryTimeout = 5 * time.Second
+
+// statsQueryContext preserves client cancellation while placing an explicit
+// upper bound on aggregate scans. This keeps the single SQLite connection from
+// being indefinitely occupied by a disconnected browser or expensive range.
+func statsQueryContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), statsQueryTimeout)
+}
+
+func writeStatsQueryError(w http.ResponseWriter, message string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		response.ServiceUnavailable(w, "统计查询繁忙或已超时，请缩小时间范围后重试", nil)
+		return
+	}
+	response.InternalErrorWithLog(w, message, err)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -215,7 +216,7 @@ func TestPrefetchRejectsUnsafeResponse(t *testing.T) {
 	srv.forwarder.SetForwarders([]*forwarder.Forwarder{{
 		ID: "test", Protocol: "udp", Address: packetConn.LocalAddr().String(), Enabled: true,
 	}})
-	srv.Prefetch("rebind.example.", dns.TypeA)
+	_ = srv.Prefetch("rebind.example.", dns.TypeA)
 	if _, hit, _ := dnsCache.Get("rebind.example.", dns.TypeA); hit {
 		t.Fatal("prefetch cached a rebinding response")
 	}
@@ -246,7 +247,7 @@ func TestPrefetchRejectsCNAMECloakingResponse(t *testing.T) {
 	srv.forwarder.SetForwarders([]*forwarder.Forwarder{{
 		ID: "test", Protocol: "udp", Address: packetConn.LocalAddr().String(), Enabled: true,
 	}})
-	srv.Prefetch("alias.example.", dns.TypeA)
+	_ = srv.Prefetch("alias.example.", dns.TypeA)
 	if _, hit, _ := dnsCache.Get("alias.example.", dns.TypeA); hit {
 		t.Fatal("prefetch cached a CNAME cloaking response")
 	}
@@ -293,6 +294,121 @@ func TestStartReturnsBoundListenerErrors(t *testing.T) {
 				t.Fatal("server marked running after listener bind error")
 			}
 		})
+	}
+}
+
+func TestResolveSharedForwardCoalescesEquivalentQueries(t *testing.T) {
+	var calls atomic.Int32
+	upstream := &forwarder.Forwarder{ID: "test", Name: "test", Protocol: "udp", Address: "127.0.0.1:0", Enabled: true}
+	upstream.SetHealthy(true)
+	srv := New(&config.Config{}, nil, nil, forwarder.NewForwarderGroup(forwarder.StrategySequential, time.Second), nil, nil, nil)
+
+	// Install a local forwarding function by using a completed inflight entry
+	// is not sufficient to exercise the leader. Instead, use a replacement
+	// forwarder group with an unexported transport-free path through a valid
+	// single response served by a local UDP DNS listener.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
+		calls.Add(1)
+		time.Sleep(80 * time.Millisecond)
+		resp := new(dns.Msg)
+		resp.SetReply(req)
+		_ = w.WriteMsg(resp)
+	})
+	dnsSrv := &dns.Server{PacketConn: conn, Handler: mux}
+	go func() { _ = dnsSrv.ActivateAndServe() }()
+	defer dnsSrv.Shutdown()
+
+	upstream.Address = conn.LocalAddr().String()
+	group := forwarder.NewForwarderGroup(forwarder.StrategySequential, time.Second)
+	group.SetForwarders([]*forwarder.Forwarder{upstream})
+	srv.forwarder = group
+
+	base := new(dns.Msg)
+	base.SetQuestion("coalesce.example.", dns.TypeA)
+	base.RecursionDesired = true
+	first := base.Copy()
+	first.Id = 100
+	second := base.Copy()
+	second.Id = 200
+
+	results := make(chan *dns.Msg, 2)
+	errs := make(chan error, 2)
+	for _, msg := range []*dns.Msg{first, second} {
+		go func(query *dns.Msg) {
+			resp, _, _, err := srv.resolveSharedForward(context.Background(), query)
+			if err == nil {
+				results <- resp
+			}
+			errs <- err
+		}(msg)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("resolveSharedForward: %v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1", got)
+	}
+	for range 2 {
+		resp := <-results
+		if resp == nil || len(resp.Question) != 1 || resp.Question[0].Name != "coalesce.example." {
+			t.Fatalf("invalid shared response: %#v", resp)
+		}
+	}
+}
+
+func TestResolveSharedForwardCallerCancellationDoesNotAbortLeader(t *testing.T) {
+	started := make(chan struct{})
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
+		close(started)
+		time.Sleep(100 * time.Millisecond)
+		resp := new(dns.Msg)
+		resp.SetReply(req)
+		_ = w.WriteMsg(resp)
+	})
+	dnsSrv := &dns.Server{PacketConn: conn, Handler: mux}
+	go func() { _ = dnsSrv.ActivateAndServe() }()
+	defer dnsSrv.Shutdown()
+
+	fwd := &forwarder.Forwarder{ID: "test", Name: "test", Protocol: "udp", Address: conn.LocalAddr().String(), Enabled: true}
+	fwd.SetHealthy(true)
+	group := forwarder.NewForwarderGroup(forwarder.StrategySequential, time.Second)
+	group.SetForwarders([]*forwarder.Forwarder{fwd})
+	srv := New(&config.Config{}, nil, nil, group, nil, nil, nil)
+	query := new(dns.Msg)
+	query.SetQuestion("cancel.example.", dns.TypeA)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := srv.resolveSharedForward(cancelCtx, query)
+		firstDone <- err
+	}()
+	<-started
+	cancel()
+	if err := <-firstDone; err == nil {
+		t.Fatal("cancelled waiter error = nil")
+	}
+
+	resp, _, _, err := srv.resolveSharedForward(context.Background(), query)
+	if err != nil {
+		t.Fatalf("remaining waiter lost shared query: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("remaining waiter response = nil")
 	}
 }
 

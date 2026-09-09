@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
@@ -120,6 +121,39 @@ func TestGetStats_RangeAndIndex(t *testing.T) {
 	}
 	if !strings.Contains(plan, "idx_dns_query_logs_created_at") {
 		t.Fatalf("expected index usage in series query plan, got: %s", plan)
+	}
+}
+
+func TestGetTopStatsRejectsCustomRangeOver90Days(t *testing.T) {
+	db := newStatsTestDB(t)
+	saved := SystemServices
+	SystemServices = &SystemServiceContainer{DB: db}
+	t.Cleanup(func() { SystemServices = saved })
+
+	start := time.Now().UTC().AddDate(0, 0, -91).Format(time.RFC3339)
+	end := time.Now().UTC().Format(time.RFC3339)
+	req := httptest.NewRequest("GET", "/api/v1/stats/top?type=domains&range=custom&start="+start+"&end="+end, nil)
+	rec := httptest.NewRecorder()
+	GetTopStats(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetStatsHonorsCanceledRequest(t *testing.T) {
+	db := newStatsTestDB(t)
+	saved := SystemServices
+	SystemServices = &SystemServiceContainer{DB: db}
+	t.Cleanup(func() { SystemServices = saved })
+
+	req := httptest.NewRequest("GET", "/api/v1/stats?range=day", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	GetStats(rec, req)
+	if rec.Code != 503 {
+		t.Fatalf("expected 503 for canceled request, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

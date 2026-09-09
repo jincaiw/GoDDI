@@ -87,6 +87,20 @@ type Server struct {
 	// AXFR/IXFR/NOTIFY transactions.
 	tsigMu      sync.Mutex
 	tsigSecrets map[string]string
+
+	// inflight coalesces equivalent cache-miss forwarding work. It is kept at
+	// the server boundary rather than in the upstream package because this is
+	// where the fully prepared request and selected routing policy meet.
+	inflightMu sync.Mutex
+	inflight   map[string]*inflightQuery
+}
+
+type inflightQuery struct {
+	done      chan struct{}
+	response  *dns.Msg
+	forwarder *forwarder.Forwarder
+	duration  time.Duration
+	err       error
 }
 
 // New creates a new DNS server.
@@ -108,6 +122,7 @@ func New(
 		queryLog:    queryLog,
 		zoneStore:   zoneStore,
 		zones:       make(map[string]*ZoneData),
+		inflight:    make(map[string]*inflightQuery),
 
 		// ECS defaults to the privacy-preserving strip policy.
 		ecsMode:       forwarder.ECSStrip,
@@ -310,9 +325,9 @@ func (s *Server) isRecursionAllowed(clientIP net.IP) bool {
 // the cache's prefetch callback: when a hot entry's remaining TTL drops
 // below the prefetch threshold, the cache calls this to re-resolve the
 // name upstream and refresh the entry without blocking the client.
-func (s *Server) Prefetch(qname string, qtype uint16) {
+func (s *Server) Prefetch(qname string, qtype uint16) error {
 	if s.cache == nil {
-		return
+		return nil
 	}
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(qname), qtype)
@@ -321,17 +336,21 @@ func (s *Server) Prefetch(qname string, qtype uint16) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	resp, _, _, err := s.resolveForward(ctx, s.PrepareUpstreamMsg(msg, nil))
-	if err != nil || resp == nil {
-		return
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("prefetch %s/%d: nil upstream response", qname, qtype)
 	}
 
 	// Prefetch has no client context. Use a public sentinel so rebinding
 	// protection rejects private-address responses before they can enter the
 	// shared cache; client-specific enforcement still runs on every hit.
 	if responseBlockReason(s.filter, resp, "8.8.8.8") != "" {
-		return
+		return fmt.Errorf("prefetch %s/%d: response rejected by policy", qname, qtype)
 	}
 	s.cache.Set(qname, qtype, resp)
+	return nil
 }
 
 // AddEDE attaches an Extended DNS Error (RFC 8914) option to the message's
@@ -1137,7 +1156,78 @@ func (s *Server) answerFromZone(zoneData *ZoneData, qname string, qtype uint16) 
 	return resp
 }
 
-// resolveForward forwards the query to upstream DNS servers. Queries inside
+// resolveSharedForward coalesces semantically identical forwarding work. The
+// shared call owns an independent bounded context, so cancellation of the
+// first waiting DNS client never aborts a query needed by other waiters.
+func (s *Server) resolveSharedForward(ctx context.Context, msg *dns.Msg) (*dns.Msg, *forwarder.Forwarder, time.Duration, error) {
+	key, ok := forwardingKey(msg)
+	if !ok {
+		return s.resolveForward(ctx, msg)
+	}
+
+	s.inflightMu.Lock()
+	if current := s.inflight[key]; current != nil {
+		s.inflightMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, nil, 0, ctx.Err()
+		case <-current.done:
+			return copyInflightResult(current)
+		}
+	}
+	current := &inflightQuery{done: make(chan struct{})}
+	s.inflight[key] = current
+	s.inflightMu.Unlock()
+
+	go func() {
+		// This deliberately does not derive from any client context. The timeout
+		// is aligned with the regular handler forwarding budget.
+		sharedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, fwd, duration, err := s.resolveForward(sharedCtx, msg.Copy())
+		current.response = resp
+		current.forwarder = fwd
+		current.duration = duration
+		current.err = err
+		s.inflightMu.Lock()
+		delete(s.inflight, key)
+		close(current.done)
+		s.inflightMu.Unlock()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, nil, 0, ctx.Err()
+	case <-current.done:
+		return copyInflightResult(current)
+	}
+}
+
+func copyInflightResult(current *inflightQuery) (*dns.Msg, *forwarder.Forwarder, time.Duration, error) {
+	if current.response == nil {
+		return nil, current.forwarder, current.duration, current.err
+	}
+	return current.response.Copy(), current.forwarder, current.duration, current.err
+}
+
+// forwardingKey packs a copied, fully prepared upstream query after clearing
+// the client-specific DNS ID. Any flag, QCLASS or EDNS option that can affect
+// an answer remains in the key. TSIG and multi-question requests bypass
+// coalescing because their response semantics cannot safely be shared.
+func forwardingKey(msg *dns.Msg) (string, bool) {
+	if msg == nil || msg.Opcode != dns.OpcodeQuery || len(msg.Question) != 1 || msg.IsTsig() != nil {
+		return "", false
+	}
+	keyMsg := msg.Copy()
+	keyMsg.Id = 0
+	packed, err := keyMsg.Pack()
+	if err != nil {
+		return "", false
+	}
+	return string(packed), true
+}
+
+// resolveForward forwards the query to upstream servers. Queries inside
 // a forward/stub zone are sent to that zone's configured targets first.
 func (s *Server) resolveForward(ctx context.Context, msg *dns.Msg) (*dns.Msg, *forwarder.Forwarder, time.Duration, error) {
 	// Zone-level forwarding (forward/stub zone types).

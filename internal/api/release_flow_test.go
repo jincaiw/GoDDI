@@ -274,11 +274,29 @@ func TestReleaseFlow_OpenAPIDocumented(t *testing.T) {
 		"/dns/zones/{id}/dnssec/keys",
 		"/dns/zones/{id}/permissions",
 		"/stats/top",
+		"/logs/dns",
+		"/logs/dns/export",
 		"/dns/security/allowlists/import",
 	}
 	for _, path := range want {
 		if _, ok := doc.Paths[path]; !ok {
 			t.Errorf("openapi missing path %s", path)
 		}
+	}
+
+	logsGet := doc.Paths["/logs/dns"]["get"].(map[string]interface{})
+	params := logsGet["parameters"].([]interface{})
+	for _, p := range params {
+		param := p.(map[string]interface{})
+		if param["name"] == "page" && param["in"] != "query" {
+			t.Fatalf("logs page parameter location = %q, want query", param["in"])
+		}
+	}
+	exportGet := doc.Paths["/logs/dns/export"]["get"].(map[string]interface{})
+	responses := exportGet["responses"].(map[string]interface{})
+	success := responses["200"].(map[string]interface{})
+	content := success["content"].(map[string]interface{})
+	if _, ok := content["text/csv"]; !ok {
+		t.Fatal("DNS log export OpenAPI response lacks text/csv")
 	}
 }

@@ -20,6 +20,53 @@ type apiRouteDoc struct {
 	Params  []string `json:"params,omitempty"`
 }
 
+// apiQueryParam describes a query parameter precisely enough for generated
+// clients to distinguish it from a required URL path component.
+type apiQueryParam struct {
+	Name        string
+	Type        string
+	Required    bool
+	Description string
+}
+
+// documentedQueryParams defines the high-traffic operations whose contracts
+// need a precise query schema. Other legacy rows retain their existing path
+// parameter declaration until their DTOs are documented.
+var documentedQueryParams = map[string][]apiQueryParam{
+	"GET /logs/dns": {
+		{Name: "client_ip", Type: "string", Description: "精确匹配客户端 IP"},
+		{Name: "domain", Type: "string", Description: "查询域名模糊匹配"},
+		{Name: "query_type", Type: "string"},
+		{Name: "response_code", Type: "string"},
+		{Name: "blocked", Type: "boolean"},
+		{Name: "start_time", Type: "string", Description: "RFC3339 起始时间"},
+		{Name: "end_time", Type: "string", Description: "RFC3339 结束时间"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /logs/dns/export": {
+		{Name: "client_ip", Type: "string"},
+		{Name: "domain", Type: "string"},
+		{Name: "query_type", Type: "string"},
+		{Name: "response_code", Type: "string"},
+		{Name: "blocked", Type: "boolean"},
+		{Name: "start_time", Type: "string", Description: "RFC3339 起始时间"},
+		{Name: "end_time", Type: "string", Description: "RFC3339 结束时间"},
+	},
+	"GET /stats": {
+		{Name: "range", Type: "string", Description: "hour、day、week、month、year 或 custom"},
+		{Name: "start", Type: "string", Description: "custom 范围的 RFC3339 起始时间"},
+		{Name: "end", Type: "string", Description: "custom 范围的 RFC3339 结束时间"},
+	},
+	"GET /stats/top": {
+		{Name: "type", Type: "string", Required: true, Description: "clients、domains 或 blocked"},
+		{Name: "range", Type: "string"},
+		{Name: "start", Type: "string"},
+		{Name: "end", Type: "string"},
+		{Name: "limit", Type: "integer"},
+	},
+}
+
 // routeDocs enumerates the public API surface of /api/v1.
 var routeDocs = []apiRouteDoc{
 	{"/auth/init", "POST", "Auth", "初始化管理员", false, nil},
@@ -114,7 +161,8 @@ var routeDocs = []apiRouteDoc{
 	{"/dns/security/temporary-disable", "POST", "DNS Security", "临时禁用阻断", true, nil},
 	{"/dns/security/blocking-status", "GET", "DNS Security", "阻断状态", true, nil},
 
-	{"/logs/dns", "GET", "Logs", "DNS 查询日志", true, []string{"client_ip", "domain", "blocked", "page"}},
+	{"/logs/dns", "GET", "Logs", "DNS 查询日志", true, nil},
+	{"/logs/dns/export", "GET", "Logs", "导出 DNS 查询日志 CSV", true, nil},
 	{"/logs/audit", "GET", "Logs", "审计日志", true, []string{"page"}},
 	{"/logs/dhcp", "GET", "Logs", "DHCP 日志", true, []string{"page"}},
 
@@ -155,7 +203,26 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 				"schema":   map[string]string{"type": "string"},
 			})
 		}
+		key := rd.Method + " " + rd.Path
+		for _, qp := range documentedQueryParams[key] {
+			obj := map[string]interface{}{
+				"name":     qp.Name,
+				"in":       "query",
+				"required": qp.Required,
+				"schema":   map[string]string{"type": qp.Type},
+			}
+			if qp.Description != "" {
+				obj["description"] = qp.Description
+			}
+			paramObjs = append(paramObjs, obj)
+		}
 
+		contentType := "application/json"
+		contentSchema := map[string]interface{}{"$ref": "#/components/schemas/ApiResponse"}
+		if key == "GET /logs/dns/export" {
+			contentType = "text/csv"
+			contentSchema = map[string]interface{}{"type": "string", "format": "binary"}
+		}
 		op := map[string]interface{}{
 			"tags":        []string{rd.Tag},
 			"summary":     rd.Summary,
@@ -164,11 +231,11 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 				"200": map[string]interface{}{
 					"description": "成功",
 					"content": map[string]interface{}{
-						"application/json": map[string]interface{}{
-							"schema": map[string]interface{}{"$ref": "#/components/schemas/ApiResponse"},
-						},
+						contentType: map[string]interface{}{"schema": contentSchema},
 					},
 				},
+				"400": map[string]interface{}{"description": "请求参数无效"},
+				"500": map[string]interface{}{"description": "服务端错误"},
 			},
 		}
 		if len(paramObjs) > 0 {

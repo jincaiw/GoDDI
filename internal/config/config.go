@@ -168,8 +168,9 @@ type CacheConfig struct {
 
 // ForwardersConfig holds DNS forwarder configuration.
 type ForwardersConfig struct {
-	Mode    string            `yaml:"mode" validate:"omitempty,oneof=sequential round_robin random parallel_fastest latency_best health_aware"`
-	Servers []ForwarderServer `yaml:"servers"`
+	Mode                       string            `yaml:"mode" validate:"omitempty,oneof=sequential round_robin random parallel_fastest latency_best health_aware"`
+	HealthCheckIntervalSeconds int               `yaml:"health_check_interval_seconds" validate:"gte=0,lte=3600"`
+	Servers                    []ForwarderServer `yaml:"servers"`
 }
 
 // ForwarderServer represents a single DNS forwarder server.
@@ -412,7 +413,8 @@ func DefaultConfig() *Config {
 			PersistentFile: "",
 		},
 		Forwarders: ForwardersConfig{
-			Mode: "sequential",
+			Mode:                       "health_aware",
+			HealthCheckIntervalSeconds: 30,
 			Servers: []ForwarderServer{
 				{Name: "google", Protocol: "udp", Address: "8.8.8.8:53"},
 				{Name: "cloudflare", Protocol: "udp", Address: "1.1.1.1:53"},

@@ -553,7 +553,7 @@ export interface DNSQueryLog {
   query_type: string
   client_ip: string
   response_code: string
-  response_time: number
+  response_time_ms: number
   cached: boolean
   blocked: boolean
   upstream: string

@@ -45,6 +45,13 @@ type entry struct {
 	// we use atomic.Bool and gate the "claim the prefetch" step with
 	// CompareAndSwap.
 	prefetching atomic.Bool `json:"-"`
+
+	// Refresh failures are runtime-only. A failed stale/prefetch refresh sets
+	// nextRefreshUnix so an unhealthy upstream cannot be retried once per cache
+	// hit. Both fields are atomic because the refresh worker updates them after
+	// the shard lock has been released.
+	refreshFailures atomic.Uint32 `json:"-"`
+	nextRefreshUnix atomic.Int64  `json:"-"`
 }
 
 // Stats holds cache statistics.
@@ -102,8 +109,9 @@ type Cache struct {
 	staleTTL   int
 	prefetch   bool
 
-	// Callback for prefetching; if set, called when an entry is about to expire.
-	onPrefetch func(qname string, qtype uint16)
+	// Callback for prefetching; it returns an error so stale refresh failures
+	// can be exponentially backed off instead of retried by every cache hit.
+	onPrefetch func(qname string, qtype uint16) error
 
 	maxEntries int // total capacity across all shards
 
@@ -189,7 +197,7 @@ type tunables struct {
 	maxTTL     int
 	negTTL     int
 	prefetch   bool
-	onPrefetch func(qname string, qtype uint16)
+	onPrefetch func(qname string, qtype uint16) error
 }
 
 // currentTunables snapshots the tunables under cfgMu so readers never
@@ -208,8 +216,9 @@ func (c *Cache) currentTunables() tunables {
 	}
 }
 
-// SetPrefetchCallback sets the callback for prefetching.
-func (c *Cache) SetPrefetchCallback(fn func(qname string, qtype uint16)) {
+// SetPrefetchCallback sets the callback for prefetching. Returning an error
+// asks the cache to back off before scheduling another refresh for this entry.
+func (c *Cache) SetPrefetchCallback(fn func(qname string, qtype uint16) error) {
 	c.cfgMu.Lock()
 	c.onPrefetch = fn
 	c.cfgMu.Unlock()
@@ -293,8 +302,10 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 			capTTL(msg, 30)
 			// A stale response must prompt a refresh even when proactive
 			// prefetching is disabled. The shared latch coalesces concurrent
-			// stale hits with any in-flight prefetch for this entry.
-			triggerRefresh(e, callback, qname, qtype)
+			// stale hits with any in-flight prefetch for this entry. Failed
+			// attempts use an entry-local backoff to prevent hot stale keys
+			// from amplifying an upstream outage.
+			triggerRefresh(e, callback, qname, qtype, now)
 			return msg, true, true
 		}
 
@@ -348,7 +359,7 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 	}
 
 	if shouldPrefetch {
-		triggerRefresh(e, callback, qname, qtype)
+		triggerRefresh(e, callback, qname, qtype, now)
 	}
 
 	return msg, true, false
@@ -356,15 +367,31 @@ func (c *Cache) Get(qname string, qtype uint16) (*dns.Msg, bool, bool) {
 
 // triggerRefresh starts one background refresh for an entry. Its latch is
 // shared by proactive prefetching and stale serving so concurrent callers do
-// not issue duplicate refreshes.
-func triggerRefresh(e *entry, callback func(qname string, qtype uint16), qname string, qtype uint16) {
-	if callback == nil || !e.prefetching.CompareAndSwap(false, true) {
+// not issue duplicate refreshes. Failed refreshes back off exponentially from
+// one second to one minute; a successful callback clears the penalty.
+func triggerRefresh(e *entry, callback func(qname string, qtype uint16) error, qname string, qtype uint16, now time.Time) {
+	if callback == nil || now.UnixNano() < e.nextRefreshUnix.Load() || !e.prefetching.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		defer e.prefetching.Store(false)
-		callback(qname, qtype)
+		if err := callback(qname, qtype); err != nil {
+			failures := e.refreshFailures.Add(1)
+			shift := min(failures-1, 6)
+			delay := time.Second * time.Duration(1<<shift)
+			e.nextRefreshUnix.Store(time.Now().Add(delay).UnixNano())
+			return
+		}
+		e.refreshFailures.Store(0)
+		e.nextRefreshUnix.Store(0)
 	}()
+}
+
+func min(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func capTTL(msg *dns.Msg, maximum uint32) {

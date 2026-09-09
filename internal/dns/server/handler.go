@@ -269,7 +269,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, fwd, duration, err := h.server.resolveForward(ctx, h.server.PrepareUpstreamMsg(req, clientIPNet))
+	resp, fwd, duration, err := h.server.resolveSharedForward(ctx, h.server.PrepareUpstreamMsg(req, clientIPNet))
 	if err != nil {
 		slog.Error("dns_handler: forward failed",
 			"query_name", qname,
@@ -298,9 +298,15 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 	// Step 10: Cache the response. DO-bit responses are not cached: the
 	// entry would mix signed/unsigned answer variants for later lookups.
-	if h.server.cache != nil && !reqHasDO(req) {
+	if h.server.cache != nil && !h.server.ecsCacheBypass() && !reqHasDO(req) {
 		h.server.cache.Set(qname, qtype, resp)
 	}
+
+	// A shared upstream result retains the leader's transaction ID. Every
+	// waiter receives a private response copy, so restore its own request ID
+	// and question immediately before delivery.
+	resp.Id = req.Id
+	resp.Question = append([]dns.Question(nil), req.Question...)
 
 	// Step 11: Generate response.
 	upstream := ""
