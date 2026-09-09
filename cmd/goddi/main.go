@@ -50,7 +50,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.4.0"
+	Version   = "0.5.0"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -304,9 +304,26 @@ func runServer(configPath string) error {
 				ExecFailures:    st.ExecFailures,
 				CommitFailures:  st.CommitFailures,
 				CleanupFailures: st.CleanupFailures,
+				CleanupDeleted:  st.CleanupDeleted,
+				CleanupRuns:     st.CleanupRuns,
+				CleanupTimeouts: st.CleanupTimeouts,
 			}
 		})
 	}
+
+	// Publish database/sql pool pressure. Sampling Stats is lock-free and
+	// captures all management-plane callers without SQL hot-path instrumentation.
+	metrics.RegisterDBStatsProvider(func() metrics.DBStatsSample {
+		st := db.DB.Stats()
+		return metrics.DBStatsSample{
+			OpenConnections:    st.OpenConnections,
+			InUse:              st.InUse,
+			Idle:               st.Idle,
+			MaxOpenConnections: st.MaxOpenConnections,
+			WaitCount:          st.WaitCount,
+			WaitDuration:       st.WaitDuration,
+		}
+	})
 
 	// DNS Client (for debug queries).
 	dnsClient := client.NewDNSClient(5 * time.Second)

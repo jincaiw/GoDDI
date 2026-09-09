@@ -1,1 +1,0 @@
-import{S as e}from"./router-BRUVYu7g.js";function t(t){return e(`/logs/audit`,t)}export{t};

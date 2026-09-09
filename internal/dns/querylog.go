@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -47,7 +48,16 @@ type QueryLogger struct {
 	execFailures    atomic.Int64
 	commitFailures  atomic.Int64
 	cleanupFailures atomic.Int64
+	cleanupDeleted  atomic.Int64
+	cleanupRuns     atomic.Int64
+	cleanupTimeouts atomic.Int64
 }
+
+const (
+	queryLogCleanupBatchSize = 1000
+	queryLogCleanupBudget    = 5 * time.Second
+	queryLogCleanupStepLimit = time.Second
+)
 
 // QueryLogStats is a point-in-time health snapshot for the asynchronous
 // query-log pipeline. It distinguishes loss at the non-blocking ingress from
@@ -63,6 +73,9 @@ type QueryLogStats struct {
 	ExecFailures    int64
 	CommitFailures  int64
 	CleanupFailures int64
+	CleanupDeleted  int64
+	CleanupRuns     int64
+	CleanupTimeouts int64
 }
 
 // NewQueryLogger creates a new async query logger.
@@ -108,9 +121,9 @@ func (ql *QueryLogger) processLoop() {
 	ticker := time.NewTicker(ql.flushInterval)
 	defer ticker.Stop()
 
-	// Retention cleanup runs a full-table DELETE, which is far too expensive
-	// to repeat on every flush tick (especially with a single-writer SQLite
-	// pool). Run it on its own hourly cadence instead.
+	// Retention cleanup is independently batched and budgeted so historical
+	// catch-up work cannot monopolize the single SQLite connection. Run it on
+	// its own hourly cadence rather than every flush tick.
 	cleanupTicker := time.NewTicker(time.Hour)
 	defer cleanupTicker.Stop()
 	ql.cleanup()
@@ -223,26 +236,65 @@ func (ql *QueryLogger) flush(entries []QueryLogEntry) {
 	slog.Debug("querylog: flushed entries", "count", written)
 }
 
-// cleanup removes old query log entries based on retention policy.
+// cleanup removes old query log entries in bounded batches. It deliberately
+// favors retaining expired telemetry until the next hourly run over letting a
+// large historical delete monopolize the shared SQLite connection.
 func (ql *QueryLogger) cleanup() {
 	if ql.db == nil || ql.retentionDays <= 0 {
 		return
 	}
 
-	result, err := ql.db.Exec(
-		"DELETE FROM dns_query_logs WHERE created_at < datetime('now', ?)",
-		fmt.Sprintf("-%d days", ql.retentionDays),
-	)
-	if err != nil {
-		ql.cleanupFailures.Add(1)
-		slog.Error("querylog: failed to cleanup old entries", "error", err)
+	ql.cleanupRuns.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), queryLogCleanupBudget)
+	defer cancel()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -ql.retentionDays).Format("2006-01-02 15:04:05")
+	var deleted int64
+	for {
+		if err := ctx.Err(); err != nil {
+			ql.recordCleanupError(err, deleted)
+			return
+		}
+		stepCtx, stepCancel := context.WithTimeout(ctx, queryLogCleanupStepLimit)
+		result, err := ql.db.ExecContext(stepCtx, `
+			DELETE FROM dns_query_logs
+			WHERE rowid IN (
+				SELECT rowid FROM dns_query_logs
+				WHERE created_at < ?
+				ORDER BY created_at ASC
+				LIMIT ?
+			)`, cutoff, queryLogCleanupBatchSize)
+		stepCancel()
+		if err != nil {
+			ql.recordCleanupError(err, deleted)
+			return
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			ql.cleanupFailures.Add(1)
+			slog.Error("querylog: failed to count cleanup rows", "error", err)
+			return
+		}
+		deleted += rows
+		ql.cleanupDeleted.Add(rows)
+		if rows < queryLogCleanupBatchSize {
+			break
+		}
+	}
+	if deleted > 0 {
+		slog.Info("querylog: cleaned up old entries", "deleted", deleted)
+	}
+}
+
+func (ql *QueryLogger) recordCleanupError(err error, deleted int64) {
+	if err == nil {
 		return
 	}
-
-	rows, _ := result.RowsAffected()
-	if rows > 0 {
-		slog.Info("querylog: cleaned up old entries", "deleted", rows)
+	ql.cleanupFailures.Add(1)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		ql.cleanupTimeouts.Add(1)
 	}
+	slog.Error("querylog: cleanup stopped", "deleted", deleted, "error", err)
 }
 
 // Close stops the query logger and flushes remaining entries.
@@ -270,6 +322,9 @@ func (ql *QueryLogger) Stats() QueryLogStats {
 		ExecFailures:    ql.execFailures.Load(),
 		CommitFailures:  ql.commitFailures.Load(),
 		CleanupFailures: ql.cleanupFailures.Load(),
+		CleanupDeleted:  ql.cleanupDeleted.Load(),
+		CleanupRuns:     ql.cleanupRuns.Load(),
+		CleanupTimeouts: ql.cleanupTimeouts.Load(),
 	}
 }
 

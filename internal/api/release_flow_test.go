@@ -277,6 +277,11 @@ func TestReleaseFlow_OpenAPIDocumented(t *testing.T) {
 		"/logs/dns",
 		"/logs/dns/export",
 		"/dns/security/allowlists/import",
+		"/dns/zones/batch-delete",
+		"/dns/forwarders/{id}",
+		"/dns/conditional-forwarders/{id}",
+		"/dns/listeners/dot",
+		"/backup/{id}/download",
 	}
 	for _, path := range want {
 		if _, ok := doc.Paths[path]; !ok {
@@ -298,5 +303,38 @@ func TestReleaseFlow_OpenAPIDocumented(t *testing.T) {
 	content := success["content"].(map[string]interface{})
 	if _, ok := content["text/csv"]; !ok {
 		t.Fatal("DNS log export OpenAPI response lacks text/csv")
+	}
+
+	zoneImport := doc.Paths["/dns/zones/{id}/import"]["post"].(map[string]interface{})
+	importBody := zoneImport["requestBody"].(map[string]interface{})
+	importContent := importBody["content"].(map[string]interface{})
+	if _, ok := importContent["multipart/form-data"]; !ok {
+		t.Fatal("zone import OpenAPI request body lacks multipart/form-data")
+	}
+
+	backupDownload := doc.Paths["/backup/{id}/download"]["get"].(map[string]interface{})
+	backupResponses := backupDownload["responses"].(map[string]interface{})
+	backupSuccess := backupResponses["200"].(map[string]interface{})
+	backupContent := backupSuccess["content"].(map[string]interface{})
+	if _, ok := backupContent["application/octet-stream"]; !ok {
+		t.Fatal("backup download OpenAPI response lacks application/octet-stream")
+	}
+
+	forwarderPut := doc.Paths["/dns/forwarders/{id}"]["put"].(map[string]interface{})
+	forwarderParams := forwarderPut["parameters"].([]interface{})
+	if len(forwarderParams) != 1 || forwarderParams[0].(map[string]interface{})["in"] != "path" {
+		t.Fatal("forwarder update OpenAPI path parameter is missing or malformed")
+	}
+	forwarderBody := forwarderPut["requestBody"].(map[string]interface{})
+	if _, ok := forwarderBody["content"].(map[string]interface{})["application/json"]; !ok {
+		t.Fatal("forwarder update OpenAPI request body lacks application/json")
+	}
+
+	forwarderDelete := doc.Paths["/dns/forwarders/{id}"]["delete"].(map[string]interface{})
+	if _, ok := forwarderDelete["responses"].(map[string]interface{})["204"]; !ok {
+		t.Fatal("forwarder delete OpenAPI response lacks 204")
+	}
+	if got := forwarderPut["operationId"]; got != "put_dns_forwarders_by_id" {
+		t.Fatalf("forwarder update operationId = %q, want generator-safe value", got)
 	}
 }

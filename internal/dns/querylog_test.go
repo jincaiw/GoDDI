@@ -39,6 +39,46 @@ func TestQueryLoggerStatsTracksQueueDrops(t *testing.T) {
 	}
 }
 
+func TestQueryLoggerCleanupDeletesExpiredRowsInBatches(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE dns_query_logs (id TEXT, created_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	for i := range queryLogCleanupBatchSize + 5 {
+		if _, err := db.Exec(`INSERT INTO dns_query_logs (id, created_at) VALUES (?, ?)`, i, "2000-01-01 00:00:00"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO dns_query_logs (id, created_at) VALUES (?, ?)`, "fresh", "2999-01-01 00:00:00"); err != nil {
+		t.Fatal(err)
+	}
+
+	ql := &QueryLogger{db: db, retentionDays: 1}
+	ql.cleanup()
+
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_query_logs`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining rows = %d, want 1 fresh row", remaining)
+	}
+	stats := ql.Stats()
+	if stats.CleanupRuns != 1 {
+		t.Fatalf("CleanupRuns = %d, want 1", stats.CleanupRuns)
+	}
+	if stats.CleanupDeleted != int64(queryLogCleanupBatchSize+5) {
+		t.Fatalf("CleanupDeleted = %d, want %d", stats.CleanupDeleted, queryLogCleanupBatchSize+5)
+	}
+	if stats.CleanupFailures != 0 || stats.CleanupTimeouts != 0 {
+		t.Fatalf("unexpected cleanup failures: %#v", stats)
+	}
+}
+
 func TestStreamQueryLogsContextDoesNotNeedPaginationCount(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

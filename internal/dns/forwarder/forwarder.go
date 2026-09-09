@@ -57,6 +57,7 @@ type Forwarder struct {
 	healthy          atomic.Bool
 	consecutiveFails atomic.Int32
 	lastHealthCheck  time.Time
+	lastUsedUnix     atomic.Int64
 	latencyHistory   []time.Duration
 	mu               sync.Mutex
 
@@ -141,7 +142,8 @@ type ForwarderGroup struct {
 	rrIndex    atomic.Int64 // For round-robin.
 	timeout    time.Duration
 
-	mu sync.RWMutex
+	mu             sync.RWMutex
+	zoneForwarders map[string]*Forwarder
 }
 
 // NewForwarderGroup creates a new forwarder group.
@@ -150,9 +152,10 @@ func NewForwarderGroup(strategy SelectionStrategy, timeout time.Duration) *Forwa
 		timeout = 5 * time.Second
 	}
 	return &ForwarderGroup{
-		forwarders: make([]*Forwarder, 0),
-		strategy:   strategy,
-		timeout:    timeout,
+		forwarders:     make([]*Forwarder, 0),
+		strategy:       strategy,
+		timeout:        timeout,
+		zoneForwarders: make(map[string]*Forwarder),
 	}
 }
 
@@ -615,17 +618,50 @@ func (fg *ForwarderGroup) HealthCheck(ctx context.Context) {
 // A non-positive interval disables the loop, allowing deployments to rely on
 // passive health accounting only.
 func (fg *ForwarderGroup) RunHealthChecks(ctx context.Context, interval time.Duration) {
+	fg.runHealthChecks(ctx, interval, healthCheckJitter)
+}
+
+const healthCheckJitterFraction = 10
+
+// healthCheckJitter spreads initial and periodic probes across a bounded
+// interval, preventing identically configured instances from probing the same
+// upstreams in lockstep. The result is always between interval and interval +
+// 10%; callers with a non-positive interval remain disabled.
+func healthCheckJitter(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	maxJitter := interval / healthCheckJitterFraction
+	if maxJitter <= 0 {
+		return interval
+	}
+	return interval + time.Duration(rand.Int63n(int64(maxJitter)+1))
+}
+
+// runHealthChecks accepts its delay function for deterministic scheduler tests.
+func (fg *ForwarderGroup) runHealthChecks(ctx context.Context, interval time.Duration, nextDelay func(time.Duration) time.Duration) {
 	if interval <= 0 {
 		return
 	}
-	fg.HealthCheck(ctx)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	if nextDelay == nil {
+		nextDelay = healthCheckJitter
+	}
 	for {
+		delay := nextDelay(interval)
+		if delay < interval {
+			delay = interval
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			fg.HealthCheck(ctx)
 		}
 	}
@@ -655,27 +691,26 @@ func (fg *ForwarderGroup) LookupForwarder(address string) *Forwarder {
 }
 
 // ForwardToAddresses forwards the message to the given upstream addresses in
-// order and returns the first successful response. It is used for zone-level
-// forwarding (forward/stub zones) whose targets are not part of the global
-// forwarder pool; targets already present in the pool reuse their health and
-// latency state.
+// order and returns the first successful response. Zone-only targets are kept
+// in a group-local cache so UDP clients, failure thresholds and metrics remain
+// stable across requests. A target that also exists in the global pool keeps
+// using that configured Forwarder instead. The cache is pruned explicitly on
+// zone configuration reload, not per query: a request for one zone must not
+// discard another zone's active target state.
 func (fg *ForwarderGroup) ForwardToAddresses(ctx context.Context, msg *dns.Msg, targets []string) (*dns.Msg, time.Duration, error) {
+	// Opportunistically expire idle zone-only targets. This keeps the temporary
+	// cache bounded even when zone reload notifications are unavailable.
+	fg.PruneZoneForwarders(15 * time.Minute)
+
 	var lastErr error
-	for _, addr := range targets {
-		addr = strings.TrimSpace(addr)
+	for _, rawAddr := range targets {
+		addr := strings.TrimSpace(rawAddr)
 		if addr == "" {
 			continue
 		}
 		f := fg.LookupForwarder(addr)
 		if f == nil {
-			f = &Forwarder{
-				ID:       "zone-" + addr,
-				Name:     addr,
-				Protocol: "udp",
-				Address:  addr,
-				Enabled:  true,
-			}
-			f.healthy.Store(true)
+			f = fg.zoneForwarder(addr)
 		}
 		resp, d, err := fg.queryUpstream(ctx, msg, f)
 		if err == nil {
@@ -687,6 +722,44 @@ func (fg *ForwarderGroup) ForwardToAddresses(ctx context.Context, msg *dns.Msg, 
 		lastErr = fmt.Errorf("no zone forward targets configured")
 	}
 	return nil, 0, lastErr
+}
+
+func (fg *ForwarderGroup) zoneForwarder(address string) *Forwarder {
+	fg.mu.Lock()
+	defer fg.mu.Unlock()
+	if f := fg.zoneForwarders[address]; f != nil {
+		f.lastUsedUnix.Store(time.Now().UnixNano())
+		return f
+	}
+	f := &Forwarder{
+		ID:       "zone-" + address,
+		Name:     address,
+		Protocol: "udp",
+		Address:  address,
+		Enabled:  true,
+	}
+	f.healthy.Store(true)
+	f.lastUsedUnix.Store(time.Now().UnixNano())
+	fg.zoneForwarders[address] = f
+	return f
+}
+
+// PruneZoneForwarders removes cached zone-only targets that have been idle
+// longer than maxIdle. It bounds temporary target lifetime without coupling
+// unrelated zones to one another's query path; callers may run it after zone
+// reload or on a periodic maintenance cadence.
+func (fg *ForwarderGroup) PruneZoneForwarders(maxIdle time.Duration) {
+	if maxIdle <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-maxIdle).UnixNano()
+	fg.mu.Lock()
+	defer fg.mu.Unlock()
+	for address, f := range fg.zoneForwarders {
+		if f.lastUsedUnix.Load() < cutoff {
+			delete(fg.zoneForwarders, address)
+		}
+	}
 }
 
 // parseHostPort ensures address has a port. It correctly handles IPv6 literals

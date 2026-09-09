@@ -21,6 +21,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/metrics"
 	"github.com/miekg/dns"
 )
 
@@ -91,9 +92,17 @@ type Server struct {
 	// inflight coalesces equivalent cache-miss forwarding work. It is kept at
 	// the server boundary rather than in the upstream package because this is
 	// where the fully prepared request and selected routing policy meet.
-	inflightMu sync.Mutex
-	inflight   map[string]*inflightQuery
+	inflightMu    sync.Mutex
+	inflight      map[string]*inflightQuery
+	inflightLimit int
 }
+
+const defaultInflightLimit = 1024
+
+// ErrInflightLimitReached is returned when a distinct cache-miss query cannot
+// enter the bounded shared-forwarding table. Callers may safely fall back to a
+// regular bounded forward attempt rather than allocating another goroutine.
+var ErrInflightLimitReached = errors.New("DNS shared-forwarding capacity reached")
 
 type inflightQuery struct {
 	done      chan struct{}
@@ -114,15 +123,16 @@ func New(
 	zoneStore *zone.Store,
 ) *Server {
 	s := &Server{
-		cfg:         cfg,
-		cache:       dnsCache,
-		filter:      filterEngine,
-		forwarder:   fwdGroup,
-		conditional: condManager,
-		queryLog:    queryLog,
-		zoneStore:   zoneStore,
-		zones:       make(map[string]*ZoneData),
-		inflight:    make(map[string]*inflightQuery),
+		cfg:           cfg,
+		cache:         dnsCache,
+		filter:        filterEngine,
+		forwarder:     fwdGroup,
+		conditional:   condManager,
+		queryLog:      queryLog,
+		zoneStore:     zoneStore,
+		zones:         make(map[string]*ZoneData),
+		inflight:      make(map[string]*inflightQuery),
+		inflightLimit: defaultInflightLimit,
 
 		// ECS defaults to the privacy-preserving strip policy.
 		ecsMode:       forwarder.ECSStrip,
@@ -1175,8 +1185,14 @@ func (s *Server) resolveSharedForward(ctx context.Context, msg *dns.Msg) (*dns.M
 			return copyInflightResult(current)
 		}
 	}
+	if s.inflightLimit > 0 && len(s.inflight) >= s.inflightLimit {
+		metrics.RecordDNSInflightRejected()
+		s.inflightMu.Unlock()
+		return nil, nil, 0, ErrInflightLimitReached
+	}
 	current := &inflightQuery{done: make(chan struct{})}
 	s.inflight[key] = current
+	metrics.SetDNSInflightQueries(len(s.inflight))
 	s.inflightMu.Unlock()
 
 	go func() {
@@ -1191,6 +1207,7 @@ func (s *Server) resolveSharedForward(ctx context.Context, msg *dns.Msg) (*dns.M
 		current.err = err
 		s.inflightMu.Lock()
 		delete(s.inflight, key)
+		metrics.SetDNSInflightQueries(len(s.inflight))
 		close(current.done)
 		s.inflightMu.Unlock()
 	}()

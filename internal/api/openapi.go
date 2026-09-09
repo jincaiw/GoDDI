@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // T10: OpenAPI 3.0 documentation. The spec below is maintained as a
@@ -29,9 +30,68 @@ type apiQueryParam struct {
 	Description string
 }
 
+// apiOperationContract captures the high-value request and response details
+// that cannot be inferred from a legacy route row alone.
+type apiOperationContract struct {
+	RequestContentType  string
+	RequestDescription  string
+	ResponseContentType string
+	ResponseSchema      map[string]interface{}
+	SuccessStatus       string
+}
+
 // documentedQueryParams defines the high-traffic operations whose contracts
 // need a precise query schema. Other legacy rows retain their existing path
 // parameter declaration until their DTOs are documented.
+var documentedOperationContracts = map[string]apiOperationContract{
+	"POST /dns/zones/{id}/import": {
+		RequestContentType: "multipart/form-data",
+		RequestDescription: "Zone file upload. The file field contains BIND-compatible zone text.",
+	},
+	"GET /dns/zones/{id}/export": {
+		ResponseContentType: "application/dns",
+		ResponseSchema:      map[string]interface{}{"type": "string", "format": "binary"},
+	},
+	"GET /backup/{id}/download": {
+		ResponseContentType: "application/octet-stream",
+		ResponseSchema:      map[string]interface{}{"type": "string", "format": "binary"},
+	},
+	"POST /dns/zones/batch-delete": {
+		RequestContentType: "application/json",
+		RequestDescription: "JSON body containing the zone IDs to delete.",
+	},
+	"POST /dns/records/batch": {
+		RequestContentType: "application/json",
+		RequestDescription: "JSON body containing records to create.",
+	},
+	"DELETE /dns/records/batch": {
+		RequestContentType: "application/json",
+		RequestDescription: "JSON body containing record IDs to delete.",
+	},
+	"PUT /dns/forwarders/{id}": {
+		RequestContentType: "application/json",
+		RequestDescription: "Forwarder configuration update.",
+	},
+	"DELETE /dns/forwarders/{id}": {SuccessStatus: "204"},
+	"PUT /dns/conditional-forwarders/{id}": {
+		RequestContentType: "application/json",
+		RequestDescription: "Conditional forwarder configuration update.",
+	},
+	"DELETE /dns/conditional-forwarders/{id}": {SuccessStatus: "204"},
+	"PUT /dns/listeners/dot": {
+		RequestContentType: "application/json",
+		RequestDescription: "DoT listener configuration.",
+	},
+	"PUT /dns/listeners/doh": {
+		RequestContentType: "application/json",
+		RequestDescription: "DoH listener configuration.",
+	},
+	"PUT /dns/listeners/doq": {
+		RequestContentType: "application/json",
+		RequestDescription: "DoQ listener configuration.",
+	},
+}
+
 var documentedQueryParams = map[string][]apiQueryParam{
 	"GET /logs/dns": {
 		{Name: "client_ip", Type: "string", Description: "精确匹配客户端 IP"},
@@ -102,6 +162,7 @@ var routeDocs = []apiRouteDoc{
 
 	{"/dns/zones", "GET", "DNS Zones", "区域列表", true, []string{"page", "page_size", "type", "name"}},
 	{"/dns/zones", "POST", "DNS Zones", "创建区域", true, nil},
+	{"/dns/zones/batch-delete", "POST", "DNS Zones", "批量删除区域", true, nil},
 	{"/dns/zones/{id}", "GET", "DNS Zones", "区域详情", true, []string{"id"}},
 	{"/dns/zones/{id}", "PUT", "DNS Zones", "更新区域", true, []string{"id"}},
 	{"/dns/zones/{id}", "DELETE", "DNS Zones", "删除区域", true, []string{"id"}},
@@ -140,8 +201,15 @@ var routeDocs = []apiRouteDoc{
 
 	{"/dns/forwarders", "GET", "DNS Forwarders", "转发器列表", true, nil},
 	{"/dns/forwarders", "POST", "DNS Forwarders", "创建转发器", true, nil},
+	{"/dns/forwarders/{id}", "PUT", "DNS Forwarders", "更新转发器", true, []string{"id"}},
+	{"/dns/forwarders/{id}", "DELETE", "DNS Forwarders", "删除转发器", true, []string{"id"}},
 	{"/dns/conditional-forwarders", "GET", "DNS Forwarders", "条件转发器列表", true, nil},
 	{"/dns/conditional-forwarders", "POST", "DNS Forwarders", "创建条件转发器", true, nil},
+	{"/dns/conditional-forwarders/{id}", "PUT", "DNS Forwarders", "更新条件转发器", true, []string{"id"}},
+	{"/dns/conditional-forwarders/{id}", "DELETE", "DNS Forwarders", "删除条件转发器", true, []string{"id"}},
+	{"/dns/listeners/dot", "PUT", "DNS Listeners", "配置 DoT 监听器", true, nil},
+	{"/dns/listeners/doh", "PUT", "DNS Listeners", "配置 DoH 监听器", true, nil},
+	{"/dns/listeners/doq", "PUT", "DNS Listeners", "配置 DoQ 监听器", true, nil},
 
 	{"/dns/cache", "GET", "DNS Cache", "缓存统计", true, nil},
 	{"/dns/cache/entries", "GET", "DNS Cache", "缓存条目列表", true, []string{"qname", "qtype", "page", "page_size"}},
@@ -181,6 +249,9 @@ var routeDocs = []apiRouteDoc{
 
 	{"/backup", "GET", "Backup", "备份列表", true, nil},
 	{"/backup", "POST", "Backup", "创建备份", true, nil},
+	{"/backup/{id}", "GET", "Backup", "备份详情", true, []string{"id"}},
+	{"/backup/{id}", "DELETE", "Backup", "删除备份", true, []string{"id"}},
+	{"/backup/{id}/download", "GET", "Backup", "下载备份文件", true, []string{"id"}},
 	{"/backup/{id}/restore", "POST", "Backup", "恢复备份", true, []string{"id"}},
 }
 
@@ -223,20 +294,54 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 			contentType = "text/csv"
 			contentSchema = map[string]interface{}{"type": "string", "format": "binary"}
 		}
+		contract := documentedOperationContracts[key]
+		if contract.ResponseContentType != "" {
+			contentType = contract.ResponseContentType
+		}
+		if contract.ResponseSchema != nil {
+			contentSchema = contract.ResponseSchema
+		}
+		successStatus := contract.SuccessStatus
+		if successStatus == "" {
+			successStatus = "200"
+		}
+		responses := map[string]interface{}{
+			successStatus: map[string]interface{}{
+				"description": "成功",
+				"content": map[string]interface{}{
+					contentType: map[string]interface{}{"schema": contentSchema},
+				},
+			},
+			"400": map[string]interface{}{"description": "请求参数无效"},
+			"500": map[string]interface{}{"description": "服务端错误"},
+		}
+		if successStatus == "204" {
+			responses[successStatus] = map[string]interface{}{"description": "成功"}
+		}
 		op := map[string]interface{}{
 			"tags":        []string{rd.Tag},
 			"summary":     rd.Summary,
-			"operationId": rd.Method + "_" + rd.Path,
-			"responses": map[string]interface{}{
-				"200": map[string]interface{}{
-					"description": "成功",
-					"content": map[string]interface{}{
-						contentType: map[string]interface{}{"schema": contentSchema},
+			"operationId": operationID(rd.Method, rd.Path),
+			"responses":   responses,
+		}
+		if contract.RequestContentType != "" {
+			schema := map[string]interface{}{"type": "object"}
+			if contract.RequestContentType == "multipart/form-data" {
+				schema = map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"file": map[string]interface{}{"type": "string", "format": "binary"},
 					},
+					"required": []string{"file"},
+				}
+			}
+			op["requestBody"] = map[string]interface{}{
+				"required":    true,
+				"description": contract.RequestDescription,
+				"content": map[string]interface{}{
+					contract.RequestContentType: map[string]interface{}{"schema": schema},
 				},
-				"400": map[string]interface{}{"description": "请求参数无效"},
-				"500": map[string]interface{}{"description": "服务端错误"},
-			},
+			}
 		}
 		if len(paramObjs) > 0 {
 			op["parameters"] = paramObjs
@@ -283,6 +388,14 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(spec)
+}
+
+// operationID converts an HTTP method and URI template into a stable,
+// generator-safe OpenAPI identifier.
+func operationID(method, path string) string {
+	name := strings.ToLower(method) + "_" + strings.Trim(path, "/")
+	name = strings.NewReplacer("/", "_", "{", "by_", "}", "", "-", "_").Replace(name)
+	return strings.Trim(name, "_")
 }
 
 func lower(s string) string {

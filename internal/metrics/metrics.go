@@ -89,6 +89,16 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
+	DNSInflightQueries = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dns_inflight_queries",
+		Help: "Current number of distinct shared DNS cache-miss forwards.",
+	})
+
+	DNSInflightRejectedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dns_inflight_rejected_total",
+		Help: "Total distinct DNS cache-miss forwards that bypassed shared work because its capacity was full.",
+	})
+
 	UpstreamQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "goddi_dns_upstream_queries_total",
 		Help: "DNS upstream attempts by stable forwarder ID and outcome.",
@@ -138,7 +148,37 @@ var (
 
 	DBErrorsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "goddi_db_errors_total",
-		Help: "Total number of database errors.",
+		Help: "Total number of database errors explicitly reported by producers.",
+	})
+
+	DBOpenConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_db_open_connections",
+		Help: "Current open database connections.",
+	})
+
+	DBInUseConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_db_in_use_connections",
+		Help: "Current database connections in use.",
+	})
+
+	DBIdleConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_db_idle_connections",
+		Help: "Current idle database connections.",
+	})
+
+	DBMaxOpenConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_db_max_open_connections",
+		Help: "Configured maximum open database connections; 0 means unlimited.",
+	})
+
+	DBWaitCountTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_db_wait_count_total",
+		Help: "Total waits for a database connection.",
+	})
+
+	DBWaitDurationSecondsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_db_wait_duration_seconds_total",
+		Help: "Total seconds spent waiting for a database connection.",
 	})
 
 	BackupJobsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -195,6 +235,21 @@ var (
 		Name: "goddi_query_log_queue_capacity",
 		Help: "Configured capacity of the query-log asynchronous queue.",
 	})
+
+	QueryLogCleanupDeletedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_query_log_cleanup_deleted_total",
+		Help: "Total expired query-log rows deleted by retention cleanup.",
+	})
+
+	QueryLogCleanupRunsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_query_log_cleanup_runs_total",
+		Help: "Total retention-cleanup runs started.",
+	})
+
+	QueryLogCleanupTimeoutsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_query_log_cleanup_timeouts_total",
+		Help: "Total retention cleanup runs stopped by cancellation or deadline.",
+	})
 )
 
 // CacheStatsSample is a point-in-time snapshot of cache statistics
@@ -219,6 +274,19 @@ type QueryLogStatsSample struct {
 	ExecFailures    int64
 	CommitFailures  int64
 	CleanupFailures int64
+	CleanupDeleted  int64
+	CleanupRuns     int64
+	CleanupTimeouts int64
+}
+
+// DBStatsSample represents a portable snapshot of database/sql pool pressure.
+type DBStatsSample struct {
+	OpenConnections    int
+	InUse              int
+	Idle               int
+	MaxOpenConnections int
+	WaitCount          int64
+	WaitDuration       time.Duration
 }
 
 var (
@@ -227,6 +295,9 @@ var (
 
 	// queryLogStatsFn, when non-nil, is sampled by the metrics ticker.
 	queryLogStatsFn func() QueryLogStatsSample
+
+	// dbStatsFn, when non-nil, is sampled by the metrics ticker.
+	dbStatsFn func() DBStatsSample
 
 	// last samples used to convert absolute gauges into counter deltas.
 	lastCacheHits           int64
@@ -238,6 +309,11 @@ var (
 	lastQLogExecFailures    int64
 	lastQLogCommitFailures  int64
 	lastQLogCleanupFailures int64
+	lastQLogCleanupDeleted  int64
+	lastQLogCleanupRuns     int64
+	lastQLogCleanupTimeouts int64
+	lastDBWaitCount         int64
+	lastDBWaitDuration      time.Duration
 )
 
 // RegisterCacheStatsProvider registers a callback the metrics ticker
@@ -251,6 +327,11 @@ func RegisterCacheStatsProvider(fn func() CacheStatsSample) {
 // ticker to publish query-log queue pressure and writer outcome metrics.
 func RegisterQueryLogStatsProvider(fn func() QueryLogStatsSample) {
 	queryLogStatsFn = fn
+}
+
+// RegisterDBStatsProvider registers a database/sql pool snapshot callback.
+func RegisterDBStatsProvider(fn func() DBStatsSample) {
+	dbStatsFn = fn
 }
 
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
@@ -273,6 +354,8 @@ func InitMetrics() {
 			DNSDroppedTotal,
 			DNSClientsTotal,
 			DNSResponseDurationSeconds,
+			DNSInflightQueries,
+			DNSInflightRejectedTotal,
 			UpstreamQueriesTotal,
 			UpstreamDurationSeconds,
 			UpstreamHealthy,
@@ -283,6 +366,12 @@ func InitMetrics() {
 			APIRequestsTotal,
 			APIRequestDurationSeconds,
 			DBErrorsTotal,
+			DBOpenConnections,
+			DBInUseConnections,
+			DBIdleConnections,
+			DBMaxOpenConnections,
+			DBWaitCountTotal,
+			DBWaitDurationSecondsTotal,
 			BackupJobsTotal,
 			CacheEntries,
 			CacheMaxEntries,
@@ -294,6 +383,9 @@ func InitMetrics() {
 			QueryLogWriteFailuresTotal,
 			QueryLogQueueDepth,
 			QueryLogQueueCapacity,
+			QueryLogCleanupDeletedTotal,
+			QueryLogCleanupRunsTotal,
+			QueryLogCleanupTimeoutsTotal,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine
@@ -344,6 +436,24 @@ func sampleProviders() {
 		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("exec"), s.ExecFailures, &lastQLogExecFailures)
 		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("commit"), s.CommitFailures, &lastQLogCommitFailures)
 		addQueryLogDelta(QueryLogWriteFailuresTotal.WithLabelValues("cleanup"), s.CleanupFailures, &lastQLogCleanupFailures)
+		addQueryLogDelta(QueryLogCleanupDeletedTotal, s.CleanupDeleted, &lastQLogCleanupDeleted)
+		addQueryLogDelta(QueryLogCleanupRunsTotal, s.CleanupRuns, &lastQLogCleanupRuns)
+		addQueryLogDelta(QueryLogCleanupTimeoutsTotal, s.CleanupTimeouts, &lastQLogCleanupTimeouts)
+	}
+	if fn := dbStatsFn; fn != nil {
+		s := fn()
+		DBOpenConnections.Set(float64(s.OpenConnections))
+		DBInUseConnections.Set(float64(s.InUse))
+		DBIdleConnections.Set(float64(s.Idle))
+		DBMaxOpenConnections.Set(float64(s.MaxOpenConnections))
+		if d := s.WaitCount - lastDBWaitCount; d > 0 {
+			DBWaitCountTotal.Add(float64(d))
+		}
+		if d := s.WaitDuration - lastDBWaitDuration; d > 0 {
+			DBWaitDurationSecondsTotal.Add(d.Seconds())
+		}
+		lastDBWaitCount = s.WaitCount
+		lastDBWaitDuration = s.WaitDuration
 	}
 }
 
@@ -389,6 +499,16 @@ func RecordDNSQuery(qtype, rcode string, duration float64, cached, blocked bool)
 	if blocked {
 		DNSBlockedTotal.Inc()
 	}
+}
+
+// SetDNSInflightQueries records the current bounded shared-forwarding work.
+func SetDNSInflightQueries(count int) {
+	DNSInflightQueries.Set(float64(count))
+}
+
+// RecordDNSInflightRejected records a shared-forwarding admission bypass.
+func RecordDNSInflightRejected() {
+	DNSInflightRejectedTotal.Inc()
 }
 
 // RecordUpstreamAttempt records one data-plane upstream attempt. IDs are

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"runtime/debug"
@@ -145,6 +146,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 	if found {
+		metrics.DNSAuthoritativeTotal.Inc()
 		// SetReply resets Rcode to NOERROR; preserve the authoritative
 		// negative-answer code (NXDOMAIN) computed by the zone lookup.
 		rcode := resp.Rcode
@@ -214,6 +216,7 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp := filter.GenerateBlockedResponse(req, filterResult.ResponseType, filterResult.ResponseData)
 		if resp == nil {
 			// DROP response type - don't respond at all.
+			metrics.DNSDroppedTotal.Inc()
 			h.writeQueryLog(clientIP, clientPort, proto, qname, qtype, "DROP", start, "", false, true)
 			return
 		}
@@ -266,10 +269,18 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	// Step 7: Forward to upstream or recursive resolve.
+	metrics.DNSRecursiveTotal.Inc()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, fwd, duration, err := h.server.resolveSharedForward(ctx, h.server.PrepareUpstreamMsg(req, clientIPNet))
+	preparedReq := h.server.PrepareUpstreamMsg(req, clientIPNet)
+	resp, fwd, duration, err := h.server.resolveSharedForward(ctx, preparedReq)
+	if errors.Is(err, ErrInflightLimitReached) {
+		// The shared table is deliberately bounded. Preserve availability under a
+		// high-cardinality miss flood by using the existing per-request timeout
+		// rather than allocating unbounded shared work.
+		resp, fwd, duration, err = h.server.resolveForward(ctx, preparedReq)
+	}
 	if err != nil {
 		slog.Error("dns_handler: forward failed",
 			"query_name", qname,

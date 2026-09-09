@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"path/filepath"
 	"sync/atomic"
@@ -361,6 +362,29 @@ func TestResolveSharedForwardCoalescesEquivalentQueries(t *testing.T) {
 		if resp == nil || len(resp.Question) != 1 || resp.Question[0].Name != "coalesce.example." {
 			t.Fatalf("invalid shared response: %#v", resp)
 		}
+	}
+}
+
+func TestResolveSharedForwardRejectsDistinctQueriesAtCapacity(t *testing.T) {
+	srv := New(&config.Config{}, nil, nil, nil, nil, nil, nil)
+	srv.inflightLimit = 1
+
+	first := new(dns.Msg)
+	first.SetQuestion("first.example.", dns.TypeA)
+	key, ok := forwardingKey(first)
+	if !ok {
+		t.Fatal("first query did not produce forwarding key")
+	}
+	srv.inflight[key] = &inflightQuery{done: make(chan struct{})}
+
+	second := new(dns.Msg)
+	second.SetQuestion("second.example.", dns.TypeA)
+	_, _, _, err := srv.resolveSharedForward(context.Background(), second)
+	if !errors.Is(err, ErrInflightLimitReached) {
+		t.Fatalf("resolveSharedForward error = %v, want ErrInflightLimitReached", err)
+	}
+	if got := len(srv.inflight); got != 1 {
+		t.Fatalf("inflight entries = %d, want 1", got)
 	}
 }
 
