@@ -42,12 +42,20 @@ func ListDNSQueryLogs(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := queryLogRequestContext(r)
 	defer cancel()
-	entries, total, err := dnsquerylog.QueryLogsContext(ctx, DNSServices.DB, filters, page, pageSize)
+	entries, hasMore, err := dnsquerylog.QueryLogPageContext(ctx, DNSServices.DB, filters, page, pageSize)
 	if err != nil {
 		writeQueryLogQueryError(w, err)
 		return
 	}
 
+	// Do not issue a table-wide COUNT(*) for the interactive log view. The
+	// client only needs to know whether it can advance to another page; a
+	// sentinel total preserves the existing response envelope without claiming
+	// an exact count.
+	total := int64((page-1)*pageSize + len(entries))
+	if hasMore {
+		total++
+	}
 	response.OKPaginated(w, entries, total, page, pageSize)
 }
 

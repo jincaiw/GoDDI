@@ -1,0 +1,1 @@
+import{S as e}from"./router-BPAmgH4V.js";function t(t){return e(`/logs/audit`,t)}export{t};

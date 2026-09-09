@@ -336,7 +336,10 @@ func QueryLogs(db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]Query
 	return QueryLogsContext(context.Background(), db, filters, page, pageSize)
 }
 
-// QueryLogsContext retrieves one paginated log page and its total under ctx.
+// QueryLogsContext retrieves one paginated log page and its exact total under
+// ctx. It is retained for callers that explicitly need an exact count; on a
+// large query-log table COUNT(*) is deliberately not suitable for an
+// interactive request.
 func QueryLogsContext(ctx context.Context, db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]QueryLogEntry, int64, error) {
 	whereClause, args := queryLogWhere(filters)
 
@@ -347,6 +350,29 @@ func QueryLogsContext(ctx context.Context, db *sql.DB, filters QueryLogFilters, 
 	}
 	entries, err := queryLogRows(ctx, db, whereClause, args, pageSize, (page-1)*pageSize)
 	return entries, total, err
+}
+
+// QueryLogPageContext returns a page without a table-wide COUNT(*). It reads
+// one additional row to determine whether a next page exists. This keeps the
+// interactive log browser index-bounded even when historical telemetry spans
+// millions of rows.
+func QueryLogPageContext(ctx context.Context, db *sql.DB, filters QueryLogFilters, page, pageSize int) ([]QueryLogEntry, bool, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	whereClause, args := queryLogWhere(filters)
+	entries, err := queryLogRows(ctx, db, whereClause, args, pageSize+1, (page-1)*pageSize)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(entries) > pageSize
+	if hasMore {
+		entries = entries[:pageSize]
+	}
+	return entries, hasMore, nil
 }
 
 // StreamQueryLogsContext writes matching entries incrementally to consume.

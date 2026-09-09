@@ -179,6 +179,29 @@ func (s *Server) parseRecursionACL() {
 }
 
 // SetRecursionEnabled hot-updates the recursion master switch.
+// LogExternalQuery records a query executed by an API diagnostic client. Such
+// queries bypass the DNS listener handler but belong in the same operator log.
+func (s *Server) LogExternalQuery(name string, qtype uint16, rcode, upstream string, duration time.Duration, blocked bool) {
+	if s.queryLog == nil {
+		return
+	}
+	clientIP := "api"
+	clientPort := 0
+	protocol := "API"
+	s.queryLog.Log(dnsquerylog.QueryLogEntry{
+		ClientIP:       clientIP,
+		ClientPort:     clientPort,
+		Protocol:       protocol,
+		QueryName:      dns.Fqdn(name),
+		QueryType:      dns.TypeToString[qtype],
+		ResponseCode:   rcode,
+		ResponseTimeMs: float64(duration.Microseconds()) / 1000,
+		Upstream:       upstream,
+		Cached:         false,
+		Blocked:        blocked,
+	})
+}
+
 func (s *Server) SetRecursionEnabled(enabled bool) {
 	s.cfg.DNS.Recursion.Enabled = enabled
 	slog.Info("dns_server: recursion", "enabled", enabled)

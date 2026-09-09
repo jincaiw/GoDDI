@@ -38,7 +38,7 @@ type DNSClient struct {
 // NewDNSClient creates a new DNS client for debugging.
 func NewDNSClient(timeout time.Duration) *DNSClient {
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = 10 * time.Second
 	}
 	return &DNSClient{timeout: timeout}
 }

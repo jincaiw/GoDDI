@@ -135,6 +135,9 @@ async function handleQuery() {
       upstream: queryForm.upstream || undefined,
     })
   } catch (err: unknown) {
+    // Drop any previously displayed result so the failure isn't shown next
+    // to stale answers from a prior successful query.
+    queryResult.value = null
     message.error(err instanceof Error ? err.message : t('common.failed'))
   } finally {
     querying.value = false

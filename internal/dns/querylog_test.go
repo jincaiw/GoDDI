@@ -110,6 +110,42 @@ func TestStreamQueryLogsContextDoesNotNeedPaginationCount(t *testing.T) {
 	}
 }
 
+func TestQueryLogPageContextReturnsLookaheadWithoutCount(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE dns_query_logs (
+		id TEXT, client_ip TEXT, client_port INTEGER, protocol TEXT, query_name TEXT,
+		query_type TEXT, response_code TEXT, response_time_ms REAL, upstream TEXT,
+		cached BOOLEAN, blocked BOOLEAN, created_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if _, err := db.Exec(`INSERT INTO dns_query_logs VALUES (?, '192.0.2.1', 53, 'udp', ?, 'A', 'NOERROR', 1, '', 0, 0, ?)`,
+			i, "entry.example.", "2026-01-01 00:00:0"+string(rune('1'+i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entries, hasMore, err := QueryLogPageContext(context.Background(), db, QueryLogFilters{}, 1, 2)
+	if err != nil {
+		t.Fatalf("QueryLogPageContext: %v", err)
+	}
+	if len(entries) != 2 || !hasMore {
+		t.Fatalf("page = %d entries, hasMore=%t; want 2 entries and true", len(entries), hasMore)
+	}
+
+	entries, hasMore, err = QueryLogPageContext(context.Background(), db, QueryLogFilters{}, 2, 2)
+	if err != nil {
+		t.Fatalf("QueryLogPageContext second page: %v", err)
+	}
+	if len(entries) != 1 || hasMore {
+		t.Fatalf("second page = %d entries, hasMore=%t; want 1 entry and false", len(entries), hasMore)
+	}
+}
+
 func TestQueryLogsContextHonorsCanceledContext(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

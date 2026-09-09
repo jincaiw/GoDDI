@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/dns/client"
@@ -77,16 +78,31 @@ func ExecuteDNSQuery(w http.ResponseWriter, r *http.Request) {
 	if DNSServices != nil && DNSServices.DNSClient != nil {
 		dnsClient = DNSServices.DNSClient
 	} else {
-		dnsClient = client.NewDNSClient(5 * 1e9) // 5 seconds
+		dnsClient = client.NewDNSClient(10 * time.Second) // fallback when service container is unavailable
 	}
 
+	start := time.Now()
 	result, _, err := dnsClient.Query(req.Name, qtype, req.Upstream)
 	if err != nil {
+		if result != nil {
+			logDNSClientQuery(r, result.QueryName, qtype, result.ResponseCode, result.Upstream, start, false)
+		}
 		response.InternalErrorWithLog(w, "DNS查询失败", err)
 		return
 	}
 
+	logDNSClientQuery(r, result.QueryName, qtype, result.ResponseCode, result.Upstream, start, false)
 	response.OK(w, result)
+}
+
+func logDNSClientQuery(r *http.Request, name string, qtype uint16, rcode, upstream string, start time.Time, blocked bool) {
+	if DNSServices == nil || DNSServices.DNSServer == nil {
+		return
+	}
+	// Debug-client queries are outbound diagnostic requests and do not pass
+	// through DNSHandler. Persist them in the same query-log stream so the UI
+	// accurately reflects every query initiated from the console.
+	DNSServices.DNSServer.LogExternalQuery(name, qtype, rcode, upstream, time.Since(start), blocked)
 }
 
 // maxDNSNameLength is the maximum allowed length (in bytes) of a DNS name

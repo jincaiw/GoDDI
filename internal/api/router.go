@@ -97,6 +97,11 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authentication(jwtMgr, sessMgr, tokenMgr, db.DB))
 			r.Use(middleware.CSRFProtection(cfg))
+			// Audit authenticated write operations across every API resource. The
+			// middleware itself skips read-only requests, so it does not audit the
+			// audit-log listing endpoint while still covering DNS/debug mutations.
+			// Keep it after authentication so user identity is available in the entry.
+			r.Use(audit.AuditMiddleware(auditMgr))
 
 			// Auth.
 			r.Post("/auth/logout", h.Logout)
@@ -162,7 +167,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 
 			// Audit Logs - with audit middleware.
 			r.Route("/logs", func(r chi.Router) {
-				r.With(audit.AuditMiddleware(auditMgr)).With(rbac.RequirePermission(rbacMgr, "audit", "read")).Get("/audit", h.ListAuditLogs)
+				r.With(rbac.RequirePermission(rbacMgr, "audit", "read")).Get("/audit", h.ListAuditLogs)
 				r.With(rbac.RequirePermission(rbacMgr, "audit", "read")).Get("/login", h.ListLoginHistory)
 			})
 
