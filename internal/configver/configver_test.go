@@ -83,12 +83,6 @@ func (a *faultyAdapter) failApply(err error) {
 	a.applyErr = err
 }
 
-func (a *faultyAdapter) allowApply() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.applyErr = nil
-}
-
 func (a *faultyAdapter) Notify(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

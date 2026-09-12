@@ -131,9 +131,9 @@ func (s *Store) FileSize() (int64, error) {
 // nothing on disk (an in-memory store).
 func dsnPath(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
-	if strings.HasPrefix(dsn, "file:") {
-		dsn = strings.TrimPrefix(dsn, "file:")
-	}
+	// Unconditional: TrimPrefix already returns the input unchanged when the
+	// prefix is absent, so a HasPrefix guard would only add a branch.
+	dsn = strings.TrimPrefix(dsn, "file:")
 	// Strip any query string: the driver's parameters are not part of the path.
 	if i := strings.Index(dsn, "?"); i >= 0 {
 		dsn = dsn[:i]

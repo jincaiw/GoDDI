@@ -10,7 +10,15 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 //   * the 360 view's value is what it shows when the four subsystems disagree,
 //     which is a rendering question.
 //
-// The instance is started by scripts/w13_frontend_smoke.py up.
+// The instance is started by scripts/w13_frontend_smoke.py up, and this file is
+// run against that instance by its own CI step (`.fixture.spec.ts` selects the
+// config in playwright.fixture.config.ts). The seed is not optional: the
+// import dialog needs a subnet to import into, the sparse case needs a subnet
+// that is *not* materialised, and the detail drawer needs an address that
+// already has a DNS record. The other specs in this directory assume the
+// opposite -- a table they alone have written to -- so the two sets cannot
+// share an instance, and the file suffix is what keeps a new spec in the bare
+// set by default rather than in no run at all.
 //
 // One property of the fixture decides what the report says. A subnet at or
 // below autoCreateMaxAddresses (1<<16) is materialised: every address already

@@ -366,7 +366,11 @@ func TestTheServedCertificateAlwaysMatchesItsOwnKey(t *testing.T) {
 			wg.Wait()
 			t.Fatalf("served key is %T", cert.PrivateKey)
 		}
-		if pub.X.Cmp(served.PublicKey.X) != 0 || pub.Y.Cmp(served.PublicKey.Y) != 0 {
+		// Equal takes a *ecdsa.PublicKey (it type-asserts), so the value
+		// embedded in the private key has to be passed by address. Reading
+		// .X/.Y directly would still work, but both fields are deprecated in
+		// Go 1.26 for exactly this comparison.
+		if !pub.Equal(&served.PublicKey) {
 			close(stop)
 			wg.Wait()
 			t.Fatal("the served certificate does not match the served key")

@@ -5,8 +5,15 @@ Why a separate script rather than ``playwright.config.ts``'s ``webServer``: the
 console is embedded in the Go binary, so exercising it through the browser means
 building the Go binary, not starting a dev server. The e2e suite in ``e2e/``
 already expects an instance at ``GODDI_TEST_BASE_URL``; this is what puts one
-there, and it uses the same environment recipe as CI so the surface under test
-is the one CI tests.
+there.
+
+Who needs it: the ``*.fixture.spec.ts`` specs, and only those. They render
+surfaces whose fixtures a single API call cannot stand in for -- a materialised
+/24, a sparse /15, an address that already has a DNS record -- while the rest of
+the suite is written against a table nobody else has touched. CI therefore runs
+two instances in two steps: a plain one for ``npx playwright test`` and this one
+for ``npx playwright test --config playwright.fixture.config.ts``. Set
+``GODDI_SMOKE_PORT`` if the default port is taken.
 
 Usage, from the repository root:
 
@@ -38,7 +45,8 @@ STATE = os.path.join(tempfile.gettempdir(), "goddi-w13-smoke.json")
 BIN = os.path.join(tempfile.gettempdir(), "goddi-w13-smoke-server")
 LOG = os.path.join(tempfile.gettempdir(), "goddi-w13-smoke.log")
 
-PORT = 16090
+# Overridable so this instance can coexist with the plain one CI also starts.
+PORT = int(os.environ.get("GODDI_SMOKE_PORT", "16090"))
 BASE = f"http://127.0.0.1:{PORT}"
 ADMIN_USER = "admin"
 ADMIN_PASSWORD = "Admin@123456"

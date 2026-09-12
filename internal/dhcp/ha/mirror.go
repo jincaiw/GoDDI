@@ -63,13 +63,6 @@ func (h *linkHealth) markUp(w Watermarks) {
 	h.peer = w
 }
 
-func (h *linkHealth) markHeard(w Watermarks) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.lastSeen = time.Now()
-	h.peer = w
-}
-
 // touch records that the peer said something, without changing what is known
 // about it.
 //

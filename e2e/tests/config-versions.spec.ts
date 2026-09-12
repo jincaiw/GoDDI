@@ -13,7 +13,15 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 //     top. Without a browser there is no way to see that the button works when
 //     the table is not filtered to a single resource.
 //
-// The instance is started by scripts/w13_frontend_smoke.py up.
+// Every test here creates the zone it works on, through the API, instead of
+// adopting whatever revision happens to be newest in the table. That is not
+// tidiness. A revision outlives the resource it describes -- the history is
+// deliberately not cascaded -- so on a bare instance the newest dns_zone row
+// can belong to a zone some earlier spec created and then deleted, and
+// publishing against it answers 404. Correctly, and for a reason that has
+// nothing to do with the console. The instance therefore does not need seeding
+// for this file, and it runs in whatever environment the rest of the suite
+// uses.
 //
 // One trap worth naming because it decides the shape of these assertions:
 // `dns_zone` and `dns_records` share a resource id -- both are keyed by the
@@ -67,6 +75,32 @@ async function postConfig(page: Page, path: string, data: unknown): Promise<Reco
   return (body.data ?? {}) as Record<string, unknown>
 }
 
+/**
+ * A zone of this test's own, with the revision its creation wrote.
+ *
+ * The revision number is read back rather than assumed to be 1: the create
+ * hook is what writes it, and a create that stopped writing history has to
+ * fail here rather than be papered over.
+ */
+async function createZone(
+  page: Page,
+): Promise<{ id: string; revision: number; content: Record<string, unknown> }> {
+  const created = await postConfig(page, '/dns/zones', {
+    name: `configversions-${Date.now()}.example`,
+    type: 'primary',
+  })
+  const id = String(created.id)
+  expect(id, 'creating a zone must return its id').not.toBe('')
+  const revisions = await listRevisions(page, {
+    resource_type: 'dns_zone',
+    resource_id: id,
+    page: 1,
+    page_size: 1,
+  })
+  expect(revisions.length, 'creating a zone must write a revision').toBeGreaterThan(0)
+  return { id, revision: Number(revisions[0].revision), content: (revisions[0].content ?? {}) as Record<string, unknown> }
+}
+
 async function openPage(page: Page) {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -83,18 +117,35 @@ const bodyRows = (page: Page) => page.locator('.n-data-table').first().locator('
 const revisionOf = (row: Locator) => row.locator('td').nth(0)
 
 const TYPE_COLUMN = 'td[data-col-key="resource_type"]'
+const ID_COLUMN = 'td[data-col-key="resource_id"]'
 
-async function findRow(page: Page, revision: number, resourceType?: string): Promise<Locator> {
+/**
+ * The row for one revision, narrowed by type and by resource id when given.
+ *
+ * Both narrowings are load-bearing rather than defensive. `dns_zone` and
+ * `dns_records` share a resource id, and every resource's history starts at
+ * revision 1, so "the first #1 with this type" is as likely to be another
+ * resource's as this one's -- and the rollback button acts on the row's
+ * resource.
+ */
+async function findRow(
+  page: Page,
+  revision: number,
+  resourceType?: string,
+  resourceId?: string,
+): Promise<Locator> {
   const count = await bodyRows(page).count()
   for (let i = 0; i < count; i += 1) {
     const row = bodyRows(page).nth(i)
     const text = (await revisionOf(row).textContent())?.trim()
     if (text !== String(revision)) continue
-    // dns_zone and dns_records share a resource id, so without the type the
-    // first "#1" on screen is not necessarily the zone's.
     if (resourceType) {
       const type = (await row.locator(TYPE_COLUMN).textContent())?.trim()
       if (type !== resourceType) continue
+    }
+    if (resourceId) {
+      const id = (await row.locator(ID_COLUMN).textContent())?.trim()
+      if (id !== resourceId) continue
     }
     return row
   }
@@ -108,9 +159,17 @@ test('the page lists the types this instance publishes and the history it alread
   const types = ((await apiGet(page, '/config/types')).data as { resource_types: string[] }).resource_types
   expect(types.length).toBeGreaterThan(0)
 
-  // Real rows, produced by the create hooks rather than by this test.
+  // Real rows, produced by the create hook rather than by this test's UI
+  // interaction -- but produced *by this test*, so the check does not depend on
+  // what an earlier spec happened to leave behind.
+  const zone = await createZone(page)
+  await page.reload()
+
   await expect(bodyRows(page).first()).toBeVisible()
   expect(await bodyRows(page).count()).toBeGreaterThan(0)
+
+  // And the row is findable by the resource that wrote it, not just present.
+  await findRow(page, zone.revision, 'DNS Zone', zone.id)
 
   expect(errors).toEqual([])
 })
@@ -121,13 +180,12 @@ test('a rollback is published as a new revision, with the baseline for the row\'
   await login(page)
   const errors = await openPage(page)
 
-  // A zone this instance already recorded, and its newest revision.
-  const before = await listRevisions(page, { resource_type: 'dns_zone', page: 1, page_size: 1 })
-  const newest = before[0]
-  expect(newest, 'the instance must have at least one dns_zone revision').toBeTruthy()
-  const resourceId = String(newest.resource_id)
-  const baseRevision = Number(newest.revision)
-  const content = (newest.content ?? {}) as Record<string, unknown>
+  // A live zone, created here: the publish below is refused with a 404 unless
+  // the row's resource exists.
+  const zone = await createZone(page)
+  const resourceId = zone.id
+  const baseRevision = zone.revision
+  const content = zone.content
 
   // Publish one change so there are two revisions to choose between. The
   // revision number is read back from the response rather than assumed: a
@@ -156,7 +214,7 @@ test('a rollback is published as a new revision, with the baseline for the row\'
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await expect(bodyRows(page).first()).toBeVisible()
 
-  const targetRow = await findRow(page, baseRevision, 'DNS Zone')
+  const targetRow = await findRow(page, baseRevision, 'DNS Zone', resourceId)
   await targetRow.getByRole('button', { name: 'Rollback', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Roll back to an earlier revision', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Publish as new revision' }).click()
@@ -190,11 +248,12 @@ test('a rollback from the unfiltered table cites the resource\'s own revision, n
   await login(page)
   const errors = await openPage(page)
 
-  const before = await listRevisions(page, { resource_type: 'dns_zone', page: 1, page_size: 1 })
-  const newest = before[0]
-  const resourceId = String(newest.resource_id)
-  const baseRevision = Number(newest.revision)
-  const content = (newest.content ?? {}) as Record<string, unknown>
+  // Its own resource, so the unfiltered table holds a row that is
+  // unambiguously this test's among the other resources' revision 1s.
+  const zone = await createZone(page)
+  const resourceId = zone.id
+  const baseRevision = zone.revision
+  const content = zone.content
 
   const published = await postConfig(page, '/config/publish', {
     resource_type: 'dns_zone',
@@ -209,7 +268,7 @@ test('a rollback from the unfiltered table cites the resource\'s own revision, n
   await page.reload()
   await expect(bodyRows(page).first()).toBeVisible()
 
-  const targetRow = await findRow(page, baseRevision, 'DNS Zone')
+  const targetRow = await findRow(page, baseRevision, 'DNS Zone', resourceId)
   await targetRow.getByRole('button', { name: 'Rollback', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Roll back to an earlier revision', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Publish as new revision' }).click()

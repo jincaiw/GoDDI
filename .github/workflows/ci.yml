@@ -139,6 +139,8 @@ jobs:
         working-directory: e2e
         run: npm ci && npx playwright install --with-deps chromium
 
+      # The specs that bring their own state. This runs `npx playwright test`,
+      # which excludes the *.fixture.spec.ts set (playwright.config.ts).
       - name: Browser and API regression tests
         env:
           GODDI_SERVER_HTTP_ADDR: 127.0.0.1:16090
@@ -161,6 +163,32 @@ jobs:
           done
           cd e2e
           npx playwright test
+
+      # ...and the specs that need the instance to be *given* its fixtures.
+      # Two sets, two instances: the fixture specs assume a seeded world (an
+      # address with a DNS record, a materialised /24, a sparse /15) while the
+      # suite above assumes a table it alone has written to, so one instance
+      # cannot serve both. The seed is scripts/w13_frontend_smoke.py -- the
+      # recipe the fixture specs were written against -- so the environment
+      # under test cannot drift from it. This step existed only as a local
+      # instruction before, which is why the fixture specs were green here.
+      - name: Browser regression tests (seeded fixtures)
+        env:
+          GODDI_SMOKE_PORT: '16092'
+          GODDI_TEST_BASE_URL: http://127.0.0.1:16092
+        run: |
+          python3 scripts/w13_frontend_smoke.py up
+          status=0
+          (cd e2e && npx playwright test --config playwright.fixture.config.ts) || status=$?
+          python3 scripts/w13_frontend_smoke.py down || true
+          if [ "$status" != "0" ]; then
+            # The instance's own log, not the browser's: a seed that failed to
+            # start is the failure most worth seeing, and `down` has already
+            # stopped the process by now.
+            log="$(python3 -c 'import tempfile,os;print(os.path.join(tempfile.gettempdir(),"goddi-w13-smoke.log"))')"
+            if [ -f "$log" ]; then cat "$log"; fi
+          fi
+          exit "$status"
 
   # L2: static linting. Conservative linter set (see .golangci.yml).
   lint:
