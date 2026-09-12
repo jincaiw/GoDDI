@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
@@ -32,20 +33,39 @@ type TSIGKey struct {
 	Secret    string `json:"secret"` // Base64-encoded
 }
 
+// normalizeTSIGAlgorithm maps an operator-supplied algorithm name onto the
+// stored form, rejecting anything we will not sign with.
+//
+// The two vocabularies differ by a trailing dot. The wire carries the
+// canonical name from RFC 8945 — "hmac-sha256." — which is what miekg/dns
+// exposes as dns.HmacSHA256, while the database and the API store
+// "hmac-sha256". Accepting both here is deliberate: an operator copying a key
+// definition from a BIND or Windows zone-transfer configuration will have the
+// wire spelling.
+//
+// The previous implementation validated the stored name with the wire-form
+// constant, so creating a key with the endpoint's own default algorithm always
+// failed with "unsupported TSIG algorithm: hmac-sha256".
+func normalizeTSIGAlgorithm(algorithm string) (string, error) {
+	trimmed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(algorithm)), ".")
+	algo := TSIGAlgorithm(trimmed)
+	if algo == "" {
+		algo = TSIGHMACSHA256
+	}
+	if !SupportedTSIGAlgorithms[algo] {
+		return "", fmt.Errorf("unsupported TSIG algorithm: %s (use hmac-sha256 or hmac-sha512)", algorithm)
+	}
+	return string(algo), nil
+}
+
 // CreateTSIGKey generates a new TSIG key with the specified name and algorithm.
 // Returns the base64-encoded secret.
 func CreateTSIGKey(name, algorithm string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("key name is required")
 	}
-
-	algo := TSIGAlgorithm(algorithm)
-	if algo == "" {
-		algo = TSIGHMACSHA256
-	}
-
-	if !SupportedTSIGAlgorithms[algo] {
-		return "", fmt.Errorf("unsupported TSIG algorithm: %s", algorithm)
+	if _, err := normalizeTSIGAlgorithm(algorithm); err != nil {
+		return "", err
 	}
 
 	// Generate a random secret (512 bits = 64 bytes).

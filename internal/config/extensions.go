@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // DoTConfig holds DNS-over-TLS configuration.
 type DoTConfig struct {
 	Enabled  bool   `yaml:"enabled" json:"enabled"`
@@ -56,12 +58,36 @@ type PluginConfig struct {
 }
 
 // DHCPHAConfig holds DHCP High Availability configuration.
+//
+// The shape of this struct is the contract in docs/adr/0003-dhcp-ha-contract.md:
+// a node is either the primary -- the only author of lease facts -- or a
+// standby, which is a pure mirror; the two talk over a direct channel that does
+// not pass through the control database; and every duration that decides
+// whether the pair is healthy, and therefore whether a binding may be
+// acknowledged, is stated here rather than defaulted somewhere in the code.
+//
+// The peer_token is a shared secret and is deliberately readable from the
+// environment (GODDI_DHCP_HA_PEER_TOKEN) so that it does not have to be written
+// into config.yaml.
 type DHCPHAConfig struct {
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
-	Role         string `yaml:"role" json:"role"` // primary, secondary
-	PeerAddress  string `yaml:"peer_address" json:"peer_address"`
-	PeerPort     int    `yaml:"peer_port" json:"peer_port"`
-	SyncInterval int    `yaml:"sync_interval" json:"sync_interval"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	NodeID  string `yaml:"node_id" json:"node_id"`
+	Role    string `yaml:"role" json:"role"` // primary | standby
+	// ListenAddr is where this node accepts its peer. Unused when Enabled is
+	// false: a disabled node binds no HA port at all.
+	ListenAddr  string `yaml:"listen_addr" json:"listen_addr"`
+	PeerAddress string `yaml:"peer_address" json:"peer_address"`
+	PeerToken   string `yaml:"peer_token" json:"peer_token"`
+	// ConfirmTimeout bounds how long a binding waits for the second copy
+	// before the client is left unanswered. It must stay below the client's
+	// retransmission interval, or the client retransmits while we are still
+	// waiting and the load doubles for no gain.
+	ConfirmTimeout    string `yaml:"confirm_timeout" json:"confirm_timeout"`
+	HeartbeatInterval string `yaml:"heartbeat_interval" json:"heartbeat_interval"`
+	// PeerStaleAfter is how long the peer may be silent before this node
+	// considers the pair broken. It only ever moves a primary into paused; it
+	// is never a reason to promote. See ADR 0003 decision 4.
+	PeerStaleAfter string `yaml:"peer_stale_after" json:"peer_stale_after"`
 }
 
 // DefaultDoTConfig returns default DoT configuration.
@@ -118,11 +144,41 @@ func DefaultPluginConfig() PluginConfig {
 }
 
 // DefaultDHCPHAConfig returns default DHCP HA configuration.
+//
+// Disabled by default, which is the whole of the compatibility promise: an
+// installation that does not set dhcp_ha.enabled behaves exactly as it did
+// before this contract existed, and binds no HA port.
 func DefaultDHCPHAConfig() DHCPHAConfig {
 	return DHCPHAConfig{
-		Enabled:      false,
-		Role:         "primary",
-		PeerPort:     647,
-		SyncInterval: 30,
+		Enabled:           false,
+		Role:              HARolePrimary,
+		ListenAddr:        "0.0.0.0:647",
+		ConfirmTimeout:    "2s",
+		HeartbeatInterval: "1s",
+		PeerStaleAfter:    "5s",
 	}
+}
+
+// The two roles a node may take in a DHCP HA pair.
+const (
+	HARolePrimary = "primary"
+	HARoleStandby = "standby"
+)
+
+// HARoleNormalized returns the configured role in canonical form. An empty
+// role reads as primary, which is the role every existing installation is.
+func (c DHCPHAConfig) HARoleNormalized() string {
+	switch strings.ToLower(strings.TrimSpace(c.Role)) {
+	case "", HARolePrimary:
+		return HARolePrimary
+	case HARoleStandby:
+		return HARoleStandby
+	default:
+		return strings.ToLower(strings.TrimSpace(c.Role))
+	}
+}
+
+// IsStandby reports whether this node is the mirror rather than the author.
+func (c DHCPHAConfig) IsStandby() bool {
+	return c.Enabled && c.HARoleNormalized() == HARoleStandby
 }

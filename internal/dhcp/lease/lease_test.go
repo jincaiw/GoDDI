@@ -2,6 +2,7 @@ package lease
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,29 +11,7 @@ import (
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	schema := `
-	CREATE TABLE dhcp_leases (
-		id TEXT PRIMARY KEY,
-		scope_id TEXT NOT NULL,
-		ip_address TEXT NOT NULL,
-		mac_address TEXT NOT NULL,
-		hostname TEXT,
-		client_id TEXT,
-		lease_start TEXT NOT NULL,
-		lease_end TEXT NOT NULL,
-		status TEXT NOT NULL,
-		last_seen TEXT
-	);
-	`
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-	return db
+	return newLeaseStore(t).DB
 }
 
 // Regression: lease_end is stored in RFC3339 ("T" separator); ExpireLeases
@@ -52,7 +31,7 @@ func TestExpireLeasesRFC3339(t *testing.T) {
 	}
 
 	// Not expired yet: still active.
-	if err := m.ExpireLeases(); err != nil {
+	if _, err := m.ExpireLeases(); err != nil {
 		t.Fatalf("ExpireLeases: %v", err)
 	}
 	got, err := m.GetLease(lease.ID)
@@ -69,7 +48,7 @@ func TestExpireLeasesRFC3339(t *testing.T) {
 		t.Fatalf("backdate lease_end: %v", err)
 	}
 
-	if err := m.ExpireLeases(); err != nil {
+	if _, err := m.ExpireLeases(); err != nil {
 		t.Fatalf("ExpireLeases: %v", err)
 	}
 	got, err = m.GetLease(lease.ID)
@@ -93,11 +72,72 @@ func TestExpireLeasesKeepsFutureLeaseWithOtherStatus(t *testing.T) {
 	if err := m.ReleaseLease(lease.ID); err != nil {
 		t.Fatalf("ReleaseLease: %v", err)
 	}
-	if err := m.ExpireLeases(); err != nil {
+	if _, err := m.ExpireLeases(); err != nil {
 		t.Fatalf("ExpireLeases: %v", err)
 	}
 	got, _ := m.GetLease(lease.ID)
 	if got.Status != LeaseStatusReleased {
 		t.Fatalf("released lease changed status to %s", got.Status)
+	}
+}
+
+// TestTheSearchBoxMatchesTheColumnsItStandsFor.
+//
+// The lease list has one search input, labelled "IP/MAC", and it sends the term
+// as `search`. Nothing read that parameter, so the box answered every query
+// with the whole table -- and a table of everything reads as a table of
+// matches. This pins the two things that make it a filter: it matches all three
+// columns a lease has, and it does not match an address it was not given.
+func TestTheSearchBoxMatchesTheColumnsItStandsFor(t *testing.T) {
+	db := newTestDB(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+
+	for _, row := range []struct{ id, ip, mac, hostname string }{
+		{"l-20", "192.0.2.20", "aa:bb:cc:dd:ee:20", "host-a"},
+		{"l-200", "192.0.2.200", "aa:bb:cc:dd:ee:21", "host-b"},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO dhcp_leases
+				(id, scope_id, ip_address, mac_address, hostname, status, lease_start, lease_end, last_seen)
+			VALUES (?, 'scope-1', ?, ?, ?, 'active', datetime('now'), datetime('now', '+1 hour'), datetime('now'))`,
+			row.id, row.ip, row.mac, row.hostname); err != nil {
+			t.Fatalf("seed lease %s: %v", row.ip, err)
+		}
+	}
+
+	manager := NewManager(db)
+	search := func(term string) string {
+		t.Helper()
+		list, total, err := manager.ListLeases(LeaseFilter{Search: term})
+		if err != nil {
+			t.Fatalf("searching %q: %v", term, err)
+		}
+		// total comes from a second query with the same WHERE clause, so a
+		// mismatch means the two disagree about what matched.
+		if int(total) != len(list) {
+			t.Fatalf("searching %q: total = %d but %d row(s) came back", term, total, len(list))
+		}
+		found := make([]string, 0, len(list))
+		for _, l := range list {
+			found = append(found, l.IPAddress)
+		}
+		return strings.Join(found, ",")
+	}
+
+	cases := map[string]string{
+		// A full address is exact. As a substring it would also return
+		// 192.0.2.200, and "which lease holds this address" would come back
+		// with its neighbours.
+		"192.0.2.20": "192.0.2.20",
+		"ee:21":      "192.0.2.200",
+		"host-b":     "192.0.2.200",
+		// A term nothing carries returns nothing, which is the property the
+		// old behaviour could not have: it returned everything.
+		"no-such-client": "",
+	}
+	for term, want := range cases {
+		if got := search(term); got != want {
+			t.Errorf("searching %q matched %q, want %q", term, got, want)
+		}
 	}
 }

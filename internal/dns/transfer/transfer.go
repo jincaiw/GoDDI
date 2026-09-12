@@ -206,6 +206,19 @@ type ixfrGroup struct {
 // the rows into RR groups per serial version. It returns an empty slice
 // when no history covers the requested range.
 func (h *AXFRHandler) loadChanges(zoneID string, clientSerial uint32) ([]ixfrGroup, error) {
+	// Resolve the zone name BEFORE opening the change cursor.
+	//
+	// The SQLite pool is capped at a single connection
+	// (see internal/database/database.go: SetMaxOpenConns(1)). Running a
+	// nested QueryRow while `rows` is still open therefore waits forever for
+	// a connection that cannot be released until this function returns — a
+	// self-deadlock that surfaces only as a busy_timeout error after 5s, and
+	// which no in-process retry can resolve.
+	var zoneName string
+	if err := h.db.QueryRow("SELECT name FROM dns_zones WHERE id = ?", zoneID).Scan(&zoneName); err != nil {
+		return nil, fmt.Errorf("querying zone name: %w", err)
+	}
+
 	rows, err := h.db.Query(`
 		SELECT serial, change_type, name, type, value, ttl, priority, weight, port
 		FROM dns_zone_changes
@@ -216,12 +229,6 @@ func (h *AXFRHandler) loadChanges(zoneID string, clientSerial uint32) ([]ixfrGro
 		return nil, fmt.Errorf("querying zone changes: %w", err)
 	}
 	defer rows.Close()
-
-	// Need the zone name to normalize record names.
-	var zoneName string
-	if err := h.db.QueryRow("SELECT name FROM dns_zones WHERE id = ?", zoneID).Scan(&zoneName); err != nil {
-		return nil, fmt.Errorf("querying zone name: %w", err)
-	}
 
 	var groups []ixfrGroup
 	for rows.Next() {

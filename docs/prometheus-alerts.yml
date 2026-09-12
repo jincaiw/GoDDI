@@ -5,7 +5,13 @@
 #     rule_files:
 #       - /etc/prometheus/rules/goddi-alerts.yml
 #
-# 阈值为建议起点，请根据实际流量与 SLO 调整。
+# 阈值为**建议起点**，请按实际流量、备份排期与 SLO 调整。凡是无法从代码推导
+# 出来的数字（积压深度、备份周期），下面都写明了它依赖哪个人工约定。
+#
+# 每条规则引用的指标都必须真实注册且真实有写入者：`goddi_db_errors_total`
+# 曾经没有任何生产者，`goddi_backup_last_success_timestamp_seconds` 曾经不
+# 存在——两者都会让规则**永不触发**，而永不触发的告警和没有告警无法区分。
+# `internal/metrics/alert_rules_test.go` 会在 CI 里钉住这一点。
 
 groups:
   - name: goddi-availability
@@ -28,6 +34,102 @@ groups:
           summary: "DNS 查询被丢弃"
           description: "最近 5 分钟持续出现丢包（限流/熔断触发），检查客户端流量或放宽 rate limit。"
 
+  # 数据面。这些数字只由**拥有该数据面的进程**发布：进程不承担该角色时系列
+  # 缺席，而不是报 0——所以下面的规则在缺席时静默，那是正确的行为。
+  #
+  # `goddi_dataplane_ready` 是分级值：1 = ok、0.5 = degraded、**0 = failing**。
+  # 两个阈值分开，正是因为「降级」与「故障」需要不同的处置。
+  - name: goddi-dataplane
+    rules:
+      - alert: GoDDIDataPlaneDegraded
+        expr: goddi_dataplane_ready < 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据面降级"
+          description: "{{ $labels.plane }} 数据面持续降级超过 10 分钟（额度越界或队列积压）。读取 /api/v1/system/dataplane 查看原因与数字。降级期间解析与续租仍然正常，这是设计上的取舍。"
+
+      - alert: GoDDIDataPlaneFailing
+        expr: goddi_dataplane_ready < 0.5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "数据面故障"
+          description: "{{ $labels.plane }} 数据面探针报告 failing 超过 2 分钟，/ready 返回 503。此时本地副本可能已不可用，客户端可能无法解析或续租。"
+
+      - alert: GoDDIDataPlaneBacklogGrowing
+        expr: |
+          goddi_dataplane_pending_changes > 100
+            and deriv(goddi_dataplane_pending_changes[15m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据面上行积压持续增长"
+          description: "{{ $labels.plane }} 的 {{ $labels.queue }} 队列超过 100 条且仍在增长，说明推送没有被消费。控制库不可写或消费者进程未运行时会出现这种形状——本地副本仍能服务，所以没有别的现象会提示这件事。"
+
+      - alert: GoDDIDataPlaneChangesRefused
+        expr: goddi_dataplane_refused_changes > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "上行变更被控制库拒绝"
+          description: "{{ $labels.plane }} 有 {{ $value }} 条变更被控制库拒绝，仍在队列里按加长间隔重试（1s→5s→15s→1m→5m，上限 5 分钟）。与「积压」不同：积压是控制库落后，拒绝是控制库说「不收」。最常见的原因是向下同步还没落地（例如租约引用了一个控制库还没有的 scope），会自愈；如果是外键不一致这类结构性原因，5 分钟后仍会在这里。日志里那条 `the control database refused a change` 带着队列名、行键和原因。"
+
+      - alert: GoDDIDataPlaneStoreNearQuota
+        expr: goddi_dataplane_quota_usage_ratio > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据面本地存储接近额度"
+          description: "{{ $labels.plane }} 的 {{ $labels.bound }} 用量超过额度 90%。额度只是信号不是闸门（越界不会拒绝写入），所以这里需要人工介入：扩容或清理，否则下一次越界只是日志里的一行。"
+
+  - name: goddi-dhcp
+    rules:
+      - alert: GoDDIDHCPScopeNearlyFull
+        expr: goddi_dhcp_scope_usage_ratio > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP 地址池接近用尽"
+          description: "scope {{ $labels.scope }} 的地址池占用超过 90%。分子是分配器拒绝发放的同一集合（active/offered/conflict），所以这个比例下降只能靠租约到期或扩容池。"
+
+      - alert: GoDDIDHCPScopeExhausted
+        expr: goddi_dhcp_scope_usage_ratio >= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DHCP 地址池已用尽"
+          description: "scope {{ $labels.scope }} 的地址池已无可用地址，新客户端将拿不到地址。检查是否有大量 conflict 隔离（DECLINE 风暴）或租期过长。"
+
+      # 这两条的序列在 `dhcp_ha.enabled = false` 时**缺席**，不是 0 —— 0 读作
+      # 「这台机器丢了第二副本」，而一台从来没有过副本的机器不该拉响这个警报。
+      # 因此它们只可能在一个显式开了双节点的部署上触发；没有触发并不代表 HA 是好的，
+      # 只代表这套部署没有登记冗余这件事（这一点在部署清单里，不在这里）。
+      - alert: GoDDIDHCPHANoSecondCopy
+        expr: goddi_dhcp_ha_redundant == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP 节点已持续 5 分钟没有第二副本"
+          description: "node {{ $labels.node_id }} 承诺的租约目前只有它自己持有。三种状态会读到 0：`paused`（主丢失了对端，按契约扣住 ACK）、`primary-degraded`（运维显式批准的单副本运行，理由见审计 `ha.degrade`）、`fenced`（被运维移出服务）。要判断是哪一种，看该节点的 `/ready` 详情的 `ha_state`。**这里不是进程故障**：三种状态都是「按指示行事」，重启它不会让它重新拿到副本。"
+
+      - alert: GoDDIDHCPHAWithholdingLeases
+        expr: goddi_dhcp_ha_promising == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DHCP 节点已停止承诺绑定与续租"
+          description: "node {{ $labels.node_id }} 此刻不会 ACK 任何新建或续租（DISCOVER 仍会收到 OFFER，但客户端走不完流程），所以新客户端拿不到地址。两种状态会读到 0：`paused`（本地没有第二副本，且运维**没有**批准单副本运行——这才是需要处理的那一种）与 `fenced`（被显式移出服务，这种读数是预期的）。`/ready` 的 `ha_state` 区分二者；若是 `paused`，先看对端为什么连不上（`dhcp_ha.peer_address`、令牌、防火墙），修不好再用 `goddi ha degrade --confirm` 做一次有人负责的降级。"
+
   - name: goddi-dns-quality
     rules:
       - alert: GoDDIHighServfailRatio
@@ -39,7 +141,7 @@ groups:
           severity: warning
         annotations:
           summary: "DNS SERVFAIL 比例过高"
-          description: "SERVFAIL 占总查询比例超过 5%，常见原因为全部上游转发器不健康。"
+          description: "SERVFAIL 占总查询比例超过 5%，常见原因为全部上游转发器不健康，或次级区已过 SOA EXPIRE 而停止应答。"
 
       - alert: GoDDILowCacheHitRate
         expr: |
@@ -61,8 +163,43 @@ groups:
           summary: "查询日志通道溢出"
           description: "查询日志写入队列打满导致条目丢弃，考虑增大队列或降低采样。"
 
+      # 次级区的两个读数分开写，因为它们是两件事：一个区「同步不上」和一个
+      # 区「从来没有同步过」需要不同的处置，而后者没有时间戳可算，只能靠
+      # 序列的存在性表达。
+      - alert: GoDDISecondaryZoneNotRefreshing
+        expr: goddi_dns_secondary_zone_sync_failures >= 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "次级区连续刷新失败"
+          description: "zone {{ $labels.zone }} 连续 3 次以上刷新失败。次级区仍在用本地副本应答，但内容正在变旧；超过 SOA EXPIRE 后它将停止应答（RFC 1035 §6.3）。检查与主区的连通性、TSIG 密钥与 ACL。"
+
+      - alert: GoDDISecondaryZoneNeverTransferred
+        expr: |
+          goddi_dns_secondary_zone_sync_failures > 0
+            unless on(zone) goddi_dns_secondary_zone_last_sync_timestamp_seconds
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "次级区从未成功传送过"
+          description: "zone {{ $labels.zone }} 有刷新失败且没有任何一次成功传送的记录——它从未服务过真实数据。常见原因：区传输 ACL 未放行、TSIG 名称或算法不匹配、主区不可达。"
+
+      - alert: GoDDISecondaryZoneCacheStale
+        expr: time() - goddi_dns_secondary_zone_last_sync_timestamp_seconds > 43200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "次级区副本已经很旧"
+          description: "zone {{ $labels.zone }} 最近一次成功传送在 12 小时以前。默认 SOA EXPIRE 是 24 小时，超过它次级区将拒绝应答——距离「停止服务」还剩不到一半时间。"
+
   - name: goddi-database
     rules:
+      # 这个计数器只统计**被显式上报**的数据库错误：数据面推送失败、配置同步
+      # 失败、次级区同步记账失败、备份任务状态写入失败、租约审计写入失败。
+      # 它不是「本程序所有 SQL 错误」的总数，阈值是按这几条路径定的。
       - alert: GoDDIDatabaseErrors
         expr: increase(goddi_db_errors_total[10m]) > 10
         for: 0m
@@ -70,7 +207,7 @@ groups:
           severity: warning
         annotations:
           summary: "数据库错误突增"
-          description: "10 分钟内数据库错误超过 10 次，检查 SQLite 文件所在磁盘与 busy_timeout。"
+          description: "10 分钟内被上报的数据库错误超过 10 次。一次磁盘抖动只会产生个位数；持续增长通常意味着控制库不可写或磁盘已满——此时数据面仍在服务，但上行推送与审计都落在了队列里。"
 
       - alert: GoDDIBackupJobFailed
         expr: increase(goddi_backup_jobs_total{status="failed"}[1h]) > 0
@@ -80,6 +217,30 @@ groups:
         annotations:
           summary: "备份任务失败"
           description: "过去 1 小时内出现失败的备份任务，检查磁盘空间与 data/backups 目录权限。"
+
+      # 「从没有成功备份过」与「备份过期」是两件事：前者没有时间戳可算，只能
+      # 靠序列缺席表达。所以这个指标是带 type 标签的 GaugeVec 而不是普通
+      # Gauge——普通 Gauge 一注册就以 0 导出，而 0 是 1970 年，任何「超过一天」
+      # 的表达式都会匹配它，于是启动瞬间必然误报。
+      - alert: GoDDINoSuccessfulBackup
+        expr: |
+          absent(goddi_backup_last_success_timestamp_seconds{type="full"})
+            and goddi_uptime_seconds > 604800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "从未有过成功的全量备份"
+          description: "实例已运行超过 7 天，而没有任何一次成功的 full 类型备份。备份不会自己发生：本产品不内置排期，需要运维侧配置定时任务或外部调度。"
+
+      - alert: GoDDIBackupStale
+        expr: time() - goddi_backup_last_success_timestamp_seconds{type="full"} > 604800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "全量备份已过期"
+          description: "最近一次成功的 full 类型备份在 7 天以前。**这个阈值必须与运维侧的备份排期一致**：按周做全量就调成 8 天，按日做就调成 2 天。指标会给出准确的年龄，用它对齐而不是照抄这里的数字。"
 
   - name: goddi-api
     rules:

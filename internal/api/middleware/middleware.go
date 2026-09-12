@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -139,7 +138,7 @@ func buildCORSWhitelist(cfg *config.Config) []corsOrigin {
 		origins = append(origins, configuredOrigin)
 	}
 
-	if os.Getenv("GODDI_ENV") == "production" {
+	if cfg.IsProduction() {
 		return origins
 	}
 
@@ -249,6 +248,23 @@ func JWTAuth(jwtMgr *auth.JWTManager, sessionMgr *auth.SessionManager) func(http
 				if time.Now().After(session.ExpiresAt) {
 					_ = sessionMgr.DeleteSession(claims.SessionID)
 					writeAuthError(w, "会话已过期")
+					return
+				}
+				// A disabled account stops working now, not when its session
+				// happens to expire. Sessions live for days; leaving the
+				// window open means "disable this user" does not actually
+				// disable the user.
+				if !session.UserEnabled {
+					writeAuthError(w, "账户已被禁用")
+					return
+				}
+				// A session that owes a password change is confined to the
+				// account-security endpoints. The flag is read from the
+				// account row on every request, so changing the password lifts
+				// the restriction immediately — including for sessions
+				// created before the change.
+				if session.MustChangePassword && !accountSecurityPath(r.URL.Path) {
+					writePasswordChangeRequired(w)
 					return
 				}
 			}
@@ -505,5 +521,32 @@ func writeForbiddenError(w http.ResponseWriter, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    403,
 		"message": message,
+	})
+}
+
+// passwordChangeRequiredCode lets a client tell "you must change your initial
+// password" apart from an ordinary permission failure and route the operator
+// to the right screen, without parsing the message.
+const passwordChangeRequiredCode = "password_change_required"
+
+// accountSecurityPaths are the requests a session may still make while its
+// owner owes a password change. Refresh is included so the client does not
+// have to re-authenticate to finish the flow; the flag lives on the account
+// row, so refreshing cannot outlive the obligation.
+var accountSecurityPaths = map[string]bool{
+	"/api/v1/auth/me":              true,
+	"/api/v1/auth/change-password": true,
+	"/api/v1/auth/logout":          true,
+	"/api/v1/auth/refresh":         true,
+}
+
+func accountSecurityPath(path string) bool { return accountSecurityPaths[path] }
+
+func writePasswordChangeRequired(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"code":    passwordChangeRequiredCode,
+		"message": "必须先修改初始密码后才能继续操作",
 	})
 }

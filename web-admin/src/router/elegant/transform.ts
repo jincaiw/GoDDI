@@ -199,6 +199,7 @@ const routeMap: RouteMap = {
   "logs_dns": "/logs/dns",
   "settings": "/settings",
   "settings_backup": "/settings/backup",
+  "settings_config-versions": "/settings/config-versions",
   "settings_system": "/settings/system",
   "tools": "/tools",
   "tools_client": "/tools/client"

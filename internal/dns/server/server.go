@@ -1053,6 +1053,18 @@ func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string
 			return nil, true, false
 		}
 
+		// A secondary zone past its SOA EXPIRE must not answer from its local
+		// copy (RFC 1035 §6.3). The copy is not merely old: the primary may
+		// have reassigned names it still holds, so answering would return an
+		// address that now belongs to a different host. SERVFAIL is returned
+		// rather than NXDOMAIN so a resolver treats it as a transient failure
+		// and tries another server instead of caching a negative answer.
+		if zoneName := s.zoneStore.MatchingZone(qname); zoneName != "" && s.zoneStore.IsZoneExpired(zoneName) {
+			resp := new(dns.Msg)
+			resp.Rcode = dns.RcodeServerFailure
+			return resp, false, true
+		}
+
 		_, answers, found := s.zoneStore.Lookup(qname, qtype)
 		if found && len(answers) > 0 {
 			resp := new(dns.Msg)

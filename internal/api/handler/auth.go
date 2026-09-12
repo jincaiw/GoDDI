@@ -796,8 +796,11 @@ func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 // getUserByID is a helper to get user data by ID.
 func (h *Handlers) getUserByID(userID string) (map[string]interface{}, error) {
-	var username, email, displayName string
+	var username, displayName string
 	var enabled, mustChangePassword bool
+	// An account may have no email, which is stored as NULL; reading it into a
+	// string would turn "no email" into a failure of the whole read.
+	var email sql.NullString
 	var lastLoginAt, createdAt, updatedAt sql.NullString
 
 	err := h.db.QueryRow(`
@@ -814,7 +817,7 @@ func (h *Handlers) getUserByID(userID string) (map[string]interface{}, error) {
 	user := map[string]interface{}{
 		"id":                   userID,
 		"username":             username,
-		"email":                email,
+		"email":                email.String,
 		"display_name":         displayName,
 		"enabled":              enabled,
 		"must_change_password": mustChangePassword,

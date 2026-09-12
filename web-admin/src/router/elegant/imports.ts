@@ -45,6 +45,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   logs_dhcp: () => import("@/views/logs/dhcp/index.vue"),
   logs_dns: () => import("@/views/logs/dns/index.vue"),
   settings_backup: () => import("@/views/settings/backup/index.vue"),
+  "settings_config-versions": () => import("@/views/settings/config-versions/index.vue"),
   settings_system: () => import("@/views/settings/system/index.vue"),
   tools_client: () => import("@/views/tools/client/index.vue"),
 };

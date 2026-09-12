@@ -23,6 +23,7 @@ func ListDHCPLeases(w http.ResponseWriter, r *http.Request) {
 		MACAddress: r.URL.Query().Get("mac"),
 		IPAddress:  r.URL.Query().Get("ip"),
 		Hostname:   r.URL.Query().Get("hostname"),
+		Search:     r.URL.Query().Get("search"),
 		Page:       page,
 		PageSize:   pageSize,
 	}
@@ -63,9 +64,20 @@ func GetDHCPLease(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteDHCPLease releases a DHCP lease.
+//
+// A lease record lives on the data plane, which owns it and overwrites the
+// console's copy on every replication pass. Releasing it here would report
+// success and then be undone without a trace, so when the console is reading a
+// replica the write is refused and the operator is told where the lease is.
 func DeleteDHCPLease(w http.ResponseWriter, r *http.Request) {
 	if DHCPServices == nil || DHCPServices.LeaseMgr == nil {
 		response.InternalError(w, "DHCP服务未初始化")
+		return
+	}
+	if DHCPServices.LeasesAreReplica {
+		response.Conflict(w,
+			"租约由 DHCP 数据面持有，控制台读到的是副本；请在数据面所在进程上释放，"+
+				"否则下一次同步会覆盖此处所做的修改")
 		return
 	}
 

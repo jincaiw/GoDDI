@@ -282,6 +282,42 @@ func TestReleaseFlow_OpenAPIDocumented(t *testing.T) {
 		"/dns/conditional-forwarders/{id}",
 		"/dns/listeners/dot",
 		"/backup/{id}/download",
+		// Configuration publishing (W05): the revision history, the field-level
+		// diff, and the release queue the console's version page drives. These
+		// live under /config rather than /settings so that a client generated
+		// from the spec can reach them at all.
+		"/config/types",
+		"/config/revisions",
+		"/config/revisions/{id}",
+		"/config/diff",
+		"/config/publish",
+		"/config/rollback",
+		"/config/releases",
+		"/config/releases/retry",
+		// IPAM (W06): the whole surface, not just the three list endpoints that
+		// happened to be documented first. Everything the IPAM console calls --
+		// the 360 view, the state machine, the scope/reverse-zone generators,
+		// the import dry run and the integrity check -- has to be reachable.
+		"/ipam/spaces",
+		"/ipam/spaces/{id}",
+		"/ipam/subnets",
+		"/ipam/subnets/{id}",
+		"/ipam/subnets/{id}/stats",
+		"/ipam/subnets/{id}/dependencies",
+		"/ipam/subnets/{id}/dhcp-scope-plan",
+		"/ipam/subnets/{id}/generate-dhcp-scope",
+		"/ipam/subnets/{id}/generate-reverse-zone",
+		"/ipam/addresses",
+		"/ipam/addresses/view",
+		"/ipam/addresses/{id}",
+		"/ipam/addresses/{id}/transition",
+		"/ipam/addresses/{id}/dns-links",
+		"/ipam/addresses/allocate",
+		"/ipam/addresses/release",
+		"/ipam/import",
+		"/ipam/import/preview",
+		"/ipam/export",
+		"/ipam/integrity",
 	}
 	for _, path := range want {
 		if _, ok := doc.Paths[path]; !ok {

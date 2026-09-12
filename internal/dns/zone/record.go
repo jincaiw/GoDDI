@@ -406,6 +406,10 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		return nil, fmt.Errorf("record id is required")
 	}
 
+	if err := m.assertEditable(id); err != nil {
+		return nil, err
+	}
+
 	// Verify record exists.
 	existing, err := m.GetRecord(id)
 	if err != nil {
@@ -544,6 +548,10 @@ func (m *RecordManager) DeleteRecord(id string) error {
 		return fmt.Errorf("record id is required")
 	}
 
+	if err := m.assertEditable(id); err != nil {
+		return err
+	}
+
 	// Get record to know which zone to update serial for.
 	record, err := m.GetRecord(id)
 	if err != nil {
@@ -632,6 +640,9 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 	// the actual deletes and the single serial bump.
 	deleted := make([]Record, 0, len(ids))
 	for _, id := range ids {
+		if err := m.assertEditable(id); err != nil {
+			return err
+		}
 		rec, err := m.GetRecord(id)
 		if err != nil {
 			return fmt.Errorf("failed to delete record %s: %w", id, err)
@@ -1028,4 +1039,25 @@ func nullInt(v *int) interface{} {
 		return nil
 	}
 	return *v
+}
+
+// NormalizeRecordName turns a record name into the form this package stores.
+//
+// It is exported so that another writer of dns_records -- the configuration
+// publishing path is one -- cannot invent its own idea of what "www" means.
+// Two writers with two normalisations produce two rows that answer the same
+// query, and the resolver then has to pick one.
+func NormalizeRecordName(name, zoneName string) string {
+	return normalizeRecordName(name, zoneName)
+}
+
+// ValidateRecordValue applies the per-type value rules this package enforces
+// when a record is created.
+//
+// Exported for the same reason: a second writer that skips these checks can
+// store a value the API would have refused, and an unusable value does not fail
+// where it is written -- it fails in the resolver, as a record that exists,
+// lists, and answers nothing.
+func ValidateRecordValue(rtype, value string, priority, weight, port *int, tag string, flag *int) error {
+	return validateRecordValue(rtype, value, priority, weight, port, tag, flag)
 }

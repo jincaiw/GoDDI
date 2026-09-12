@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -144,12 +145,25 @@ func UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 
 	record, err := getRecordManager().UpdateRecord(id, opts)
 	if err != nil {
+		if errors.Is(err, zone.ErrOwnedByTheDataPlane) {
+			response.Conflict(w, recordOwnedByDataPlane)
+			return
+		}
 		response.BadRequest(w, err.Error())
 		return
 	}
 
 	response.OK(w, record)
 }
+
+// recordOwnedByDataPlane explains a refused write.
+//
+// The message names where the record lives rather than only what went wrong: an
+// operator who cannot edit a name needs to know who can, and the record is not
+// gone -- it is being served, and will be again the moment it is changed at its
+// owner.
+const recordOwnedByDataPlane = "该记录由 DNS 数据面持有（DHCP 联动 / 动态更新 / 区域传送写入），" +
+	"控制台读到的是副本；请在其来源处修改，否则修改不会生效"
 
 // DeleteDNSRecord deletes a DNS record.
 // DELETE /api/v1/dns/zones/{zoneId}/records/{id}
@@ -166,6 +180,10 @@ func DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := getRecordManager().DeleteRecord(id); err != nil {
+		if errors.Is(err, zone.ErrOwnedByTheDataPlane) {
+			response.Conflict(w, recordOwnedByDataPlane)
+			return
+		}
 		response.BadRequest(w, err.Error())
 		return
 	}
@@ -260,6 +278,10 @@ func BatchDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := getRecordManager().BatchDeleteRecords(req.IDs); err != nil {
+		if errors.Is(err, zone.ErrOwnedByTheDataPlane) {
+			response.Conflict(w, recordOwnedByDataPlane)
+			return
+		}
 		response.BadRequest(w, err.Error())
 		return
 	}

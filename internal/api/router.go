@@ -66,8 +66,17 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 		})
 	})
 
-	// Health check.
+	// Health check. Liveness only: it answers whether the process is running,
+	// never whether it is degraded. See handler.Health for why degradation
+	// must not fail a liveness probe.
 	r.Get("/health", handler.Health)
+
+	// Readiness. Degradation is reported here, unauthenticated because a
+	// probe that needs a credential is a probe an orchestrator cannot use,
+	// and deliberately coarse: the level and nothing else. The detail behind
+	// it is reconnaissance and is served from the authenticated route below,
+	// for the same reason /metrics is authenticated.
+	r.Get("/ready", handler.Ready)
 
 	// OpenAPI documentation (public, no sensitive data). Can be disabled
 	// for hardened deployments via server.expose_openapi / env
@@ -79,13 +88,28 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 	// Prometheus metrics endpoint.
 	// Authenticated: the payload exposes request volumes, route patterns and
 	// status distributions, which is useful reconnaissance for an attacker.
+	// The allowlist applies here too: metrics are part of the management
+	// surface, not a probe.
+	//
+	// The allowlist is the outer of the two, matching the order the API group
+	// below uses. Refusing by address before any credential work means a source
+	// that will be refused regardless does not get to spend the server's
+	// database round-trips, and does not learn from a 401-then-403 difference
+	// whether the token it presented was valid.
 	if cfg.Metrics.Enabled {
-		r.With(middleware.Authentication(jwtMgr, sessMgr, tokenMgr, db.DB)).
+		r.With(middleware.AdminAllowList(cfg.Security.AdminAllowCIDRs)).
+			With(middleware.Authentication(jwtMgr, sessMgr, tokenMgr, db.DB)).
 			Handle(cfg.Metrics.Path, metrics.PrometheusHandler())
 	}
 
 	// API v1 routes.
 	r.Route("/api/v1", func(r chi.Router) {
+		// The management surface, and the only place the allowlist is applied
+		// without qualification. /health and /ready are registered above it on
+		// purpose: they belong to the orchestrator, not to the console, and an
+		// orchestrator whose probe is refused restarts the process -- so a
+		// mistyped entry here would cause the outage it was meant to prevent.
+		r.Use(middleware.AdminAllowList(cfg.Security.AdminAllowCIDRs))
 		// Public routes (no auth required).
 		r.Group(func(r chi.Router) {
 			r.Post("/auth/init", h.InitAdmin)
@@ -364,6 +388,11 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Put("/", handler.UpdateIPAMSubnet)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "delete")).Delete("/", handler.DeleteIPAMSubnet)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/stats", handler.GetIPAMSubnetStats)
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/dependencies", handler.GetIPAMSubnetDependencies)
+					// A preview of a write, so it needs the write permission:
+					// a reader has nothing to do with it. The fingerprint it
+					// returns is what the create call is checked against.
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/dhcp-scope-plan", handler.PlanDHCPScope)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/generate-dhcp-scope", handler.GenerateDHCPScope)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/generate-reverse-zone", handler.GenerateReverseZone)
 				})
@@ -372,8 +401,13 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// IPAM Addresses.
 			r.Route("/ipam/addresses", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/", handler.ListIPAMAddresses)
+				// Static segments before "/{id}" so the router does not treat
+				// "view" as an address id.
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/view", handler.GetIPAMAddressView)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/{id}", handler.GetIPAMAddress)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Put("/{id}", handler.UpdateIPAMAddress)
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/{id}/transition", handler.TransitionIPAMAddress)
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/{id}/dns-links", handler.GetIPAMAddressDNSLinks)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/allocate", handler.AllocateIP)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/release", handler.ReleaseIP)
 			})
@@ -381,7 +415,12 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// IPAM Import/Export.
 			r.Route("/ipam", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/import", handler.ImportIPAMData)
+				// The dry run reads and never writes, so `read` is enough. It
+				// has to be registered before the bare /import path is not an
+				// issue: chi matches whole segments, and these are two.
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Post("/import/preview", handler.PreviewIPAMImport)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/export", handler.ExportIPAMData)
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/integrity", handler.GetIPAMIntegrity)
 			})
 
 			// Audit Logs (legacy route).
@@ -421,6 +460,25 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Post("/{id}/cancel", handler.CancelTaskHandler)
 			})
 
+			// Configuration publishing: revision history, diff, rollback and
+			// the release queue.
+			//
+			// Guarded by the settings permission rather than a new one: this
+			// is a cross-domain administrative path (it can publish DNS, DHCP
+			// and IPAM configuration at once), so it belongs with the other
+			// system-wide operations instead of being reachable by every
+			// domain writer.
+			r.Route("/config", func(r chi.Router) {
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/types", handler.ListConfigTypes)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/revisions", handler.ListConfigRevisions)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/revisions/{id}", handler.GetConfigRevision)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/diff", handler.DiffConfigRevisions)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Post("/publish", handler.PublishConfigRevision)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Post("/rollback", handler.RollbackConfigRevision)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/releases", handler.ListConfigReleases)
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Post("/releases/retry", handler.RetryConfigReleases)
+			})
+
 			// --- Phase 8: Extension Points (501 Not Implemented) ---
 
 			// SSO.
@@ -445,6 +503,13 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.Route("/system/settings", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/", handler.ListSettingsHandler)
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Put("/{key}", handler.UpdateSingleSettingHandler)
+			})
+
+			// Data-plane readiness detail: the level /ready reports, plus
+			// which plane is degraded, why, and the numbers behind it. It is
+			// the same permission as the other cross-domain system reads.
+			r.Route("/system/dataplane", func(r chi.Router) {
+				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/", handler.DataPlaneStatus)
 			})
 
 			r.Route("/system/backups", func(r chi.Router) {

@@ -26,7 +26,11 @@ COPY . .
 COPY --from=web-builder /app/web-admin/dist/ /app/web/dist/
 
 # Build binary with version info
-ARG VERSION=0.1.2
+# Build metadata. The default is deliberately not a version number: every
+# caller that matters (Makefile, docker-compose.yml, release.yml) passes one,
+# and a stale literal here silently mislabels a local build -- this file said
+# 0.1.2 while the rest of the tree said 0.5.2.
+ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 

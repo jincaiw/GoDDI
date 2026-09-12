@@ -78,11 +78,11 @@ var (
 		Help: "Total number of DNS queries dropped.",
 	})
 
-	DNSClientsTotal = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "goddi_dns_clients_total",
-		Help: "Current number of unique DNS clients.",
-	})
-
+	// Deliberately no goddi_dns_clients_total. It was registered and never
+	// written, so it reported a steady zero -- a number that looks like a
+	// measurement of "no clients" rather than the absence of one. A metric
+	// nobody writes is worse than a missing metric, because a dashboard cannot
+	// tell the two apart.
 	DNSResponseDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "goddi_dns_response_duration_seconds",
 		Help:    "DNS query response duration in seconds.",
@@ -130,10 +130,87 @@ var (
 		Help: "DHCP scope address usage ratio (0.0-1.0).",
 	}, []string{"scope"})
 
-	ClusterNodesTotal = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "goddi_cluster_nodes_total",
-		Help: "Number of cluster nodes.",
-	})
+	// Secondary-zone refresh health. A secondary that cannot reach its primary
+	// keeps answering from a copy that is quietly going stale, and RFC 1035
+	// §6.3 makes it stop answering once SOA EXPIRE passes -- so "how long since
+	// the last successful transfer" is the difference between a zone that is a
+	// little behind and one that is about to go dark.
+	//
+	// Both are gauges read from the zone table rather than counters kept in
+	// memory: the failure count in the table is what the sweep increments, and
+	// a counter that restarted with the process would reset to zero exactly
+	// when an operator restarted the service to fix the problem.
+	SecondaryZoneSyncFailures = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dns_secondary_zone_sync_failures",
+		Help: "Consecutive failed refreshes of a secondary zone; zero after a success.",
+	}, []string{"zone"})
+
+	SecondaryZoneLastSyncTimestampSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dns_secondary_zone_last_sync_timestamp_seconds",
+		Help: "Unix time of the last successful transfer of a secondary zone; absent if it never succeeded.",
+	}, []string{"zone"})
+
+	// Deliberately no goddi_cluster_nodes_total. There is no cluster to count:
+	// the DHCP pair is a single-writer replica, and an endpoint enumerating its
+	// members would be answering a question the deployment cannot answer -- a
+	// node that cannot see its peer cannot count the pair. What the pair does
+	// report is whether this node currently has a second copy, which is the
+	// fact an operator can act on. See DHCPHARedundant.
+	//
+	// Both of these are keyed by node and are absent, not zero, on a deployment
+	// with HA switched off. Zero reads as "the cluster lost its second copy",
+	// and a single node that never had one must not raise that alarm.
+	DHCPHARedundant = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_redundant",
+		Help: "1 when this DHCP node holds a second copy of the leases it promises, 0 when it does not. Absent when HA is disabled.",
+	}, []string{"node_id"})
+
+	DHCPHAPromising = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_promising",
+		Help: "1 when this DHCP node may acknowledge a binding or a renewal, 0 when it is withholding them. Absent when HA is disabled.",
+	}, []string{"node_id"})
+
+	// Data-plane readiness and footprint. These are the numbers behind
+	// /ready; the probe itself serves the level only, and the reasons and
+	// figures live here and on the authenticated detail endpoint.
+	DataPlaneReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_ready",
+		Help: "Data-plane readiness: 1 at ok, 0.5 at degraded, 0 at failing.",
+	}, []string{"plane"})
+
+	DataPlanePendingChanges = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_pending_changes",
+		Help: "Changes a data plane still owes to another plane or the control database.",
+	}, []string{"plane", "queue"})
+
+	DataPlaneStoreBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_store_bytes",
+		Help: "Size of a data plane's local files, including its write-ahead log.",
+	}, []string{"plane"})
+
+	// DataPlaneRefusedChanges is a number apart from the backlog. A pending
+	// change is work that is owed; a refused one is work the control database
+	// will not take. They are worth alerting on differently: the first is the
+	// system being behind, the second is the system being told no.
+	//
+	// It carries no queue label because it is read out of memory by the
+	// ten-second metrics tick, and a per-queue count would mean six store reads
+	// per tick -- which is the thing that keeps the sample off the store. The
+	// queue a refusal came from is in the log line that recorded it.
+	DataPlaneRefusedChanges = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_refused_changes",
+		Help: "Queued changes the control database has refused; they stay queued and are retried with a widening delay.",
+	}, []string{"plane"})
+
+	DataPlaneHeldLeases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_held_leases",
+		Help: "Leases a data plane currently holds.",
+	}, []string{"plane"})
+
+	DataPlaneQuotaUsageRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_quota_usage_ratio",
+		Help: "How much of a data-plane quota is in use (1.0 means exactly at the bound).",
+	}, []string{"plane", "bound"})
 
 	APIRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "goddi_api_requests_total",
@@ -185,6 +262,25 @@ var (
 		Name: "goddi_backup_jobs_total",
 		Help: "Total number of backup jobs.",
 	}, []string{"status"})
+
+	// BackupLastSuccessTimestampSeconds is the Unix time of the most recent
+	// backup of one type that completed.
+	//
+	// A vector rather than a single gauge, and not for cosmetic reasons: a
+	// plain gauge is exported at zero from the moment it is registered, so "no
+	// backup has ever succeeded" would be published as the epoch -- which every
+	// "older than a day" expression matches. A vector exports only the label
+	// values something has set, so a type with no successful backup has no
+	// series at all, and that absence is what the never-backed-up alert is
+	// written against.
+	//
+	// Labelled by type because that is the axis backups are scheduled on: daily
+	// incrementals and a weekly full are two questions, and one global
+	// timestamp answers neither.
+	BackupLastSuccessTimestampSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_backup_last_success_timestamp_seconds",
+		Help: "Unix time of the most recent successful backup of each type; absent for a type that has never succeeded.",
+	}, []string{"type"})
 
 	CacheEntries = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "goddi_dns_cache_entries",
@@ -279,6 +375,58 @@ type QueryLogStatsSample struct {
 	CleanupTimeouts int64
 }
 
+// DHCPScopeSample is one DHCP scope's address utilisation.
+//
+// It is sampled rather than pushed because the truth lives in the lease store
+// and changes on the request path. A gauge that the DHCP path updated directly
+// would be a second author for these series, and a restart would reset it to
+// zero while the leases were still there.
+type DHCPScopeSample struct {
+	// Scope is the scope identifier, used as the label.
+	Scope string
+	// Held is the number of addresses the pool cannot hand out.
+	Held int
+	// Ratio is Held over the pool size.
+	Ratio float64
+}
+
+// DHCPHASample is one DHCP node's redundancy, as the node itself reports it.
+//
+// It carries two booleans rather than a state name because the state name as a
+// label would accumulate: a node that has been paused, then primary, then
+// paused again leaves three series behind, two of them frozen at a value nobody
+// can interpret. The two questions an alert actually asks are answered by the
+// booleans, and the state itself is served by /ready and the logs, where a
+// superseded reading is replaced rather than retained.
+type DHCPHASample struct {
+	// NodeID is the label. It is the node's own identity, so that a series
+	// cannot be attributed to the wrong half of a pair.
+	NodeID string
+	// Redundant is true when this node currently holds a second copy of what
+	// it promises.
+	Redundant bool
+	// Promising is true when this node may acknowledge a binding or a renewal.
+	// It is false while the node is withholding, which is a different fact
+	// from "this node is broken".
+	Promising bool
+}
+
+// SecondaryZoneSample is one secondary zone's refresh health.
+//
+// HasSynced is separate from the timestamp for the same reason as the backup
+// gauge: a zone that has never transferred is not a zone that transferred at
+// the epoch, and only one of those two is an alarm.
+type SecondaryZoneSample struct {
+	// Zone is the zone name, used as the label.
+	Zone string
+	// Failures is the consecutive failure count, zero after a success.
+	Failures int
+	// HasSynced is false when the zone has never completed a transfer.
+	HasSynced bool
+	// LastSync is the completion time of the last successful transfer.
+	LastSync time.Time
+}
+
 // DBStatsSample represents a portable snapshot of database/sql pool pressure.
 type DBStatsSample struct {
 	OpenConnections    int
@@ -287,6 +435,47 @@ type DBStatsSample struct {
 	MaxOpenConnections int
 	WaitCount          int64
 	WaitDuration       time.Duration
+}
+
+// BackupStatsSample is the age of the newest successful backup of one type.
+//
+// Only ever produced for a type that has a successful backup. "Never" is
+// expressed by the absence of a sample, because a timestamp cannot carry it: a
+// zero would be the epoch, and the epoch is a real instant that every staleness
+// expression matches.
+type BackupStatsSample struct {
+	// Type is the backup type: full, dns, dhcp, ipam, security or config.
+	Type string
+	// LastSuccess is the completion time of the newest successful backup of
+	// this type.
+	LastSuccess time.Time
+}
+
+// DataPlaneSample is one data plane's probe view, as published to
+// Prometheus.
+//
+// It carries the level as well as the numbers because the level is what an
+// alert is written against: the figures say how close a bound is, the level
+// says whether anything has already crossed it.
+type DataPlaneSample struct {
+	// Plane names the store: "lease" or "zone".
+	Plane string
+	// Level is "ok", "degraded" or "failing".
+	Level string
+	// Pending is the backlog per outbound queue, by queue name.
+	Pending map[string]int
+	// RefusedRows are queued changes the control database has declined, across
+	// every queue. They are still owed and are being retried with a widening
+	// delay.
+	RefusedRows int
+	// StoreBytes is the footprint of the store's files.
+	StoreBytes int64
+	// HeldLeases is how many leases the store holds. Zero for a store that
+	// owns no leases.
+	HeldLeases int
+	// QuotaRatio is the fraction of each configured bound in use, by bound
+	// name. A value at or above 1 means the bound is crossed.
+	QuotaRatio map[string]float64
 }
 
 var (
@@ -298,6 +487,23 @@ var (
 
 	// dbStatsFn, when non-nil, is sampled by the metrics ticker.
 	dbStatsFn func() DBStatsSample
+
+	// backupStatsFn, when non-nil, is sampled by the metrics ticker.
+	backupStatsFn func() []BackupStatsSample
+
+	// dhcpScopeStatsFn, when non-nil, is sampled by the metrics ticker.
+	dhcpScopeStatsFn func() []DHCPScopeSample
+
+	// dhcpHAStatsFn, when non-nil, is sampled by the metrics ticker. It
+	// returns nothing on a node with HA switched off, which is what keeps the
+	// redundancy series absent rather than zero there.
+	dhcpHAStatsFn func() []DHCPHASample
+
+	// secondaryZoneStatsFn, when non-nil, is sampled by the metrics ticker.
+	secondaryZoneStatsFn func() []SecondaryZoneSample
+
+	// dataPlaneStatsFn, when non-nil, is sampled by the metrics ticker.
+	dataPlaneStatsFn func() []DataPlaneSample
 
 	// last samples used to convert absolute gauges into counter deltas.
 	lastCacheHits           int64
@@ -334,6 +540,66 @@ func RegisterDBStatsProvider(fn func() DBStatsSample) {
 	dbStatsFn = fn
 }
 
+// RegisterBackupStatsProvider registers a callback sampled by the metrics
+// ticker to publish the age of the newest successful backup of each type.
+func RegisterBackupStatsProvider(fn func() []BackupStatsSample) {
+	backupStatsFn = fn
+}
+
+// RegisterDHCPScopeStatsProvider registers a callback sampled by the metrics
+// ticker to publish DHCP pool utilisation.
+func RegisterDHCPScopeStatsProvider(fn func() []DHCPScopeSample) {
+	dhcpScopeStatsFn = fn
+}
+
+// RegisterDHCPHAStatsProvider registers a callback sampled by the metrics
+// ticker to publish this node's DHCP redundancy.
+//
+// A provider rather than a gauge the HA code writes: the HA package has more
+// than one state in which a node is healthy, and a push from each transition
+// would be a series that depends on which transitions happened to be observed.
+// Sampling the current state has one author and one meaning.
+func RegisterDHCPHAStatsProvider(fn func() []DHCPHASample) {
+	dhcpHAStatsFn = fn
+}
+
+// RegisterSecondaryZoneStatsProvider registers a callback sampled by the
+// metrics ticker to publish secondary-zone refresh health.
+func RegisterSecondaryZoneStatsProvider(fn func() []SecondaryZoneSample) {
+	secondaryZoneStatsFn = fn
+}
+
+// RegisterDataPlaneStatsProvider registers a callback sampled by the metrics
+// ticker to publish data-plane readiness and footprint metrics.
+func RegisterDataPlaneStatsProvider(fn func() []DataPlaneSample) {
+	dataPlaneStatsFn = fn
+}
+
+// dataPlaneReadyValue maps a readiness level onto the gauge. Degraded is
+// deliberately neither 1 nor 0: it is not healthy, and it is not an outage,
+// and an alert that has to treat it as either is an alert that is wrong half
+// the time.
+func dataPlaneReadyValue(level string) float64 {
+	switch level {
+	case "ok":
+		return 1
+	case "degraded":
+		return 0.5
+	default:
+		return 0
+	}
+}
+
+// boolGauge renders a yes/no fact as the 1 or 0 a gauge can carry. It is named
+// rather than inlined so that the two places that publish a boolean cannot end
+// up disagreeing about which value means which.
+func boolGauge(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
 func InitMetrics() {
 	once.Do(func() {
@@ -352,7 +618,6 @@ func InitMetrics() {
 			DNSCachedTotal,
 			DNSBlockedTotal,
 			DNSDroppedTotal,
-			DNSClientsTotal,
 			DNSResponseDurationSeconds,
 			DNSInflightQueries,
 			DNSInflightRejectedTotal,
@@ -362,7 +627,8 @@ func InitMetrics() {
 			UpstreamConsecutiveFailures,
 			DHCPLeasesActive,
 			DHCPScopeUsageRatio,
-			ClusterNodesTotal,
+			SecondaryZoneSyncFailures,
+			SecondaryZoneLastSyncTimestampSeconds,
 			APIRequestsTotal,
 			APIRequestDurationSeconds,
 			DBErrorsTotal,
@@ -373,6 +639,7 @@ func InitMetrics() {
 			DBWaitCountTotal,
 			DBWaitDurationSecondsTotal,
 			BackupJobsTotal,
+			BackupLastSuccessTimestampSeconds,
 			CacheEntries,
 			CacheMaxEntries,
 			CacheSizeBytes,
@@ -386,6 +653,14 @@ func InitMetrics() {
 			QueryLogCleanupDeletedTotal,
 			QueryLogCleanupRunsTotal,
 			QueryLogCleanupTimeoutsTotal,
+			DataPlaneReady,
+			DataPlanePendingChanges,
+			DataPlaneStoreBytes,
+			DataPlaneHeldLeases,
+			DataPlaneQuotaUsageRatio,
+			DataPlaneRefusedChanges,
+			DHCPHARedundant,
+			DHCPHAPromising,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine
@@ -454,6 +729,45 @@ func sampleProviders() {
 		}
 		lastDBWaitCount = s.WaitCount
 		lastDBWaitDuration = s.WaitDuration
+	}
+	if fn := backupStatsFn; fn != nil {
+		for _, s := range fn() {
+			BackupLastSuccessTimestampSeconds.WithLabelValues(s.Type).Set(float64(s.LastSuccess.Unix()))
+		}
+	}
+	if fn := dhcpScopeStatsFn; fn != nil {
+		for _, s := range fn() {
+			DHCPLeasesActive.WithLabelValues(s.Scope).Set(float64(s.Held))
+			DHCPScopeUsageRatio.WithLabelValues(s.Scope).Set(s.Ratio)
+		}
+	}
+	if fn := dhcpHAStatsFn; fn != nil {
+		for _, s := range fn() {
+			DHCPHARedundant.WithLabelValues(s.NodeID).Set(boolGauge(s.Redundant))
+			DHCPHAPromising.WithLabelValues(s.NodeID).Set(boolGauge(s.Promising))
+		}
+	}
+	if fn := secondaryZoneStatsFn; fn != nil {
+		for _, s := range fn() {
+			SecondaryZoneSyncFailures.WithLabelValues(s.Zone).Set(float64(s.Failures))
+			if s.HasSynced {
+				SecondaryZoneLastSyncTimestampSeconds.WithLabelValues(s.Zone).Set(float64(s.LastSync.Unix()))
+			}
+		}
+	}
+	if fn := dataPlaneStatsFn; fn != nil {
+		for _, s := range fn() {
+			DataPlaneReady.WithLabelValues(s.Plane).Set(dataPlaneReadyValue(s.Level))
+			DataPlaneStoreBytes.WithLabelValues(s.Plane).Set(float64(s.StoreBytes))
+			DataPlaneHeldLeases.WithLabelValues(s.Plane).Set(float64(s.HeldLeases))
+			DataPlaneRefusedChanges.WithLabelValues(s.Plane).Set(float64(s.RefusedRows))
+			for queue, n := range s.Pending {
+				DataPlanePendingChanges.WithLabelValues(s.Plane, queue).Set(float64(n))
+			}
+			for bound, ratio := range s.QuotaRatio {
+				DataPlaneQuotaUsageRatio.WithLabelValues(s.Plane, bound).Set(ratio)
+			}
+		}
 	}
 }
 
@@ -526,12 +840,6 @@ func RecordUpstreamAttempt(id, outcome string, duration time.Duration, healthy b
 		UpstreamHealthy.WithLabelValues(id).Set(0)
 	}
 	UpstreamConsecutiveFailures.WithLabelValues(id).Set(float64(failures))
-}
-
-// RecordDHCPLeaseChange records DHCP lease metrics.
-func RecordDHCPLeaseChange(scopeID string, active int, usageRatio float64) {
-	DHCPLeasesActive.WithLabelValues(scopeID).Set(float64(active))
-	DHCPScopeUsageRatio.WithLabelValues(scopeID).Set(usageRatio)
 }
 
 // RecordAPIRequest records an API request metric.

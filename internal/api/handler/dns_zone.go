@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jasonwa/goddi/internal/configver"
 	"github.com/jasonwa/goddi/internal/dns/dnssec"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
@@ -86,6 +87,13 @@ func CreateDNSZone(w http.ResponseWriter, r *http.Request) {
 		response.BadRequest(w, err.Error())
 		return
 	}
+
+	// The creation becomes revision 1, and so does the record set the zone was
+	// born with -- usually empty, which is still the right starting point for
+	// the record history. Without these the first revision of either resource
+	// would be its first edit.
+	recordResourceCreation(r, configver.ResourceDNSZone, z.ID, configver.DNSZoneContentFromZone(z))
+	recordRecordSetCreation(r, DNSServices.DB, z.ID)
 
 	response.Created(w, z)
 }

@@ -24,6 +24,26 @@ var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-
 // usernameRegex validates username format (3-50 chars, alphanumeric and underscore only).
 var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{3,50}$`)
 
+// emailOrNull turns "no email" into a SQL NULL.
+//
+// The column is UNIQUE, and SQLite treats two empty strings as duplicates while
+// treating every NULL as distinct. Passing "" straight through therefore lets
+// the first account with no email be created and refuses every account after it
+// -- with a message blaming a username that is in fact free. The validation in
+// CreateUser already documents the intent ("an empty value stores SQL NULL");
+// this is what makes the write agree with it, and every reader handles the NULL
+// it produces.
+//
+// display_name is left alone deliberately: it carries no unique constraint, so
+// an empty string is a perfectly good value there, and turning it into a NULL
+// would make every reader carry a distinction nobody needs.
+func emailOrNull(email string) any {
+	if email == "" {
+		return nil
+	}
+	return email
+}
+
 // ListUsers handles GET /api/v1/users
 func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := response.ParsePagination(r)
@@ -66,7 +86,10 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var u UserItem
 		var lastLoginAt sql.NullString
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName,
+		// An account may have no email, which is stored as NULL; reading it
+		// into a string would turn "no email" into an error.
+		var email sql.NullString
+		if err := rows.Scan(&u.ID, &u.Username, &email, &u.DisplayName,
 			&u.Enabled, &u.MustChangePassword, &lastLoginAt, &u.CreatedAt, &u.UpdatedAt,
 		); err != nil {
 			response.InternalError(w, "扫描用户数据失败")
@@ -75,6 +98,7 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		if lastLoginAt.Valid {
 			u.LastLoginAt = &lastLoginAt.String
 		}
+		u.Email = email.String
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
@@ -138,7 +162,16 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	mustChange := false
+
+	// A password an administrator typed is a password the administrator knows.
+	// Defaulting the flag to true is what makes the account the operator just
+	// created actually belong to its owner; a caller that has provisioned the
+	// credential some other way passes false explicitly.
+	//
+	// Until this default existed the flag was reachable only by hand-written
+	// API calls, so a column that reads as a security control was in practice
+	// never set.
+	mustChange := true
 	if req.MustChangePassword != nil {
 		mustChange = *req.MustChangePassword
 	}
@@ -147,7 +180,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	_, err = h.db.Exec(`
 		INSERT INTO users (id, username, email, password_hash, display_name, enabled, must_change_password, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-		id, req.Username, req.Email, hash, req.DisplayName, enabled, mustChange,
+		id, req.Username, emailOrNull(req.Email), hash, req.DisplayName, enabled, mustChange,
 	)
 	if err != nil {
 		// Distinguish duplicate-username (409) from other insert failures
@@ -245,7 +278,7 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		updates = append(updates, "email = ?")
-		args = append(args, *req.Email)
+		args = append(args, emailOrNull(*req.Email))
 	}
 	if req.DisplayName != nil {
 		updates = append(updates, "display_name = ?")

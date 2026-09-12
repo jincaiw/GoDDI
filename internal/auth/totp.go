@@ -1,36 +1,35 @@
 package auth
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jasonwa/goddi/internal/secretbox"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )
 
-const totpSecretCipherPrefix = "enc:v1:"
+// totpSecretCipherPrefix is the on-disk marker for a sealed TOTP seed. It is
+// an alias rather than a literal so that the format is pinned in exactly one
+// place; a test asserts stored seeds carry it.
+const totpSecretCipherPrefix = secretbox.Prefix
 
 // TOTPManager handles TOTP two-factor authentication.
 type TOTPManager struct {
-	db            *sql.DB
-	issuer        string
-	encryptionKey []byte
+	db     *sql.DB
+	issuer string
+	sealer *secretbox.Sealer
 }
 
 // NewTOTPManager creates a new TOTPManager.
 //
 // The optional encryptionKey parameter enables encrypted storage for TOTP
 // secrets. When omitted, TOTP secrets are stored as-is for backward
-// compatibility.
+// compatibility; security.encryption_key is the intended source.
 func NewTOTPManager(db *sql.DB, issuer string, encryptionKey ...string) *TOTPManager {
 	if issuer == "" {
 		issuer = "GoDDI"
@@ -40,77 +39,21 @@ func NewTOTPManager(db *sql.DB, issuer string, encryptionKey ...string) *TOTPMan
 		keyMaterial = encryptionKey[0]
 	}
 	return &TOTPManager{
-		db:            db,
-		issuer:        issuer,
-		encryptionKey: deriveTOTPKey(keyMaterial),
+		db:     db,
+		issuer: issuer,
+		sealer: secretbox.New(secretbox.LabelTOTP, keyMaterial),
 	}
-}
-
-func deriveTOTPKey(keyMaterial string) []byte {
-	if keyMaterial == "" {
-		return nil
-	}
-	sum := sha256.Sum256([]byte("goddi-totp-v1:" + keyMaterial))
-	key := make([]byte, len(sum))
-	copy(key, sum[:])
-	return key
 }
 
 func (tm *TOTPManager) encryptSecret(secret string) (string, error) {
-	if len(tm.encryptionKey) == 0 {
-		return secret, nil
-	}
-
-	block, err := aes.NewCipher(tm.encryptionKey)
-	if err != nil {
-		return "", fmt.Errorf("creating TOTP cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("creating TOTP AEAD: %w", err)
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return "", fmt.Errorf("generating TOTP nonce: %w", err)
-	}
-
-	ciphertext := gcm.Seal(nil, nonce, []byte(secret), nil)
-	payload := append(nonce, ciphertext...)
-	return totpSecretCipherPrefix + base64.RawStdEncoding.EncodeToString(payload), nil
+	return tm.sealer.Seal(secret)
 }
 
 func (tm *TOTPManager) decryptSecret(value string) (string, error) {
-	if value == "" || !strings.HasPrefix(value, totpSecretCipherPrefix) {
-		return value, nil
+	if value == "" {
+		return "", nil
 	}
-	if len(tm.encryptionKey) == 0 {
-		return "", fmt.Errorf("encrypted TOTP secret cannot be decrypted without an encryption key")
-	}
-
-	data, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(value, totpSecretCipherPrefix))
-	if err != nil {
-		return "", fmt.Errorf("decoding TOTP secret: %w", err)
-	}
-
-	block, err := aes.NewCipher(tm.encryptionKey)
-	if err != nil {
-		return "", fmt.Errorf("creating TOTP cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("creating TOTP AEAD: %w", err)
-	}
-	if len(data) < gcm.NonceSize() {
-		return "", fmt.Errorf("encrypted TOTP secret is too short")
-	}
-
-	nonce, ciphertext := data[:gcm.NonceSize()], data[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", fmt.Errorf("decrypting TOTP secret: %w", err)
-	}
-	return string(plaintext), nil
+	return tm.sealer.Open(value)
 }
 
 // GenerateTOTPSecret generates a new TOTP secret for a user.

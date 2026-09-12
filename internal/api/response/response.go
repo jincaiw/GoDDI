@@ -92,6 +92,19 @@ func BadRequest(w http.ResponseWriter, message string) {
 	})
 }
 
+// BadRequestWithData sends a 400 that carries a payload.
+//
+// A rejected bulk request is refused for reasons that are per row, and a caller
+// that only gets a sentence has to guess which rows and why. Passing the report
+// back lets the client show the same table a successful run would have shown.
+func BadRequestWithData(w http.ResponseWriter, message string, data interface{}) {
+	writeJSON(w, http.StatusBadRequest, Response{
+		Code:    400,
+		Message: message,
+		Data:    data,
+	})
+}
+
 // Unauthorized sends a 401 Unauthorized response.
 func Unauthorized(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusUnauthorized, Response{

@@ -106,6 +106,35 @@ jobs:
           [ "${tcp_ok:-0}" = "1" ] || { echo "TCP answer missing/incorrect"; exit 1; }
           echo "DNS integration test passed"
 
+      # The HTTP/API suite in test/. It was written long ago but no job ran it,
+      # so a stale assertion (an unauthenticated /metrics) sat green-by-default
+      # for as long as nobody executed it. Running it here, against a real
+      # process, is the only way it can fail.
+      - name: API integration suite
+        env:
+          GODDI_SERVER_HTTP_ADDR: 127.0.0.1:16091
+          GODDI_SERVER_PUBLIC_URL: http://127.0.0.1:16091
+          GODDI_SERVER_DATA_DIR: /tmp/goddi-api-ci
+          GODDI_DATABASE_DSN: /tmp/goddi-api-ci/goddi.db
+          GODDI_SECURITY_JWT_SECRET: ci-only-secret-not-for-production-123456
+          GODDI_ADMIN_USERNAME: admin
+          GODDI_ADMIN_PASSWORD: Admin@123456
+          GODDI_DNS_ENABLED: 'false'
+          GODDI_DHCP_ENABLED: 'false'
+          GODDI_TEST_BASE_URL: http://127.0.0.1:16091
+        run: |
+          rm -rf /tmp/goddi-api-ci
+          mkdir -p /tmp/goddi-api-ci
+          go build -o /tmp/goddi-api-server ./cmd/goddi
+          /tmp/goddi-api-server serve > /tmp/goddi-api.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"; cat /tmp/goddi-api.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:16091/health > /dev/null; then break; fi
+            sleep 1
+          done
+          go run ./test
+
       - name: Install browser
         working-directory: e2e
         run: npm ci && npx playwright install --with-deps chromium

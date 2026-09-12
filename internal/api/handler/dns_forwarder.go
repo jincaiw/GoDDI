@@ -19,6 +19,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
 	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/secretbox"
 )
 
 // validProtocols contains the set of allowed DNS forwarder protocols.
@@ -49,6 +50,11 @@ type DNSServiceContainer struct {
 	BlockListFetcher *filter.BlockListFetcher
 	DNSServer        *dnsserver.Server
 	JWTSecret        string
+	// Secrets seals values that must not sit in the database in the clear
+	// (TSIG keys today). A nil or disabled Sealer is a configuration error,
+	// not a silent fallback to plaintext: the handlers that need it refuse
+	// the request rather than writing an unsealed secret.
+	Secrets *secretbox.Sealer
 	// Config exposes the effective runtime configuration to handlers that
 	// need to consult feature gates (e.g. the experimental DNSSEC switch).
 	Config *config.Config

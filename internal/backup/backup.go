@@ -128,6 +128,7 @@ func (m *Manager) CreateBackup(opts BackupOptions) (*BackupJob, error) {
 	job.Status = "running"
 	if _, err := m.db.Exec(`UPDATE backup_jobs SET status = ? WHERE id = ?`, "running", id); err != nil {
 		slog.Error("failed to update backup job status to running", "id", id, "error", err)
+		metrics.RecordDBError()
 	}
 
 	// Execute backup.
@@ -135,7 +136,10 @@ func (m *Manager) CreateBackup(opts BackupOptions) (*BackupJob, error) {
 	if err != nil {
 		job.Status = "failed"
 		job.Error = err.Error()
-		m.db.Exec(`UPDATE backup_jobs SET status = ?, error = ? WHERE id = ?`, "failed", err.Error(), id)
+		if _, uerr := m.db.Exec(`UPDATE backup_jobs SET status = ?, error = ? WHERE id = ?`, "failed", err.Error(), id); uerr != nil {
+			slog.Error("could not record the backup failure", "id", id, "error", uerr)
+			metrics.RecordDBError()
+		}
 		metrics.RecordBackupJob("failed")
 		return job, nil
 	}
@@ -152,6 +156,7 @@ func (m *Manager) CreateBackup(opts BackupOptions) (*BackupJob, error) {
 	)
 	if err != nil {
 		slog.Error("updating backup job status", "error", err)
+		metrics.RecordDBError()
 	}
 
 	metrics.RecordBackupJob("completed")
@@ -434,6 +439,62 @@ func (m *Manager) ListBackups(filter BackupFilter) ([]BackupJob, int64, error) {
 	}
 
 	return jobs, total, nil
+}
+
+// LastSuccessfulBackups reports the completion time of the newest successful
+// backup of each type.
+//
+// It reads the job table rather than a value kept in memory. The age of the
+// last backup is the thing worth alerting on, and a process that has just
+// restarted knows nothing about the backups its predecessor ran -- an in-memory
+// timestamp would make every restart look like a lapsed backup schedule.
+//
+// A type with no successful backup is absent from the map rather than present
+// with a zero time. A zero timestamp is 1970, which every "older than a day"
+// expression matches, so an installation that has never been backed up would be
+// indistinguishable from one that is catastrophically behind. They need
+// different alerts, and only the absence can carry the difference.
+//
+// Ordering and parsing are left to SQLite's datetime(), which accepts both the
+// RFC3339 string the backup path writes and its own datetime('now') form, and
+// returns NULL for anything else -- a column holding nonsense drops out of the
+// maximum instead of being read as a very old backup.
+func (m *Manager) LastSuccessfulBackups() (map[string]time.Time, error) {
+	rows, err := m.db.Query(`
+		SELECT type, MAX(datetime(completed_at))
+		FROM backup_jobs
+		WHERE status = 'completed' AND completed_at IS NOT NULL
+		GROUP BY type`)
+	if err != nil {
+		return nil, fmt.Errorf("reading the last successful backups: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var backupType string
+		var completedAt sql.NullString
+		if err := rows.Scan(&backupType, &completedAt); err != nil {
+			return nil, fmt.Errorf("scanning the last successful backups: %w", err)
+		}
+		if !completedAt.Valid || strings.TrimSpace(completedAt.String) == "" {
+			continue
+		}
+		at, err := time.Parse("2006-01-02 15:04:05", strings.TrimSpace(completedAt.String))
+		if err != nil {
+			// datetime() promised a normalised value; it did not produce one.
+			// Reporting an unreadable row as the epoch would be an alarm about
+			// the wrong thing, so it is left out and said out loud.
+			slog.Warn("backup: unreadable completion time for a successful job",
+				"type", backupType, "value", completedAt.String, "error", err)
+			continue
+		}
+		out[backupType] = at.UTC()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading the last successful backups: %w", err)
+	}
+	return out, nil
 }
 
 // GetBackup returns a single backup job by ID.

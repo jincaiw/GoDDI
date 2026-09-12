@@ -11,6 +11,12 @@ import (
 )
 
 // Session represents an active user session.
+//
+// The two account fields are filled in only by GetSessionByID, which is the
+// lookup the request path uses. Their zero values are the restrictive ones —
+// a Session assembled anywhere else reads as "account disabled, password must
+// change" — so a caller that forgets to look them up fails closed rather than
+// open.
 type Session struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
@@ -19,6 +25,14 @@ type Session struct {
 	UserAgent string    `json:"user_agent"`
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// MustChangePassword mirrors users.must_change_password. While it is set,
+	// the session may only reach the account-security endpoints.
+	MustChangePassword bool `json:"must_change_password"`
+
+	// UserEnabled mirrors users.enabled. A session belonging to a disabled
+	// account is refused immediately rather than living out its expiry.
+	UserEnabled bool `json:"user_enabled"`
 }
 
 // SessionManager manages user sessions in the database.
@@ -59,6 +73,16 @@ func (sm *SessionManager) CreateSession(userID, ipAddress, userAgent string) (ra
 		UserAgent: userAgent,
 		ExpiresAt: expiresAt,
 		CreatedAt: now,
+	}
+
+	// Fill in the account flags the request path will enforce. Without this, a
+	// freshly created session would describe itself more restrictively than the
+	// session the next request reads back, and the caller would have no way to
+	// tell whether the account is allowed to proceed.
+	if err := sm.db.QueryRow(
+		`SELECT COALESCE(must_change_password, 0), COALESCE(enabled, 0) FROM users WHERE id = ?`, userID,
+	).Scan(&session.MustChangePassword, &session.UserEnabled); err != nil {
+		return "", nil, fmt.Errorf("reading account flags for new session: %w", err)
 	}
 
 	return token, session, nil
@@ -114,15 +138,24 @@ func (sm *SessionManager) DeleteSession(sessionID string) error {
 }
 
 // GetSessionByID retrieves a session by its ID.
+//
+// The account row is joined in rather than queried separately: the request
+// path already pays for this lookup, and a second round trip on a
+// single-connection database is a cost every request would carry. The join is
+// inner, so a session whose user no longer exists is not a session.
 func (sm *SessionManager) GetSessionByID(sessionID string) (*Session, error) {
 	var s Session
 	var expiresAt, createdAt string
 
 	err := sm.db.QueryRow(`
-		SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at
-		FROM sessions WHERE id = ?`,
+		SELECT s.id, s.user_id, s.token_hash, s.ip_address, s.user_agent, s.expires_at, s.created_at,
+		       COALESCE(u.must_change_password, 0), COALESCE(u.enabled, 0)
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.id = ?`,
 		sessionID,
-	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &expiresAt, &createdAt)
+	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &expiresAt, &createdAt,
+		&s.MustChangePassword, &s.UserEnabled)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("session not found")

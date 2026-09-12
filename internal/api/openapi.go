@@ -125,6 +125,97 @@ var documentedQueryParams = map[string][]apiQueryParam{
 		{Name: "end", Type: "string"},
 		{Name: "limit", Type: "integer"},
 	},
+	"GET /dashboard/top": {
+		{Name: "range", Type: "string"},
+		{Name: "limit", Type: "integer"},
+	},
+	"GET /dns/zones": {
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+		{Name: "type", Type: "string", Description: "forward 或 reverse"},
+		{Name: "name", Type: "string"},
+	},
+	"GET /dns/zones/{id}/history": {
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /dns/zones/{zoneId}/records": {
+		{Name: "name", Type: "string"},
+		{Name: "type", Type: "string"},
+		{Name: "enabled", Type: "boolean"},
+	},
+	"GET /dns/cache/entries": {
+		{Name: "qname", Type: "string"},
+		{Name: "qtype", Type: "string"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /logs/audit": {
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /logs/dhcp": {
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /ipam/spaces": {
+		{Name: "name", Type: "string"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /ipam/subnets": {
+		{Name: "space_id", Type: "string"},
+		{Name: "name", Type: "string"},
+		{Name: "cidr", Type: "string"},
+		{Name: "location", Type: "string"},
+		{Name: "vlan_id", Type: "integer"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /ipam/addresses": {
+		{Name: "subnet_id", Type: "string"},
+		{Name: "space_id", Type: "string"},
+		{Name: "status", Type: "string"},
+		{Name: "observed_state", Type: "string"},
+		{Name: "ip", Type: "string"},
+		{Name: "mac", Type: "string"},
+		{Name: "hostname", Type: "string"},
+		{Name: "owner", Type: "string"},
+		{Name: "search", Type: "string"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	// The 360 view is addressed by the pair that identifies an address, not by
+	// an id: the caller usually has an IP and a space, and the row may not
+	// exist yet.
+	"GET /ipam/addresses/view": {
+		{Name: "space_id", Type: "string", Required: true},
+		{Name: "ip", Type: "string", Required: true},
+	},
+	"GET /ipam/export": {
+		{Name: "type", Type: "string", Description: "addresses 或 subnets"},
+		{Name: "format", Type: "string", Description: "csv（默认）或 json"},
+		{Name: "parent_id", Type: "string"},
+	},
+	"GET /config/revisions": {
+		{Name: "resource_type", Type: "string", Description: "dns_zone、dhcp_scope、ipam_subnet 或 dns_records"},
+		{Name: "resource_id", Type: "string"},
+		{Name: "status", Type: "string", Description: "persisted、staged、applied 或 failed"},
+		{Name: "page", Type: "integer"},
+		{Name: "page_size", Type: "integer"},
+	},
+	"GET /config/revisions/{id}": {
+		{Name: "with_changes", Type: "boolean", Description: "true 时附带相对基准修订的字段级变更"},
+	},
+	"GET /config/diff": {
+		{Name: "resource_type", Type: "string", Required: true},
+		{Name: "resource_id", Type: "string", Required: true},
+		{Name: "from", Type: "integer", Required: true},
+		{Name: "to", Type: "integer", Required: true},
+	},
+	"GET /config/releases": {
+		{Name: "limit", Type: "integer"},
+	},
 }
 
 // routeDocs enumerates the public API surface of /api/v1.
@@ -156,11 +247,11 @@ var routeDocs = []apiRouteDoc{
 	{"/tokens/{id}", "DELETE", "Tokens", "删除 API 令牌", true, []string{"id"}},
 
 	{"/dashboard", "GET", "Dashboard", "仪表盘总览", true, nil},
-	{"/dashboard/top", "GET", "Dashboard", "Top 统计（客户端/域名/阻断）", true, []string{"range", "limit"}},
-	{"/stats", "GET", "Dashboard", "查询统计（range: day/week/month/year）", true, []string{"range"}},
-	{"/stats/top", "GET", "Dashboard", "Top 统计（type: clients/domains/blocked）", true, []string{"type", "range", "limit"}},
+	{"/dashboard/top", "GET", "Dashboard", "Top 统计（客户端/域名/阻断）", true, nil},
+	{"/stats", "GET", "Dashboard", "查询统计（range: day/week/month/year）", true, nil},
+	{"/stats/top", "GET", "Dashboard", "Top 统计（type: clients/domains/blocked）", true, nil},
 
-	{"/dns/zones", "GET", "DNS Zones", "区域列表", true, []string{"page", "page_size", "type", "name"}},
+	{"/dns/zones", "GET", "DNS Zones", "区域列表", true, nil},
 	{"/dns/zones", "POST", "DNS Zones", "创建区域", true, nil},
 	{"/dns/zones/batch-delete", "POST", "DNS Zones", "批量删除区域", true, nil},
 	{"/dns/zones/{id}", "GET", "DNS Zones", "区域详情", true, []string{"id"}},
@@ -182,7 +273,7 @@ var routeDocs = []apiRouteDoc{
 	{"/dns/zones/{id}/dnssec/nsec3", "PUT", "DNSSEC", "NSEC3 参数设置", true, []string{"id"}},
 	{"/dns/zones/{id}/enable", "POST", "DNS Zones", "启用区域", true, []string{"id"}},
 	{"/dns/zones/{id}/disable", "POST", "DNS Zones", "禁用区域", true, []string{"id"}},
-	{"/dns/zones/{id}/history", "GET", "DNS Zones", "区域变更历史", true, []string{"id", "page", "page_size"}},
+	{"/dns/zones/{id}/history", "GET", "DNS Zones", "区域变更历史", true, []string{"id"}},
 	{"/dns/zones/{id}/permissions", "GET", "DNS Zones", "区域权限列表", true, []string{"id"}},
 	{"/dns/zones/{id}/permissions", "PUT", "DNS Zones", "设置区域权限", true, []string{"id"}},
 	{"/dns/zones/{id}/catalog/members", "GET", "DNS Zones", "Catalog 区域成员列表", true, []string{"id"}},
@@ -191,7 +282,7 @@ var routeDocs = []apiRouteDoc{
 	{"/dns/security/allowlists/flush", "POST", "DNS Security", "清空白名单", true, nil},
 	{"/dns/security/blocklists/flush", "POST", "DNS Security", "清空全部黑名单", true, nil},
 
-	{"/dns/zones/{zoneId}/records", "GET", "DNS Records", "记录列表", true, []string{"zoneId", "name", "type", "enabled"}},
+	{"/dns/zones/{zoneId}/records", "GET", "DNS Records", "记录列表", true, []string{"zoneId"}},
 	{"/dns/zones/{zoneId}/records", "POST", "DNS Records", "创建记录", true, []string{"zoneId"}},
 	{"/dns/zones/{zoneId}/records/{id}", "GET", "DNS Records", "记录详情", true, []string{"zoneId", "id"}},
 	{"/dns/zones/{zoneId}/records/{id}", "PUT", "DNS Records", "更新记录", true, []string{"zoneId", "id"}},
@@ -212,7 +303,7 @@ var routeDocs = []apiRouteDoc{
 	{"/dns/listeners/doq", "PUT", "DNS Listeners", "配置 DoQ 监听器", true, nil},
 
 	{"/dns/cache", "GET", "DNS Cache", "缓存统计", true, nil},
-	{"/dns/cache/entries", "GET", "DNS Cache", "缓存条目列表", true, []string{"qname", "qtype", "page", "page_size"}},
+	{"/dns/cache/entries", "GET", "DNS Cache", "缓存条目列表", true, nil},
 	{"/dns/cache", "DELETE", "DNS Cache", "清空缓存", true, nil},
 	{"/dns/cache/{name}/{type}", "DELETE", "DNS Cache", "刷新单条缓存", true, []string{"name", "type"}},
 
@@ -231,21 +322,67 @@ var routeDocs = []apiRouteDoc{
 
 	{"/logs/dns", "GET", "Logs", "DNS 查询日志", true, nil},
 	{"/logs/dns/export", "GET", "Logs", "导出 DNS 查询日志 CSV", true, nil},
-	{"/logs/audit", "GET", "Logs", "审计日志", true, []string{"page"}},
-	{"/logs/dhcp", "GET", "Logs", "DHCP 日志", true, []string{"page"}},
+	{"/logs/audit", "GET", "Logs", "审计日志", true, nil},
+	{"/logs/dhcp", "GET", "Logs", "DHCP 日志", true, nil},
 
 	{"/dhcp/scopes", "GET", "DHCP", "Scope 列表", true, nil},
 	{"/dhcp/leases", "GET", "DHCP", "租约列表", true, nil},
 	{"/dhcp/reservations", "GET", "DHCP", "保留地址列表", true, nil},
 	{"/dhcp/options", "GET", "DHCP", "选项列表", true, nil},
 
+	// IPAM Spaces.
 	{"/ipam/spaces", "GET", "IPAM", "地址空间列表", true, nil},
+	{"/ipam/spaces", "POST", "IPAM", "创建地址空间", true, nil},
+	{"/ipam/spaces/{id}", "GET", "IPAM", "地址空间详情", true, []string{"id"}},
+	{"/ipam/spaces/{id}", "PUT", "IPAM", "更新地址空间", true, []string{"id"}},
+	{"/ipam/spaces/{id}", "DELETE", "IPAM", "删除地址空间", true, []string{"id"}},
+
+	// IPAM Subnets.
 	{"/ipam/subnets", "GET", "IPAM", "子网列表", true, nil},
+	{"/ipam/subnets", "POST", "IPAM", "创建子网", true, nil},
+	{"/ipam/subnets/{id}", "GET", "IPAM", "子网详情", true, []string{"id"}},
+	{"/ipam/subnets/{id}", "PUT", "IPAM", "更新子网", true, []string{"id"}},
+	{"/ipam/subnets/{id}", "DELETE", "IPAM", "删除子网（有已分配地址或依赖时拒绝）", true, []string{"id"}},
+	{"/ipam/subnets/{id}/stats", "GET", "IPAM", "子网用量统计", true, []string{"id"}},
+	{"/ipam/subnets/{id}/dependencies", "GET", "IPAM", "子网依赖（阻塞删除的原因）", true, []string{"id"}},
+	// A preview of a write, so it is guarded by write permission: the
+	// fingerprint it returns is what the create call is checked against.
+	{"/ipam/subnets/{id}/dhcp-scope-plan", "POST", "IPAM", "建池计划（只读，返回指纹）", true, []string{"id"}},
+	{"/ipam/subnets/{id}/generate-dhcp-scope", "POST", "IPAM", "按计划创建 DHCP 作用域（需携带指纹）", true, []string{"id"}},
+	{"/ipam/subnets/{id}/generate-reverse-zone", "POST", "IPAM", "创建反向区域", true, []string{"id"}},
+
+	// IPAM Addresses.
 	{"/ipam/addresses", "GET", "IPAM", "地址列表", true, nil},
+	{"/ipam/addresses/view", "GET", "IPAM", "统一 IP 详情（地址 + DNS + DHCP + 占位）", true, nil},
+	{"/ipam/addresses/{id}", "GET", "IPAM", "地址详情", true, []string{"id"}},
+	{"/ipam/addresses/{id}", "PUT", "IPAM", "更新地址", true, []string{"id"}},
+	{"/ipam/addresses/{id}/transition", "POST", "IPAM", "变更地址状态", true, []string{"id"}},
+	{"/ipam/addresses/{id}/dns-links", "GET", "IPAM", "地址当前被哪些名字发布", true, []string{"id"}},
+	{"/ipam/addresses/allocate", "POST", "IPAM", "分配 IP", true, nil},
+	{"/ipam/addresses/release", "POST", "IPAM", "释放 IP", true, nil},
+
+	// IPAM Import / Export.
+	{"/ipam/import", "POST", "IPAM", "批量导入地址或子网", true, nil},
+	{"/ipam/import/preview", "POST", "IPAM", "导入预演（只读，不写任何东西）", true, nil},
+	{"/ipam/export", "GET", "IPAM", "导出地址或子网", true, nil},
+	{"/ipam/integrity", "GET", "IPAM", "IPAM 一致性检查", true, nil},
 
 	{"/settings", "GET", "Settings", "系统设置列表", true, nil},
 	{"/settings", "PUT", "Settings", "批量更新设置（热生效）", true, nil},
 	{"/settings/{key}", "PUT", "Settings", "更新单个设置（热生效）", true, []string{"key"}},
+
+	// Configuration publishing: revision history, diff, rollback and the
+	// release queue. Guarded by the settings permission rather than a
+	// domain-specific one, because it can publish DNS, DHCP and IPAM
+	// configuration in the same call.
+	{"/config/types", "GET", "Config Versions", "可发布配置的资源类型", true, nil},
+	{"/config/revisions", "GET", "Config Versions", "配置修订列表", true, nil},
+	{"/config/revisions/{id}", "GET", "Config Versions", "单个修订（可选带字段级变更）", true, []string{"id"}},
+	{"/config/diff", "GET", "Config Versions", "两个修订之间的字段级差异", true, nil},
+	{"/config/publish", "POST", "Config Versions", "发布配置（产生新修订并排队下发）", true, nil},
+	{"/config/rollback", "POST", "Config Versions", "回滚到历史修订（作为新修订发布）", true, nil},
+	{"/config/releases", "GET", "Config Versions", "数据面发布队列", true, nil},
+	{"/config/releases/retry", "POST", "Config Versions", "重置失败的发布项以便重试", true, nil},
 
 	{"/backup", "GET", "Backup", "备份列表", true, nil},
 	{"/backup", "POST", "Backup", "创建备份", true, nil},

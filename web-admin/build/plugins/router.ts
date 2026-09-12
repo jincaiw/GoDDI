@@ -219,6 +219,14 @@ const ROUTE_META: Partial<Record<RouteKey, Partial<RouteMeta>>> = {
                   "resource": "backup",
                   "action": "read"
             }
+      },
+      "settings_config-versions": {
+            "icon": "mdi:source-branch",
+            "order": 2,
+            "permission": {
+                  "resource": "settings",
+                  "action": "read"
+            }
       }
 };
 

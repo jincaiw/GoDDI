@@ -821,8 +821,22 @@ declare namespace App {
           location: string;
           createSubnet: string;
           editSubnet: string;
-          generateDhcpScope: string;
+          createDhcpScope: string;
           generateReverseZone: string;
+          importAddresses: string;
+        }
+        reverseZone: {
+          title: string;
+          cidr: string;
+          candidates: string;
+          candidatesHint: string;
+          mostSpecific: string;
+          ttl: string;
+          create: string;
+          created: string;
+          willCreate: string;
+          noPermission: string;
+          loadFailed: string;
         }
         addresses: {
           title: string;
@@ -835,11 +849,104 @@ declare namespace App {
           location: string;
           allocate: string;
           release: string;
+          viewDetail: string;
           statusUsed: string;
           statusFree: string;
           statusReserved: string;
           statusConflict: string;
         }
+        detail: {
+          title: string;
+          nothingToShow: string;
+          conflicts: string;
+          space: string;
+          lastSeen: string;
+          dnsRecords: string;
+          dnsRecordsEmpty: string;
+          recordName: string;
+          recordType: string;
+          recordValue: string;
+          ttl: string;
+          author: string;
+          authorLocal: string;
+          authorOperator: string;
+          scopes: string;
+          scopesTruncated: string;
+          scopesEmpty: string;
+          scopesUnknown: string;
+          inSubnet: string;
+          inPool: string;
+          isGateway: string;
+          range: string;
+          router: string;
+          relation: string;
+          leases: string;
+          leasesEmpty: string;
+          leaseEnd: string;
+          reservations: string;
+          reservationsEmpty: string;
+          history: string;
+          historyEmpty: string;
+          changedBy: string;
+          reason: string;
+          source: string;
+        }
+        import: {
+          title: string;
+          chooseFile: string;
+          pastePlaceholder: string;
+          preview: string;
+          previewTitle: string;
+          confirm: string;
+          appliedTitle: string;
+          back: string;
+          close: string;
+          total: string;
+          creates: string;
+          updates: string;
+          unchanged: string;
+          errors: string;
+          rejected: string;
+          rejectedHint: string;
+          changes: string;
+          truncated: string;
+          line: string;
+          ip: string;
+          action: string;
+          statusChange: string;
+          changedFields: string;
+          actionCreate: string;
+          actionUpdate: string;
+          actionUnchanged: string;
+        };
+        pool: {
+          title: string;
+          planFailed: string;
+          stale: string;
+          staleHint: string;
+          stepPlan: string;
+          stepConfirm: string;
+          conflicts: string;
+          warnings: string;
+          range: string;
+          router: string;
+          routerSource: string;
+          routerFromGateway: string;
+          routerFromConvention: string;
+          routerFromNothing: string;
+          leaseTime: string;
+          fingerprint: string;
+          excluded: string;
+          excludedEmpty: string;
+          excludedHint: string;
+          mask: string;
+          confirmHint: string;
+          back: string;
+          replan: string;
+          next: string;
+          create: string;
+          created: string;
+        };
       };
       admin: {
         sessions: {
@@ -951,6 +1058,89 @@ declare namespace App {
           restoreBackup: string;
           restoreConfirm: string;
           deleteBackup: string;
+        }
+        configVersions: {
+          title: string;
+          resourceTypesTitle: string;
+          resourceTypesEmpty: string;
+          resourceTypes: {
+            dns_zone: string;
+            dhcp_scope: string;
+            ipam_subnet: string;
+            dns_records: string;
+          };
+          revisionsTitle: string;
+          filterResourceType: string;
+          filterResourceId: string;
+          resourceIdPlaceholder: string;
+          emptyRevisions: string;
+          revision: string;
+          resourceType: string;
+          resourceId: string;
+          status: string;
+          statusLabels: {
+            persisted: string;
+            staged: string;
+            applied: string;
+            failed: string;
+          };
+          actor: string;
+          note: string;
+          createdAt: string;
+          appliedAt: string;
+          appliedGeneration: string;
+          rollback: string;
+          rollbackTitle: string;
+          rollbackTarget: string;
+          rollbackExpected: string;
+          rollbackExpectedHint: string;
+          rollbackNote: string;
+          rollbackConfirm: string;
+          rollbackSuccess: string;
+          conflictBody: string;
+          diffTitle: string;
+          diffHint: string;
+          diffFrom: string;
+          diffTo: string;
+          computeDiff: string;
+          noChanges: string;
+          fieldChanges: string;
+          noFieldChanges: string;
+          field: string;
+          oldValue: string;
+          newValue: string;
+          recordChanges: string;
+          recordChangesHint: string;
+          noRecordChanges: string;
+          recordDiffKind: {
+            added: string;
+            removed: string;
+            changed: string;
+          };
+          recordDiffSummary: string;
+          recordName: string;
+          recordType: string;
+          recordValue: string;
+          changedFields: string;
+          publishTitle: string;
+          publishHint: string;
+          publishApiOnly: string;
+          contentJson: string;
+          dryRun: string;
+          dryRunResult: string;
+          dryRunBaseRevision: string;
+          dryRunReplayed: string;
+          writeRequired: string;
+          invalidJson: string;
+          queueTitle: string;
+          queuePending: string;
+          queueFailed: string;
+          queueAttempts: string;
+          queueLastError: string;
+          queueEmpty: string;
+          retryFailed: string;
+          retry: string;
+          retryResult: string;
         }
       };
       page: {

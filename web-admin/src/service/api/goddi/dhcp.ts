@@ -12,9 +12,30 @@ export interface DHCPScope {
   enabled: boolean
   active_leases: number
   total_addresses: number
-  description: string
+  /**
+   * The free-text note on a scope.
+   *
+   * It is `comment`, not `description`: the scope manager has no description
+   * field, so a form that sent one had it silently dropped and a list that
+   * read one always showed nothing. The name here is the column's.
+   */
+  comment: string
   created_at: string
   updated_at: string
+}
+
+/**
+ * A reference to the plan a create was approved against.
+ *
+ * It describes the conversation rather than the scope, which is why it sits
+ * beside the fields instead of inside them: it is checked and then dropped, and
+ * must not end up stored. Both halves are required -- a half-filled reference
+ * is refused, not ignored, because an operator who thinks a check happened and
+ * did not get one is worse off than one who was told no.
+ */
+export interface DHCPScopePlanRef {
+  subnet_id: string
+  fingerprint: string
 }
 
 export interface CreateDHCPScopeRequest {
@@ -22,9 +43,20 @@ export interface CreateDHCPScopeRequest {
   subnet: string
   start_ip: string
   end_ip: string
+  subnet_mask?: string
+  router?: string
+  dns_servers?: string
+  ntp_servers?: string
+  domain_name?: string
+  interface?: string
   lease_time?: number
+  max_lease_time?: number
   enabled?: boolean
-  description?: string
+  ping_check_enabled?: boolean
+  dns_updates?: boolean
+  comment?: string
+  /** Optional: a create without one is not checked against anything. */
+  plan?: DHCPScopePlanRef
 }
 
 export function listDHCPScopes(params?: Record<string, unknown>) {

@@ -53,6 +53,7 @@ declare module "@elegant-router/types" {
     "logs_dns": "/logs/dns";
     "settings": "/settings";
     "settings_backup": "/settings/backup";
+    "settings_config-versions": "/settings/config-versions";
     "settings_system": "/settings/system";
     "tools": "/tools";
     "tools_client": "/tools/client";
@@ -146,6 +147,7 @@ declare module "@elegant-router/types" {
     | "logs_dhcp"
     | "logs_dns"
     | "settings_backup"
+    | "settings_config-versions"
     | "settings_system"
     | "tools_client"
   >;

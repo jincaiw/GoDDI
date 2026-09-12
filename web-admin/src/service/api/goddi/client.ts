@@ -9,6 +9,36 @@ export interface ApiResponse<T = unknown> {
   data: T
 }
 
+/**
+ * Error thrown for a failed request.
+ *
+ * `payload` carries the response envelope's `data`. The backend uses it to
+ * return something the UI has to render rather than something it can restate
+ * as a sentence -- a rejected import answers 400 with the per-line reasons,
+ * and without this field the reason never reaches the operator, who is left
+ * with "import failed" and a file to re-read by eye.
+ *
+ * A class rather than an interface so callers can narrow with `instanceof`;
+ * anything else rejects with the raw axios error.
+ */
+export class ApiError extends Error {
+  code?: number
+  status?: number
+  payload?: unknown
+
+  constructor(message: string, options: { code?: number; status?: number; payload?: unknown } = {}) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = options.code
+    this.status = options.status
+    this.payload = options.payload
+  }
+}
+
+function apiError(message: string, data: unknown, status?: number, code?: number): ApiError {
+  return new ApiError(message, { code, status, payload: data })
+}
+
 export interface PaginatedApiResponse<T = unknown> {
   code: number
   message: string
@@ -100,9 +130,7 @@ client.interceptors.response.use(
   (response: AxiosResponse) => {
     const data = response.data as ApiResponse
     if (data.code !== undefined && data.code !== 0) {
-      const error = new Error(data.message || 'Request failed') as Error & { code?: number }
-      error.code = data.code
-      return Promise.reject(error)
+      return Promise.reject(apiError(data.message || 'Request failed', data.data, response.status, data.code))
     }
     return response
   },
@@ -155,7 +183,7 @@ client.interceptors.response.use(
 
       const data = error.response.data as ApiResponse
       const message = data?.message || error.message || 'Request failed'
-      return Promise.reject(new Error(message))
+      return Promise.reject(apiError(message, data?.data, status, data?.code))
     }
     return Promise.reject(error)
   }

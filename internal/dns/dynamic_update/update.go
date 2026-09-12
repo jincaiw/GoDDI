@@ -2,6 +2,7 @@ package dynamic_update
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jasonwa/goddi/internal/auditlog"
 	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/miekg/dns"
 )
@@ -134,70 +136,470 @@ func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Ms
 		return h.makeResponse(msg, dns.RcodeNotZone), nil
 	}
 
-	// Process prerequisites.
-	if err := h.checkPrerequisites(z.ID, msg); err != nil {
-		return h.makeResponse(msg, dns.RcodeRefused), nil
+	// Parse and validate the entire update section before touching the
+	// database. RFC 2136 §3.4.1.1 requires a malformed update to be rejected
+	// with FORMERR and no side effects; the previous implementation applied
+	// RRs one by one and skipped individual failures, leaving the zone in a
+	// half-updated state that no client could observe consistently.
+	ops, rcode := planUpdateOps(msg.Ns)
+	if rcode != dns.RcodeSuccess {
+		slog.Warn("dynamic_update: rejected update section",
+			"zone", zoneName, "rcode", dns.RcodeToString[rcode])
+		return h.makeResponse(msg, rcode), nil
 	}
 
-	// Apply updates. RFC 2136 §2.4.2 classifies each RR in the Update
-	// section by its CLASS, not by its type:
-	//   CLASS ANY  + type ANY  -> delete all RRsets at the name
-	//   CLASS NONE            -> delete the specific RRset (match by
-	//                            name/type, and by rdata when TTL==0)
-	//   CLASS == zone class   -> add the RR
-	// The previous dispatch on Rrtype never matched real deletions:
-	// delete-RRset messages (real type, CLASS NONE) fell into the add
-	// branch and TypeAny/TypeNone Rrtypes do not occur in real traffic.
-	var applied int
-	for _, rr := range msg.Ns {
-		hdr := rr.Header()
-		switch {
-		case hdr.Class == dns.ClassANY && hdr.Rrtype == dns.TypeANY:
-			// Delete all records at a name.
-			if err := h.deleteAllRecords(z.ID, hdr.Name); err != nil {
-				slog.Error("dynamic_update: delete all records failed", "error", err)
-				continue
-			}
-			applied++
+	// Read the records at the names this update touches, before and after
+	// applying it. The ops carry the names, so the snapshot is bounded by the
+	// update rather than by the zone -- a zone-wide read on every update would
+	// cost more than the update itself.
+	//
+	// A failure to snapshot degrades the audit entry, not the update: the
+	// client's change has already been committed by the time the "after" read
+	// runs, and refusing to report success would tell it to retry a change that
+	// already happened.
+	before := h.snapshotRecords(z.ID, ops)
 
-		case hdr.Class == dns.ClassNONE:
-			// Delete the specific RRset (or single record when TTL==0).
-			if err := h.deleteRecord(z.ID, rr); err != nil {
-				slog.Error("dynamic_update: delete record failed", "error", err)
-				continue
-			}
-			applied++
-
-		case hdr.Class == dns.ClassINET:
-			// Add record.
-			if err := h.addRecord(z.ID, rr, z.Name); err != nil {
-				slog.Error("dynamic_update: add record failed", "error", err)
-				continue
-			}
-			applied++
-
-		default:
-			slog.Warn("dynamic_update: unsupported class in update section",
-				"class", hdr.Class, "type", hdr.Rrtype, "name", hdr.Name)
-		}
+	// Apply prerequisites, changes and the SOA serial bump as one unit.
+	rcode = h.applyAtomic(z.ID, msg, ops)
+	if rcode != dns.RcodeSuccess {
+		slog.Warn("dynamic_update: update rejected",
+			"zone", zoneName, "rcode", dns.RcodeToString[rcode], "ops", len(ops))
+		return h.makeResponse(msg, rcode), nil
 	}
 
-	// Increment zone serial if any updates were applied.
-	if applied > 0 {
-		if _, err := h.zoneMgr.IncrementSerial(z.ID); err != nil {
-			slog.Error("dynamic_update: increment serial failed", "error", err)
-		}
-
-		// Reload zone store.
+	if len(ops) > 0 {
+		// Only publish the new data after the durable commit: reloading the
+		// in-memory store first could serve records that a later rollback
+		// erased.
 		if h.zoneStore != nil {
 			h.zoneStore.Reload()
 		}
-
-		// Audit log the update.
-		h.auditLog(z.ID, zoneName, applied)
+		h.auditLog(z.ID, zoneName, tsig.Hdr.Name, before, h.snapshotRecords(z.ID, ops), len(ops))
 	}
 
 	return h.makeResponse(msg, dns.RcodeSuccess), nil
+}
+
+// recordState is one dns_records row, reduced to what identifies it.
+type recordState struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// snapshotRecords renders the records at the names an update touches, as a
+// JSON array, or "" when there are none.
+func (h *UpdateHandler) snapshotRecords(zoneID string, ops []updateOp) string {
+	names := make([]string, 0, len(ops))
+	seen := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		if op.name == "" || seen[op.name] {
+			continue
+		}
+		seen[op.name] = true
+		names = append(names, op.name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
+	args := make([]any, 0, len(names)+1)
+	args = append(args, zoneID)
+	for _, n := range names {
+		args = append(args, n)
+	}
+	// h.db is the DNS plane's own store and runs on a single connection: every
+	// row is read into the slice before the cursor closes, so the audit write
+	// that follows on the same connection cannot find it still open.
+	rows, err := h.db.Query(
+		`SELECT name, type, value FROM dns_records
+		 WHERE zone_id = ? AND name IN (`+placeholders+`)
+		 ORDER BY name, type, value`, args...)
+	if err != nil {
+		slog.Error("dynamic_update: could not read records for the audit entry", "error", err)
+		return ""
+	}
+	states := make([]recordState, 0, len(names))
+	for rows.Next() {
+		var s recordState
+		if err := rows.Scan(&s.Name, &s.Type, &s.Value); err != nil {
+			slog.Error("dynamic_update: scanning records for the audit entry", "error", err)
+			rows.Close()
+			return ""
+		}
+		states = append(states, s)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("dynamic_update: iterating records for the audit entry", "error", err)
+	}
+	rows.Close()
+
+	if len(states) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(states)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// updateOpKind enumerates the operations an RFC 2136 update section can carry.
+type updateOpKind int
+
+const (
+	opDeleteName  updateOpKind = iota // CLASS ANY  + type ANY: drop every RRset at a name
+	opDeleteRRset                     // CLASS ANY  + type X  : drop the RRset of type X
+	opDeleteRR                        // CLASS NONE + type X  : drop one RR matched by rdata
+	opAdd                             // CLASS == zone class  : add an RR to its RRset
+)
+
+// updateOp is one validated mutation from the update section.
+type updateOp struct {
+	kind  updateOpKind
+	name  string
+	rtype string
+	value string
+	ttl   int
+}
+
+// dynamicUpdateTypes is the set of record types this handler can encode
+// losslessly from the wire form into the stored (type, value) pair. MX and SRV
+// are deliberately absent: their preference/weight/port live in companion
+// columns that the update path cannot populate, so storing them would silently
+// produce records with zeroed priorities.
+var dynamicUpdateTypes = map[string]bool{
+	"A": true, "AAAA": true, "NS": true, "CNAME": true,
+	"DNAME": true, "TXT": true, "PTR": true,
+}
+
+// planUpdateOps validates the RFC 2136 update section and converts it into a
+// list of operations. Nothing is written here: any invalid or unsupported RR
+// aborts the whole update, so a rejected message can never change the zone.
+//
+// Classification is by CLASS, per RFC 2136 §2.4.2:
+//
+//	CLASS ANY  + type ANY -> delete every RRset at the name
+//	CLASS ANY  + type X   -> delete the whole RRset of type X
+//	CLASS NONE + type X   -> delete a single RR identified by its rdata
+//	CLASS IN              -> add the RR
+func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
+	ops := make([]updateOp, 0, len(rrs))
+
+	for _, rr := range rrs {
+		if rr == nil {
+			return nil, dns.RcodeFormatError
+		}
+		hdr := rr.Header()
+		if hdr.Name == "" {
+			return nil, dns.RcodeFormatError
+		}
+		rtype := dns.TypeToString[hdr.Rrtype]
+
+		switch hdr.Class {
+		case dns.ClassANY:
+			if hdr.Rrtype == dns.TypeANY {
+				ops = append(ops, updateOp{kind: opDeleteName, name: hdr.Name})
+				continue
+			}
+			if rtype == "" {
+				return nil, dns.RcodeFormatError
+			}
+			ops = append(ops, updateOp{kind: opDeleteRRset, name: hdr.Name, rtype: rtype})
+
+		case dns.ClassNONE:
+			// A value-dependent delete must name a concrete type; TYPE ANY
+			// is meaningless here (RFC 2136 §2.4.2).
+			if hdr.Rrtype == dns.TypeANY || rtype == "" {
+				return nil, dns.RcodeFormatError
+			}
+			value := rrValue(rr)
+			if value == "" {
+				return nil, dns.RcodeFormatError
+			}
+			ops = append(ops, updateOp{kind: opDeleteRR, name: hdr.Name, rtype: rtype, value: value})
+
+		case dns.ClassINET:
+			if !dynamicUpdateTypes[rtype] {
+				// Either the zone cannot store this type, or the update path
+				// cannot encode it faithfully. Report NOTIMP instead of
+				// writing a truncated value.
+				return nil, dns.RcodeNotImplemented
+			}
+			value := rrValue(rr)
+			if err := validateRecordValue(rtype, value); err != nil {
+				return nil, dns.RcodeFormatError
+			}
+			ops = append(ops, updateOp{
+				kind: opAdd, name: hdr.Name, rtype: rtype,
+				value: value, ttl: int(hdr.Ttl),
+			})
+
+		default:
+			return nil, dns.RcodeFormatError
+		}
+	}
+
+	return ops, dns.RcodeSuccess
+}
+
+// applyAtomic runs the prerequisite check, the update section and the SOA
+// serial bump inside a single database transaction. RFC 2136 §3.4.2 requires
+// the update section to take effect as a unit: any failure rolls the whole
+// update back and the client receives SERVFAIL, never a partial change.
+//
+// Every statement goes through tx and never through h.db: the SQLite pool is
+// capped at a single connection, so a nested query on h.db while this
+// transaction holds that connection would block forever rather than error.
+func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp) int {
+	tx, err := h.db.Begin()
+	if err != nil {
+		slog.Error("dynamic_update: begin transaction failed", "error", err)
+		return dns.RcodeServerFailure
+	}
+	// Rollback is a no-op once the transaction has been committed.
+	defer func() { _ = tx.Rollback() }()
+
+	if rc := h.checkPrerequisites(tx, zoneID, msg); rc != dns.RcodeSuccess {
+		return rc
+	}
+
+	// A prerequisite-only update is legal and must not bump the serial.
+	if len(ops) == 0 {
+		return dns.RcodeSuccess
+	}
+
+	changes, rc, err := applyOps(tx, zoneID, ops)
+	if err != nil {
+		slog.Error("dynamic_update: applying update section failed", "error", err)
+		return dns.RcodeServerFailure
+	}
+	if rc != dns.RcodeSuccess {
+		return rc
+	}
+	if len(changes) == 0 {
+		// Every operation was a no-op (e.g. re-adding an identical RR);
+		// leave the serial alone so secondaries are not woken for nothing.
+		return dns.RcodeSuccess
+	}
+
+	newSerial, err := nextZoneSerial(tx, zoneID)
+	if err != nil {
+		slog.Error("dynamic_update: serial bump failed", "error", err)
+		return dns.RcodeServerFailure
+	}
+
+	if err := logChanges(tx, zoneID, newSerial, changes); err != nil {
+		slog.Error("dynamic_update: zone change journal write failed", "error", err)
+		return dns.RcodeServerFailure
+	}
+
+	if err := tx.Commit(); err != nil {
+		slog.Error("dynamic_update: commit failed", "error", err)
+		return dns.RcodeServerFailure
+	}
+	return dns.RcodeSuccess
+}
+
+// change is one journal entry destined for dns_zone_changes, used to answer
+// IXFR (RFC 1995) requests.
+type change struct {
+	changeType string
+	name       string
+	rtype      string
+	value      string
+	ttl        int
+}
+
+// applyOps executes the validated operations inside tx and returns the journal
+// entries describing what actually changed. The returned rcode is the RFC 2136
+// rcode to report to the client (the caller rolls the transaction back); a
+// non-nil error means the database itself failed.
+func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) {
+	var changes []change
+
+	for _, op := range ops {
+		switch op.kind {
+		case opDeleteName:
+			existing, err := matchingRecords(tx, zoneID, op.name, "")
+			if err != nil {
+				return nil, 0, err
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM dns_records WHERE zone_id = ? AND name = ?", zoneID, op.name); err != nil {
+				return nil, 0, err
+			}
+			changes = append(changes, existing...)
+
+		case opDeleteRRset:
+			existing, err := matchingRecords(tx, zoneID, op.name, op.rtype)
+			if err != nil {
+				return nil, 0, err
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?",
+				zoneID, op.name, op.rtype); err != nil {
+				return nil, 0, err
+			}
+			changes = append(changes, existing...)
+
+		case opDeleteRR:
+			existing, err := matchingRecords(tx, zoneID, op.name, op.rtype)
+			if err != nil {
+				return nil, 0, err
+			}
+			for _, c := range existing {
+				if c.value != op.value {
+					continue
+				}
+				changes = append(changes, c)
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ?",
+				zoneID, op.name, op.rtype, op.value); err != nil {
+				return nil, 0, err
+			}
+
+		case opAdd:
+			added, rc, err := addRecord(tx, zoneID, op)
+			if err != nil {
+				return nil, 0, err
+			}
+			if rc != dns.RcodeSuccess {
+				return nil, rc, nil
+			}
+			if added {
+				changes = append(changes, change{
+					changeType: "add", name: op.name,
+					rtype: op.rtype, value: op.value, ttl: op.ttl,
+				})
+			}
+		}
+	}
+
+	return changes, dns.RcodeSuccess, nil
+}
+
+// matchingRecords materialises the records a delete operation will remove, so
+// the IXFR journal can describe each RR individually. The rows are fully read
+// and closed before the caller issues its DELETE: the single-connection SQLite
+// pool deadlocks if a nested statement runs while a cursor is still open.
+func matchingRecords(tx *sql.Tx, zoneID, name, rtype string) ([]change, error) {
+	query := "SELECT name, type, value, ttl FROM dns_records WHERE zone_id = ? AND name = ?"
+	args := []interface{}{zoneID, name}
+	if rtype != "" {
+		query += " AND type = ?"
+		args = append(args, rtype)
+	}
+
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []change
+	for rows.Next() {
+		var c change
+		if err := rows.Scan(&c.name, &c.rtype, &c.value, &c.ttl); err != nil {
+			return nil, err
+		}
+		c.changeType = "delete"
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// addRecord inserts one RR from an update operation. It reports added=false
+// when the exact RR already exists (an RRset is a set, so the add is a no-op)
+// and returns YXRRSET when the name would end up with both a CNAME and another
+// RRset, which DNS forbids (RFC 1034 §3.6.2, enforced by RFC 2136 §3.4.2.2).
+func addRecord(tx *sql.Tx, zoneID string, op updateOp) (bool, int, error) {
+	exists, err := rdataExists(tx, zoneID, op.name, op.rtype, op.value)
+	if err != nil {
+		return false, 0, err
+	}
+	if exists {
+		return false, dns.RcodeSuccess, nil
+	}
+
+	otherTypes, cnameCount, err := recordKindsAtName(tx, zoneID, op.name)
+	if err != nil {
+		return false, 0, err
+	}
+	if op.rtype == "CNAME" {
+		// At most one CNAME per name, and nothing else alongside it.
+		if cnameCount > 0 || otherTypes > 0 {
+			return false, dns.RcodeYXRrset, nil
+		}
+	} else if cnameCount > 0 {
+		return false, dns.RcodeYXRrset, nil
+	}
+
+	// authored_locally marks the row as this plane's, which is what the
+	// downward sync uses as its boundary: the row is not in the control plane's
+	// gift, so a configuration change elsewhere must not withdraw a name a
+	// client was authorised to add.
+	if _, err := tx.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, authored_locally)
+		VALUES (?, ?, ?, ?, ?, ?, 1, 1)
+	`, uuid.New().String(), zoneID, op.name, op.rtype, op.value, op.ttl); err != nil {
+		return false, 0, err
+	}
+	return true, dns.RcodeSuccess, nil
+}
+
+// recordKindsAtName reports how many records at a name are non-CNAME and how
+// many are CNAME. Both counts are needed to enforce CNAME exclusivity.
+func recordKindsAtName(tx *sql.Tx, zoneID, name string) (otherTypes, cnameCount int, err error) {
+	err = tx.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN type <> 'CNAME' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type =  'CNAME' THEN 1 ELSE 0 END), 0)
+		FROM dns_records WHERE zone_id = ? AND name = ?`, zoneID, name,
+	).Scan(&otherTypes, &cnameCount)
+	return otherTypes, cnameCount, err
+}
+
+// nextZoneSerial bumps and returns the zone's SOA serial inside tx, using the
+// same YYYYMMDDNN sequence as ZoneManager.IncrementSerial so dynamic updates
+// and record edits advance a single monotonic series for the zone.
+func nextZoneSerial(tx *sql.Tx, zoneID string) (uint32, error) {
+	var current uint32
+	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+		return 0, fmt.Errorf("querying serial: %w", err)
+	}
+
+	next := zone.NextSerial(current)
+	if next <= current {
+		next = current + 1
+	}
+
+	if _, err := tx.Exec(
+		"UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ?",
+		next, zoneID); err != nil {
+		return 0, fmt.Errorf("updating serial: %w", err)
+	}
+	return next, nil
+}
+
+// logChanges appends the applied mutations to the zone change journal. It runs
+// in the same transaction as the records themselves: an IXFR client must never
+// see a serial whose changes were rolled back.
+func logChanges(tx *sql.Tx, zoneID string, serial uint32, changes []change) error {
+	for _, c := range changes {
+		if _, err := tx.Exec(`
+			INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+		`, uuid.New().String(), zoneID, serial, c.changeType, c.name, c.rtype, c.value, c.ttl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkZoneBoundary ensures that every RR in the supplied slice has a name
@@ -231,56 +633,141 @@ func (h *UpdateHandler) checkZoneBoundary(zoneName string, rrs []dns.RR) error {
 	return nil
 }
 
-// checkPrerequisites checks RFC 2136 prerequisites.
-func (h *UpdateHandler) checkPrerequisites(zoneID string, msg *dns.Msg) error {
-	// Prerequisites are in the Answer section of the update message.
+// checkPrerequisites evaluates the RFC 2136 §3.2 prerequisite section, which is
+// carried in the Answer section of the update message. Like the update section,
+// prerequisites are classified by CLASS rather than by type:
+//
+//	CLASS ANY  + type ANY -> the name is in use
+//	CLASS ANY  + type X   -> an RRset of type X exists at the name
+//	CLASS NONE + type ANY -> the name is not in use
+//	CLASS NONE + type X   -> no RRset of type X exists at the name
+//
+// The previous implementation dispatched on Rrtype (TypeANY/TypeNone), values
+// that never appear in a real prerequisite RR: the "name must not exist" branch
+// was unreachable and every other prerequisite was silently ignored, so clients
+// relying on "test and set" semantics could clobber each other's records.
+//
+// It returns the RFC 2136 rcode to send (RcodeSuccess when satisfied) and uses
+// tx exclusively, since the caller holds the only SQLite connection.
+func (h *UpdateHandler) checkPrerequisites(tx *sql.Tx, zoneID string, msg *dns.Msg) int {
 	for _, rr := range msg.Answer {
-		switch rr.Header().Rrtype {
-		case dns.TypeANY:
-			// Name must exist (at least one record).
-			name := rr.Header().Name
-			var count int
-			err := h.db.QueryRow("SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND enabled = 1", zoneID, name).Scan(&count)
-			if err != nil || count == 0 {
-				return fmt.Errorf("prerequisite not met: name %s must exist", name)
+		hdr := rr.Header()
+		name := hdr.Name
+		rtype := dns.TypeToString[hdr.Rrtype]
+
+		switch hdr.Class {
+		case dns.ClassANY:
+			if hdr.Rrtype == dns.TypeANY {
+				inUse, err := nameInUse(tx, zoneID, name)
+				if err != nil {
+					slog.Error("dynamic_update: prerequisite query failed", "error", err)
+					return dns.RcodeServerFailure
+				}
+				if !inUse {
+					return dns.RcodeNameError // NXDOMAIN
+				}
+				continue
+			}
+			if rtype == "" {
+				return dns.RcodeFormatError
+			}
+			// A non-empty rdata makes the prerequisite value-dependent:
+			// that exact RR must be present.
+			if value := rrValue(rr); value != "" {
+				exists, err := rdataExists(tx, zoneID, name, rtype, value)
+				if err != nil {
+					slog.Error("dynamic_update: prerequisite query failed", "error", err)
+					return dns.RcodeServerFailure
+				}
+				if !exists {
+					return dns.RcodeNXRrset
+				}
+				continue
+			}
+			exists, err := rrsetExists(tx, zoneID, name, rtype)
+			if err != nil {
+				slog.Error("dynamic_update: prerequisite query failed", "error", err)
+				return dns.RcodeServerFailure
+			}
+			if !exists {
+				return dns.RcodeNXRrset
 			}
 
-		case dns.TypeNone:
-			// Name must not exist.
-			name := rr.Header().Name
-			var count int
-			err := h.db.QueryRow("SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND enabled = 1", zoneID, name).Scan(&count)
-			if err == nil && count > 0 {
-				return fmt.Errorf("prerequisite not met: name %s must not exist", name)
+		case dns.ClassNONE:
+			if hdr.Rrtype == dns.TypeANY {
+				inUse, err := nameInUse(tx, zoneID, name)
+				if err != nil {
+					slog.Error("dynamic_update: prerequisite query failed", "error", err)
+					return dns.RcodeServerFailure
+				}
+				if inUse {
+					return dns.RcodeYXDomain
+				}
+				continue
 			}
+			if rtype == "" {
+				return dns.RcodeFormatError
+			}
+			if value := rrValue(rr); value != "" {
+				exists, err := rdataExists(tx, zoneID, name, rtype, value)
+				if err != nil {
+					slog.Error("dynamic_update: prerequisite query failed", "error", err)
+					return dns.RcodeServerFailure
+				}
+				if exists {
+					return dns.RcodeYXRrset
+				}
+				continue
+			}
+			exists, err := rrsetExists(tx, zoneID, name, rtype)
+			if err != nil {
+				slog.Error("dynamic_update: prerequisite query failed", "error", err)
+				return dns.RcodeServerFailure
+			}
+			if exists {
+				return dns.RcodeYXRrset
+			}
+
+		default:
+			// A prerequisite must be CLASS ANY or CLASS NONE; anything else
+			// is malformed (RFC 2136 §3.2).
+			return dns.RcodeFormatError
 		}
 	}
-	return nil
+	return dns.RcodeSuccess
 }
 
-// addRecord adds a record from a dynamic update message.
-func (h *UpdateHandler) addRecord(zoneID string, rr dns.RR, zoneName string) error {
-	hdr := rr.Header()
-	name := hdr.Name
-	rtype := dns.TypeToString[hdr.Rrtype]
-	value := rrValue(rr)
-	ttl := int(hdr.Ttl)
-
-	if !zone.SupportedRecordTypes[rtype] {
-		return fmt.Errorf("unsupported record type: %s", rtype)
+// nameInUse reports whether the name has at least one enabled record.
+func nameInUse(tx *sql.Tx, zoneID, name string) (bool, error) {
+	var count int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND enabled = 1",
+		zoneID, name).Scan(&count); err != nil {
+		return false, err
 	}
+	return count > 0, nil
+}
 
-	// Basic record value validation.
-	if err := validateRecordValue(rtype, value); err != nil {
-		return fmt.Errorf("invalid record value for %s: %w", rtype, err)
+// rrsetExists reports whether an enabled RRset of the given type exists.
+func rrsetExists(tx *sql.Tx, zoneID, name, rtype string) (bool, error) {
+	var count int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND enabled = 1",
+		zoneID, name, rtype).Scan(&count); err != nil {
+		return false, err
 	}
+	return count > 0, nil
+}
 
-	id := uuid.New().String()
-	_, err := h.db.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, 1)
-	`, id, zoneID, name, rtype, value, ttl)
-	return err
+// rdataExists reports whether the exact (name, type, value) record exists.
+func rdataExists(tx *sql.Tx, zoneID, name, rtype, value string) (bool, error) {
+	var count int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ? AND enabled = 1",
+		zoneID, name, rtype, value).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // validateRecordValue performs basic format validation on record values.
@@ -307,25 +794,6 @@ func validateRecordValue(rtype, value string) error {
 		}
 	}
 	return nil
-}
-
-// deleteRecord deletes a specific record from a dynamic update message.
-func (h *UpdateHandler) deleteRecord(zoneID string, rr dns.RR) error {
-	hdr := rr.Header()
-	name := hdr.Name
-	rtype := dns.TypeToString[hdr.Rrtype]
-	value := rrValue(rr)
-
-	_, err := h.db.Exec(`
-		DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ?
-	`, zoneID, name, rtype, value)
-	return err
-}
-
-// deleteAllRecords deletes all records at a name.
-func (h *UpdateHandler) deleteAllRecords(zoneID string, name string) error {
-	_, err := h.db.Exec("DELETE FROM dns_records WHERE zone_id = ? AND name = ?", zoneID, name)
-	return err
 }
 
 // checkUpdatePolicy checks if a dynamic update is allowed by policy.
@@ -409,31 +877,55 @@ func (h *UpdateHandler) verifyTSIG(msg *dns.Msg, secret string) error {
 }
 
 // auditLog writes an audit log entry for a dynamic update.
-func (h *UpdateHandler) auditLog(zoneID, zoneName string, count int) {
+// The entry is written through the shared data-plane writer, which is what
+// gives it the before/after columns migration 024 added. The previous version
+// wrote its own statement, and the columns it named did not exist, so every
+// dynamic update was silently un-audited.
+func (h *UpdateHandler) auditLog(zoneID, zoneName, keyName, before, after string, count int) {
 	slog.Info("dynamic_update: applied updates",
 		"zone_id", zoneID,
 		"zone_name", zoneName,
 		"count", count,
+		"keys", keyName,
 		"timestamp", time.Now().UTC(),
 	)
 
-	// Write to audit log in database.
-	id := uuid.New().String()
-	_, _ = h.db.Exec(`
-		INSERT INTO audit_logs (id, user_id, action, resource, resource_id, details, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-	`, id, "system", "dns_dynamic_update", "zone", zoneID,
-		fmt.Sprintf("Dynamic update on zone %s: %d changes applied", zoneName, count))
+	if _, err := auditlog.Append(h.db, auditlog.Entry{
+		// The TSIG key name is the only identity an RFC 2136 client presents.
+		// Recording "system" here would discard the one fact the entry has.
+		UserID:       "system",
+		Username:     keyName,
+		Action:       auditlog.ActionDynamicUpdate,
+		ResourceType: auditlog.ResourceZone,
+		ResourceID:   zoneID,
+		Detail:       fmt.Sprintf("Dynamic update on zone %s: %d changes applied", zoneName, count),
+		OldValue:     before,
+		NewValue:     after,
+	}); err != nil {
+		slog.Error("dynamic_update: failed to write audit log",
+			"zone_id", zoneID, "error", err)
+	}
 }
 
-// rrValue extracts the value from a dns.RR.
+// rrValue extracts the stored value from a dns.RR. It returns "" for the
+// value-independent forms used by the prerequisite and delete-RRset sections
+// (where the RDATA is empty), which callers rely on to tell the two forms
+// apart; the nil guards keep a partially-populated RR from panicking.
 func rrValue(rr dns.RR) string {
 	switch v := rr.(type) {
 	case *dns.A:
+		if v.A == nil {
+			return ""
+		}
 		return v.A.String()
 	case *dns.AAAA:
+		if v.AAAA == nil {
+			return ""
+		}
 		return v.AAAA.String()
 	case *dns.CNAME:
+		return v.Target
+	case *dns.DNAME:
 		return v.Target
 	case *dns.MX:
 		return v.Mx

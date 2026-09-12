@@ -47,6 +47,8 @@
     </n-modal>
 
     <confirm-dialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
+
+    <address-detail-drawer v-model:show="showDetail" :space-id="detailSpaceId" :ip="detailIp" />
   </div>
 </template>
 
@@ -56,6 +58,7 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import AddressDetailDrawer from '@/components/ipam/AddressDetailDrawer.vue'
 import { usePermission } from '@/composables/usePermission'
 import { listIPAMAddresses, allocateIP, releaseIP, listIPAMSubnets, type IPAMAddress, type AllocateIPRequest } from '@/service/api/goddi/ipam'
 
@@ -72,6 +75,19 @@ const showAllocateModal = ref(false)
 const showReleaseConfirm = ref(false)
 const releasingId = ref('')
 const subnetOptions = ref<Array<{ label: string; value: string }>>([])
+
+// The 360° view is keyed by (space, ip) rather than by row id: an address is
+// identified by where it sits, and the same address in another space is a
+// different record.
+const showDetail = ref(false)
+const detailSpaceId = ref('')
+const detailIp = ref('')
+
+function openDetail(row: IPAMAddress) {
+  detailSpaceId.value = row.space_id
+  detailIp.value = row.ip_address
+  showDetail.value = true
+}
 
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
@@ -97,7 +113,20 @@ const columns = [
   { title: () => t('ipam.addresses.hostname'), key: 'hostname' },
   { title: () => t('ipam.addresses.mac'), key: 'mac_address' },
   { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: IPAMAddress) => row.status === 'used' ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') }) : null },
+  {
+    title: () => t('common.actions'),
+    key: 'actions',
+    width: 190,
+    render: (row: IPAMAddress) =>
+      h(NSpace, null, {
+        default: () => [
+          h(NButton, { size: 'small', text: true, onClick: () => openDetail(row) }, { default: () => t('ipam.addresses.viewDetail') }),
+          row.status === 'used'
+            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
+            : null,
+        ].filter(Boolean),
+      }),
+  },
 ]
 
 async function loadData() {

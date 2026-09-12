@@ -37,6 +37,12 @@
     </n-modal>
 
     <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+
+    <import-addresses-dialog v-model:show="showImport" :subnet-id="importSubnetId" :subnet-label="importSubnetLabel" @imported="loadData" />
+
+    <pool-wizard-dialog v-model:show="showPool" :subnet-id="poolSubnetId" :subnet-label="poolSubnetLabel" @created="loadData" />
+
+    <reverse-zone-dialog v-model:show="showReverseZone" :subnet-id="reverseZoneSubnetId" :subnet-label="reverseZoneSubnetLabel" @created="loadData" />
   </div>
 </template>
 
@@ -46,8 +52,11 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import ImportAddressesDialog from '@/components/ipam/ImportAddressesDialog.vue'
+import PoolWizardDialog from '@/components/ipam/PoolWizardDialog.vue'
+import ReverseZoneDialog from '@/components/ipam/ReverseZoneDialog.vue'
 import { usePermission } from '@/composables/usePermission'
-import { listIPAMSubnets, createIPAMSubnet, updateIPAMSubnet, deleteIPAMSubnet, generateDHCPScope, generateReverseZone, type IPAMSubnet, type CreateIPAMSubnetRequest } from '@/service/api/goddi/ipam'
+import { listIPAMSubnets, createIPAMSubnet, updateIPAMSubnet, deleteIPAMSubnet, type IPAMSubnet, type CreateIPAMSubnetRequest } from '@/service/api/goddi/ipam'
 import { listIPAMSpaces, type IPAMSpace } from '@/service/api/goddi/ipam'
 
 const { t } = useI18n()
@@ -63,6 +72,43 @@ const showDeleteConfirm = ref(false)
 const deletingId = ref('')
 const editing = ref<IPAMSubnet | null>(null)
 
+// Importing targets one subnet: the row's outcome depends on which subnet the
+// address lands in, so the entry point carries it rather than asking again.
+const showImport = ref(false)
+const importSubnetId = ref('')
+const importSubnetLabel = ref('')
+
+function openImport(row: IPAMSubnet) {
+  importSubnetId.value = row.id
+  importSubnetLabel.value = `${row.name} (${row.cidr})`
+  showImport.value = true
+}
+
+// Same for the pool wizard: a scope is built from one subnet's addresses, and
+// the plan it shows is that subnet's.
+const showPool = ref(false)
+const poolSubnetId = ref('')
+const poolSubnetLabel = ref('')
+
+function openPool(row: IPAMSubnet) {
+  poolSubnetId.value = row.id
+  poolSubnetLabel.value = `${row.name} (${row.cidr})`
+  showPool.value = true
+}
+
+// And for the reverse zone. The entry point only gathers the subnet; the dialog
+// asks which delegation and then performs the write, because the two are
+// different permissions and the second one is the one that used to be faked.
+const showReverseZone = ref(false)
+const reverseZoneSubnetId = ref('')
+const reverseZoneSubnetLabel = ref('')
+
+function openReverseZone(row: IPAMSubnet) {
+  reverseZoneSubnetId.value = row.id
+  reverseZoneSubnetLabel.value = `${row.name} (${row.cidr})`
+  showReverseZone.value = true
+}
+
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 const formData = reactive<CreateIPAMSubnetRequest>({ name: '', space_id: '', cidr: '', vlan_id: undefined, location: '', description: '' })
 
@@ -73,11 +119,12 @@ const columns = [
   { title: () => t('ipam.subnets.cidr'), key: 'cidr' },
   { title: () => t('ipam.subnets.vlanId'), key: 'vlan_id', width: 100 },
   { title: () => t('ipam.subnets.location'), key: 'location' },
-  { title: () => t('common.actions'), key: 'actions', width: 240, render: (row: IPAMSubnet) => h(NSpace, null, {
+  { title: () => t('common.actions'), key: 'actions', width: 340, render: (row: IPAMSubnet) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', text: true, onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => handleGenerateDhcp(row.id) }, { default: () => t('ipam.subnets.generateDhcpScope') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => handleGenerateReverse(row.id) }, { default: () => t('ipam.subnets.generateReverseZone') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openImport(row) }, { default: () => t('ipam.subnets.importAddresses') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openPool(row) }, { default: () => t('ipam.subnets.createDhcpScope') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openReverseZone(row) }, { default: () => t('ipam.subnets.generateReverseZone') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -118,14 +165,6 @@ async function handleSubmit() {
 async function handleDelete() {
   try { await deleteIPAMSubnet(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
-}
-
-async function handleGenerateDhcp(subnetId: string) {
-  try { await generateDHCPScope(subnetId); message.success(t('common.success')) } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-}
-
-async function handleGenerateReverse(subnetId: string) {
-  try { await generateReverseZone(subnetId); message.success(t('common.success')) } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 
 onMounted(loadData)

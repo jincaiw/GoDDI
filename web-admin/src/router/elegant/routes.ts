@@ -515,6 +515,21 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'settings_config-versions',
+        path: '/settings/config-versions',
+        component: 'view.settings_config-versions',
+        meta: {
+          title: 'settings_config-versions',
+          i18nKey: 'route.settings_config-versions',
+          icon: 'mdi:source-branch',
+          order: 2,
+          permission: {
+            resource: 'settings',
+            action: 'read'
+          }
+        }
+      },
+      {
         name: 'settings_system',
         path: '/settings/system',
         component: 'view.settings_system',

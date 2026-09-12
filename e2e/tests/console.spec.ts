@@ -17,7 +17,8 @@ async function switchLanguage(page: Page, option: string, switched: Locator) {
 const routes = ['/', '/dns/zones', '/dns/forwarders', '/dns/security', '/dns/cache', '/tools/client',
   '/dhcp/scopes', '/dhcp/leases', '/dhcp/reservations', '/dhcp/options',
   '/ipam/spaces', '/ipam/subnets', '/ipam/addresses', '/admin/users', '/admin/roles',
-  '/admin/groups', '/admin/tokens', '/logs/audit', '/logs/dns', '/logs/dhcp', '/settings/system', '/settings/backup']
+  '/admin/groups', '/admin/tokens', '/logs/audit', '/logs/dns', '/logs/dhcp', '/settings/system', '/settings/backup',
+  '/settings/config-versions']
 
 test('login and all console routes render without runtime errors', async ({ page }) => {
   const errors: string[] = []

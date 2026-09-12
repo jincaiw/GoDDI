@@ -1,6 +1,12 @@
 # GoDDI Configuration File
 # See documentation for all available options.
 
+# What this deployment is. Only the exact value "production" changes behaviour,
+# and only to tighten it: it makes a missing security.encryption_key a startup
+# error and turns off the development CORS widening. An empty value is treated
+# as development.
+env: "development"
+
 server:
   name: "GoDDI"
   http_addr: ":6080"
@@ -8,6 +14,17 @@ server:
   data_dir: "./data"
   language: "zh-CN"
   dark_mode: false
+  # Which planes this process runs.
+  #
+  #   all     - management API and both data planes in one process (default;
+  #             what every installation did before this option existed)
+  #   control - management API, migrations and the web console only
+  #   dns     - the authoritative DNS listener only, no management API
+  #   dhcp    - the DHCP listener only, no management API
+  #
+  # Splitting them is what makes "the console is being restarted" and "clients
+  # cannot get an address" two different events. Each role is the same binary.
+  role: "all"
   # TLS for the management UI and API. Strongly recommended for production:
   # admin credentials and tokens travel in cleartext without it. When disabled,
   # terminate TLS at a reverse proxy instead.
@@ -23,6 +40,44 @@ server:
 database:
   driver: "sqlite"       # v0.1.0 supports SQLite
   dsn: "./data/goddi.db" # SQLite file path
+
+# Local stores owned by the data planes.
+#
+# A DNS or DHCP process serves from a file it owns rather than reading the
+# control database on the request path, which is what lets resolution and lease
+# renewal continue while the management process is restarting. There is no
+# switch to turn the split off: a second mode that reads the control database
+# directly would be a code path production never exercises.
+dataplane:
+  # Override the default locations. Empty means <server.data_dir>/leases.db
+  # and <server.data_dir>/dnsdata.db, so a backup that covers the data
+  # directory covers the data plane's memory of what it was doing.
+  lease_dsn: ""
+  zone_dsn: ""
+  # How often a data plane polls the control database for changes it cannot
+  # observe directly. A change a process makes to its own store wakes its
+  # replication loop instead of waiting for this, but a change made by another
+  # plane -- or by the console -- is only seen on the next poll.
+  #
+  # This is a latency setting on the client's path, not only a
+  # configuration-drift setting: a DHCP binding's DNS record is written by the
+  # DNS plane, so the entry is pushed up and pulled down, and the interval is
+  # paid twice. The default of 1s is what keeps a published name under two
+  # seconds (1s pull + 1s consumer drain).
+  sync_interval_seconds: 1
+  # Bounds on a data plane's local footprint. Crossing one never refuses a
+  # client or a write: it raises the readiness level reported by /ready and
+  # writes a log line. They are alerting thresholds, not admission control,
+  # because a DHCP server that stops handing out addresses at exactly the
+  # moment it also starts alerting is an outage, not a safeguard.
+  #
+  # 0 keeps the built-in default (20000 leases, 1024 MiB, 10000 per queue);
+  # a negative value disables that bound. The lease and backlog defaults are
+  # the capacity ADR 0001 documents for a two-node deployment.
+  quota:
+    max_leases: 0
+    max_store_mb: 0
+    max_backlog: 0
 
 dns:
   enabled: true
@@ -90,6 +145,14 @@ forwarders:
 dhcp:
   enabled: true
   interfaces: []          # Empty = auto-detect
+  # Relay agents whose forwarded requests may be served, as CIDRs on the client
+  # subnet (the giaddr a relay puts in the packet). Empty means no restriction.
+  # A relayed request from anywhere else is dropped in silence: the client
+  # behind it did nothing wrong, and a NAK would tell it to discard a lease that
+  # is valid on the subnet it actually sits on.
+  # This is deliberately not a client allowlist -- a client picks its own MAC
+  # address, so a MAC list stops nobody who has decided to lie.
+  trusted_relay_cidrs: []
 
 ipam:
   ping_check: true
@@ -97,14 +160,27 @@ ipam:
   scan_interval: 3600
 
 security:
-  jwt_secret: "change-me-in-production" # Set GODDI_SECURITY_JWT_SECRET before startup
-  encryption_key: ""                     # Optional; set GODDI_SECURITY_ENCRYPTION_KEY for dedicated TOTP secret encryption
+  # No secret ships in this file. Set GODDI_SECURITY_JWT_SECRET (or put a value
+  # here in a config.local.yaml that is not committed) before the first start;
+  # startup refuses a missing, default or shorter-than-16-character secret.
+  jwt_secret: ""                         # Set GODDI_SECURITY_JWT_SECRET before startup
+  # Seals TOTP seeds and TSIG keys at rest. Leave empty only in development:
+  # without it they are sealed with the JWT secret, so rotating that secret
+  # makes every stored secret unreadable. Required when env is production.
+  # After setting it on an existing installation, run `goddi rekey`.
+  encryption_key: ""                     # Set GODDI_SECURITY_ENCRYPTION_KEY
   login_rate_limit: 5                       # Max login attempts per minute per IP
   totp_enabled: true
   rebinding_protection: true
   # Reverse-proxy source CIDRs allowed to supply X-Forwarded-For/X-Real-IP.
   # Keep empty for direct management-plane access; clients cannot spoof IPs.
   trusted_proxy_cidrs: []
+  # Source CIDRs allowed to reach the management API and /metrics. Empty means
+  # no restriction. /health and /ready stay reachable from anywhere on purpose:
+  # an orchestrator whose probe is refused restarts the process, so an entry
+  # typed wrongly would cause the outage it was meant to prevent.
+  # Entries are CIDRs (a bare address is refused at startup; write 10.0.0.5/32).
+  admin_allow_cidrs: []
 
 proxy:
   enabled: false

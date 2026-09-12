@@ -22,7 +22,7 @@
         <n-form-item :label="t('dhcp.scopes.startIp')"><n-input v-model:value="formData.start_ip" /></n-form-item>
         <n-form-item :label="t('dhcp.scopes.endIp')"><n-input v-model:value="formData.end_ip" /></n-form-item>
         <n-form-item :label="t('dhcp.scopes.leaseTime')"><n-input-number v-model:value="formData.lease_time" :min="60" style="width: 100%;" /></n-form-item>
-        <n-form-item :label="t('common.description')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
+        <n-form-item :label="t('common.description')"><n-input v-model:value="formData.comment" type="textarea" /></n-form-item>
         <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" /></n-form-item>
       </n-form>
       <template #footer>
@@ -60,8 +60,11 @@ const editingScope = ref<DHCPScope | null>(null)
 
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
-const formData = reactive<CreateDHCPScopeRequest & { enabled: boolean; description: string }>({
-  name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, description: '',
+// `comment` and not `description`: this is the field the scope manager stores,
+// and the extra key the form used to carry was dropped on the way in -- the UI
+// said the description had been saved and the column stayed empty.
+const formData = reactive<CreateDHCPScopeRequest>({
+  name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, comment: '',
 })
 
 const columns = [
@@ -101,7 +104,7 @@ function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize
 
 function openCreateScope() {
   editingScope.value = null
-  Object.assign(formData, { name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, description: '' })
+  Object.assign(formData, { name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, comment: '' })
   showModal.value = true
 }
 

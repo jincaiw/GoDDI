@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/ipam/address"
@@ -49,124 +48,65 @@ var validIPAMStatuses = map[string]bool{
 //
 // The entire import runs inside a single transaction so that either all rows
 // are written or none are, eliminating the partial-import ambiguity of the
-// previous implementation. Each row is also validated up-front (IP
-// parseability, status allowed) so the transaction can fail early with a
-// clear error.
-func (ie *ImportExport) ImportAddressesCSV(subnetID string, data []byte) error {
-	reader := csv.NewReader(bytes.NewReader(data))
-	reader.TrimLeadingSpace = true
-
-	// Skip header row.
-	if _, err := reader.Read(); err != nil {
-		return fmt.Errorf("failed to read CSV header: %w", err)
-	}
-
+// previous implementation. Every row is decided before anything is written
+// (see planAddressRows), so a file with a bad row is refused with all the
+// reasons at once instead of failing on the first insert.
+//
+// The returned report is the same type PreviewAddressesCSV returns, with
+// Applied set. When rows are rejected the report is returned alongside the
+// error, because the refusal is explained per row and not in a sentence.
+func (ie *ImportExport) ImportAddressesCSV(subnetID string, data []byte) (*ImportReport, error) {
 	tx, err := ie.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	var importErrors []string
-	lineNum := 1
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("CSV parse error at line %d: %w", lineNum+1, err)
-		}
-		lineNum++
-
-		if len(record) < 2 {
-			continue
-		}
-
-		ip := record[0]
-		status := "used"
-		if len(record) > 1 && record[1] != "" {
-			status = record[1]
-		}
-
-		// Validate the IP address and the status value before touching the
-		// database. This keeps invalid rows from partially mutating state
-		// when the surrounding transaction is rolled back.
-		if net.ParseIP(ip) == nil {
-			importErrors = append(importErrors, fmt.Sprintf("line %d: invalid IP %q", lineNum, ip))
-			continue
-		}
-		if !validIPAMStatuses[status] {
-			importErrors = append(importErrors, fmt.Sprintf("line %d: invalid status %q", lineNum, status))
-			continue
-		}
-
-		macAddress := ""
-		if len(record) > 2 {
-			macAddress = record[2]
-		}
-		hostname := ""
-		if len(record) > 3 {
-			hostname = record[3]
-		}
-		owner := ""
-		if len(record) > 4 {
-			owner = record[4]
-		}
-		device := ""
-		if len(record) > 5 {
-			device = record[5]
-		}
-		location := ""
-		if len(record) > 6 {
-			location = record[6]
-		}
-		description := ""
-		if len(record) > 7 {
-			description = record[7]
-		}
-
-		// Check if address already exists. We do this inside the
-		// transaction so a concurrent AllocateIP cannot race with us.
-		var existingID string
-		err = tx.QueryRow(`SELECT id FROM ipam_addresses WHERE subnet_id = ? AND ip_address = ?`, subnetID, ip).Scan(&existingID)
-		if err == nil {
-			// Update existing.
-			if _, err := tx.Exec(`
-				UPDATE ipam_addresses SET status=?, mac_address=?, hostname=?, owner=?,
-					device=?, location=?, description=?, updated_at=datetime('now')
-				WHERE id=?`,
-				status, nullIfEmpty(macAddress), nullIfEmpty(hostname),
-				nullIfEmpty(owner), nullIfEmpty(device), nullIfEmpty(location),
-				nullIfEmpty(description), existingID); err != nil {
-				importErrors = append(importErrors, fmt.Sprintf("line %d: failed to update %s: %v", lineNum, ip, err))
-			}
-		} else if err == sql.ErrNoRows {
-			// Create new.
-			id := uuid.New().String()
-			if _, err := tx.Exec(`
-				INSERT INTO ipam_addresses (id, subnet_id, ip_address, status, mac_address, hostname,
-					owner, device, location, description, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-				id, subnetID, ip, status, nullIfEmpty(macAddress), nullIfEmpty(hostname),
-				nullIfEmpty(owner), nullIfEmpty(device), nullIfEmpty(location), nullIfEmpty(description)); err != nil {
-				importErrors = append(importErrors, fmt.Sprintf("line %d: failed to insert %s: %v", lineNum, ip, err))
-			}
-		} else {
-			importErrors = append(importErrors, fmt.Sprintf("line %d: failed to query %s: %v", lineNum, ip, err))
-		}
+	// The plan is decided on the transaction handle, never on the pool:
+	// reading through the pool while this transaction is open would wait for
+	// the connection the transaction holds, with no error and no timeout.
+	plan, err := ie.planAddressRows(tx, subnetID, data)
+	if err != nil {
+		return nil, err
+	}
+	if len(plan.report.Errors) > 0 {
+		return plan.report, &ImportRejectedError{Report: plan.report}
 	}
 
-	if len(importErrors) > 0 {
-		// Roll back: the deferred Rollback will undo every change made
-		// inside this transaction.
-		return fmt.Errorf("import rolled back due to %d error(s): %s", len(importErrors), strings.Join(importErrors, "; "))
+	// Only rows that planned cleanly are in writable, and rows that change
+	// nothing are not in it at all.
+	for _, row := range plan.writable {
+		// One statement instead of a read followed by a write. The upsert is
+		// resolved by the (subnet_id, ip_address) index, so a row that appears
+		// between the two halves of a read-then-write cannot be double-added.
+		if _, err := tx.Exec(`
+			INSERT INTO ipam_addresses
+				(id, subnet_id, space_id, ip_address, status, mac_address, hostname,
+				 owner, device, location, description, observed_state,
+				 allocated_at, allocated_by, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown',
+				datetime('now'), 'import', datetime('now'), datetime('now'))
+			ON CONFLICT(subnet_id, ip_address) DO UPDATE SET
+				status      = excluded.status,
+				mac_address = excluded.mac_address,
+				hostname    = excluded.hostname,
+				owner       = excluded.owner,
+				device      = excluded.device,
+				location    = excluded.location,
+				description = excluded.description,
+				updated_at  = datetime('now')`,
+			uuid.New().String(), subnetID, plan.spaceID, row.ip, row.status,
+			nullIfEmpty(row.mac), nullIfEmpty(row.hostname), nullIfEmpty(row.owner),
+			nullIfEmpty(row.device), nullIfEmpty(row.location), nullIfEmpty(row.description)); err != nil {
+			return plan.report, fmt.Errorf("line %d: failed to import %s: %w", row.line, row.ip, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit import transaction: %w", err)
+		return plan.report, fmt.Errorf("failed to commit import transaction: %w", err)
 	}
-	return nil
+	plan.report.Applied = true
+	return plan.report, nil
 }
 
 // ExportAddressesCSV exports IP addresses from a subnet as CSV data.

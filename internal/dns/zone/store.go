@@ -46,18 +46,85 @@ type Store struct {
 	zones    map[string]*zoneData // key: lowercase zone name with trailing dot
 	db       *sql.DB
 	debounce *time.Timer // debounce timer for Reload
+	// expired holds secondary zones whose SOA EXPIRE elapsed without a
+	// successful refresh. RFC 1035 §6.3 requires such a zone to stop
+	// answering authoritatively: continuing to serve the local copy would
+	// hand out data the primary may already have superseded (for example an
+	// address that has since been reassigned).
+	expired map[string]time.Time // key: lowercase zone name; value: expire time
 }
 
 // NewStore creates a new zone store and loads data from the database.
 func NewStore(db *sql.DB) *Store {
 	s := &Store{
-		zones: make(map[string]*zoneData),
-		db:    db,
+		zones:   make(map[string]*zoneData),
+		expired: make(map[string]time.Time),
+		db:      db,
 	}
 	if db != nil {
 		s.Load()
 	}
 	return s
+}
+
+// MarkZoneExpired withholds authoritative answers for a zone until a
+// successful refresh clears the state. It is idempotent so a periodic sweep
+// can call it on every pass without extending the recorded expire time.
+func (s *Store) MarkZoneExpired(zoneName string) {
+	if zoneName == "" {
+		return
+	}
+	key := strings.ToLower(dns.Fqdn(zoneName))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.expired == nil {
+		s.expired = make(map[string]time.Time)
+	}
+	if _, already := s.expired[key]; already {
+		return
+	}
+	s.expired[key] = time.Now()
+	slog.Warn("zone_store: secondary zone expired; withholding authoritative answers", "zone", key)
+}
+
+// ClearZoneExpired returns a zone to service after a successful refresh.
+func (s *Store) ClearZoneExpired(zoneName string) {
+	if zoneName == "" {
+		return
+	}
+	key := strings.ToLower(dns.Fqdn(zoneName))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.expired[key]; ok {
+		delete(s.expired, key)
+		slog.Info("zone_store: secondary zone refreshed; authoritative answers resumed", "zone", key)
+	}
+}
+
+// IsZoneExpired reports whether the zone is currently withheld.
+func (s *Store) IsZoneExpired(zoneName string) bool {
+	if zoneName == "" {
+		return false
+	}
+	key := strings.ToLower(dns.Fqdn(zoneName))
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.expired[key]
+	return ok
+}
+
+// ExpiredZones returns the lowercase names of all currently withheld zones.
+func (s *Store) ExpiredZones() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.expired))
+	for name := range s.expired {
+		out = append(out, name)
+	}
+	return out
 }
 
 // Load loads all zones and records from the database.
@@ -253,6 +320,27 @@ func (s *Store) Reload() {
 		s.Load()
 	})
 	s.mu.Unlock()
+}
+
+// ReloadNow reloads synchronously, cancelling any pending debounced reload.
+//
+// Callers that must be able to observe the change on their very next query use
+// this instead of Reload, which only guarantees "eventually". The DHCP linkage
+// is the motivating case: a record written straight into dns_records is
+// invisible to queries until the in-memory store picks it up, so a debounced
+// reload would mean a client's name is unresolvable for an unbounded time after
+// its ACK.
+//
+// It is a full re-read of every zone, so batch the work and reload once rather
+// than calling it per row.
+func (s *Store) ReloadNow() {
+	s.mu.Lock()
+	if s.debounce != nil {
+		s.debounce.Stop()
+		s.debounce = nil
+	}
+	s.mu.Unlock()
+	s.Load()
 }
 
 // Lookup looks up records in a zone by query name and type.

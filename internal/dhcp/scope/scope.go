@@ -74,7 +74,7 @@ func NewManager(db *sql.DB) *Manager {
 
 // CreateScope creates a new DHCP scope.
 func (m *Manager) CreateScope(opts ScopeOptions) (*Scope, error) {
-	if err := validateScopeOptions(opts); err != nil {
+	if err := ValidateScopeOptions(opts); err != nil {
 		return nil, err
 	}
 
@@ -98,6 +98,16 @@ func (m *Manager) CreateScope(opts ScopeOptions) (*Scope, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
+	// A comment of "" and no comment at all are stored the same way, which is
+	// what UpdateScope already does. The two used to differ ('' here, NULL
+	// there) because this call passed the pointer straight through: an omitted
+	// comment became NULL and an empty one became '', and which one a scope had
+	// depended on whether it had ever been edited.
+	comment := ""
+	if opts.Comment != nil {
+		comment = *opts.Comment
+	}
+
 	_, err := m.db.Exec(`
 		INSERT INTO dhcp_scopes (id, name, interface, subnet, start_ip, end_ip, subnet_mask,
 			router, dns_servers, ntp_servers, domain_name, lease_time, max_lease_time,
@@ -106,7 +116,7 @@ func (m *Manager) CreateScope(opts ScopeOptions) (*Scope, error) {
 		id, opts.Name, opts.Interface, opts.Subnet, opts.StartIP, opts.EndIP,
 		opts.SubnetMask, opts.Router, opts.DNSServers, opts.NTPServers,
 		opts.DomainName, leaseTime, opts.MaxLeaseTime, enabled, pingCheck,
-		dnsUpdates, opts.Comment, now, now)
+		dnsUpdates, nullIfEmpty(comment), now, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scope: %w", err)
 	}
@@ -301,7 +311,7 @@ func (m *Manager) UpdateScope(id string, opts ScopeOptions) (*Scope, error) {
 		StartIP: existing.StartIP,
 		EndIP:   existing.EndIP,
 	}
-	if err := validateScopeOptions(validateOpts); err != nil {
+	if err := ValidateScopeOptions(validateOpts); err != nil {
 		return nil, err
 	}
 
@@ -325,7 +335,22 @@ func (m *Manager) UpdateScope(id string, opts ScopeOptions) (*Scope, error) {
 	return m.GetScope(id)
 }
 
-// DeleteScope deletes a DHCP scope.
+// DeleteScope deletes a DHCP scope and everything that hangs off it.
+//
+// It refuses while a client is still bound, and that refusal has to mean the
+// same thing as the cleanup it guards. The two used to disagree: the check
+// blocked on any row still marked 'active', while the cleanup removed the rows
+// that had expired by time or been released. A row left at 'active' past its
+// lease_end is exactly a row the cleanup intends to remove, so blocking on it
+// made the scope undeletable. The sweep normally moves those rows to
+// 'expired', which is what hid the disagreement -- but a node that runs no
+// DHCP data plane has no sweep, so there the scope could never be deleted.
+//
+// Check and cleanup now read one predicate: live means status = 'active' and
+// the end is still in the future. Everything else goes with the scope, because
+// a lease row pointing at a scope that no longer exists is not a record of
+// anything -- an expired binding, a released one, a lapsed offer or a lapsed
+// quarantine all describe a scope that is being removed.
 func (m *Manager) DeleteScope(id string) error {
 	// Use a transaction to clean up associations atomically.
 	tx, err := m.db.Begin()
@@ -334,9 +359,16 @@ func (m *Manager) DeleteScope(id string) error {
 	}
 	defer tx.Rollback()
 
-	// Check for active leases inside the transaction to avoid TOCTOU race.
+	// julianday() because lease_end is stored as RFC3339 with a "T", which is
+	// not lexicographically comparable to datetime('now') output ("byte 'T' >
+	// ' '" would make a lease expiring today look live until tomorrow). An
+	// unparseable lease_end yields NULL and so is not counted as live, which is
+	// the same fail-safe reading the sweep takes.
+	const liveBinding = `scope_id = ? AND status = 'active' AND julianday(lease_end) > julianday('now')`
+
+	// Check for live leases inside the transaction to avoid a TOCTOU race.
 	var leaseCount int64
-	if err := tx.QueryRow("SELECT COUNT(*) FROM dhcp_leases WHERE scope_id = ? AND status = 'active'", id).Scan(&leaseCount); err != nil {
+	if err := tx.QueryRow("SELECT COUNT(*) FROM dhcp_leases WHERE "+liveBinding, id).Scan(&leaseCount); err != nil {
 		return fmt.Errorf("failed to check active leases: %w", err)
 	}
 	if leaseCount > 0 {
@@ -353,10 +385,12 @@ func (m *Manager) DeleteScope(id string) error {
 		return fmt.Errorf("failed to delete scope reservations: %w", err)
 	}
 
-	// Delete expired and released leases for this scope.
-	// julianday() comparison: lease_end is stored as RFC3339 ("T" separator)
-	// which is not lexicographically comparable to datetime('now') output.
-	if _, err := tx.Exec("DELETE FROM dhcp_leases WHERE scope_id = ? AND (julianday(lease_end) <= julianday('now') OR status = 'released')", id); err != nil {
+	// Every lease row for this scope, not just the expired ones. The guard
+	// above already established that none of them is a live binding, so the
+	// remainder are history -- and history attached to a scope that is about to
+	// stop existing is the orphan the previous partial delete could leave
+	// behind (a lapsed offer or quarantine was never in its WHERE clause).
+	if _, err := tx.Exec("DELETE FROM dhcp_leases WHERE scope_id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete leases: %w", err)
 	}
 
@@ -376,7 +410,9 @@ func (m *Manager) DeleteScope(id string) error {
 	return nil
 }
 
-// FindScopeByIP finds a scope that contains the given IP address.
+// FindScopeByIP finds the scope whose subnet contains the given IP address.
+// The address may be a relay agent's giaddr or a client address, so membership
+// is decided by the subnet, not by the allocation pool.
 func (m *Manager) FindScopeByIP(ip string) (*Scope, error) {
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
@@ -414,9 +450,7 @@ func (m *Manager) FindScopeByIP(ip string) (*Scope, error) {
 			s.MaxLeaseTime = int(maxLeaseTime.Int64)
 		}
 
-		startIP := net.ParseIP(s.StartIP)
-		endIP := net.ParseIP(s.EndIP)
-		if startIP != nil && endIP != nil && ipInRange(parsedIP, startIP, endIP) {
+		if scopeContainsIP(&s, parsedIP) {
 			return &s, nil
 		}
 	}
@@ -427,8 +461,40 @@ func (m *Manager) FindScopeByIP(ip string) (*Scope, error) {
 	return nil, fmt.Errorf("no scope found for IP %s", ip)
 }
 
-// validateScopeOptions validates scope creation/update parameters.
-func validateScopeOptions(opts ScopeOptions) error {
+// scopeContainsIP reports whether an address belongs to the scope's subnet.
+//
+// Matching on the subnet rather than on the allocation pool is what makes relayed
+// traffic work. Behind a relay the identifying address is the relay's giaddr,
+// which is a router address inside the subnet but normally outside the pool; a
+// pool-bounds test therefore finds no scope at all and the client is silently
+// ignored. The pool bounds still govern which addresses may be handed out.
+func scopeContainsIP(s *Scope, ip net.IP) bool {
+	if _, ipNet, err := net.ParseCIDR(s.Subnet); err == nil {
+		return ipNet.Contains(ip)
+	}
+
+	// Not a valid CIDR: fall back to the pool bounds so a scope with a legacy
+	// or malformed subnet value keeps behaving as before.
+	startIP := net.ParseIP(s.StartIP)
+	endIP := net.ParseIP(s.EndIP)
+	if startIP == nil || endIP == nil {
+		return false
+	}
+	return ipInRange(ip, startIP, endIP)
+}
+
+// ValidateScopeOptions validates scope creation/update parameters.
+//
+// Exported so that other write paths (notably configuration publishing in
+// internal/configver) enforce exactly the same rules as CreateScope and
+// UpdateScope. A second, slightly different copy of these rules is how a
+// configuration passes validation at publish time and is then rejected -- or
+// worse, silently accepted -- by the storage layer.
+//
+// An options value with every field empty is treated as "nothing to validate"
+// and passes; callers that require a complete scope must check the required
+// fields themselves.
+func ValidateScopeOptions(opts ScopeOptions) error {
 	if opts.Name == "" && opts.Subnet == "" && opts.StartIP == "" && opts.EndIP == "" {
 		// Update with no fields to validate - skip
 		return nil

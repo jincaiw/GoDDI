@@ -168,10 +168,21 @@ func (m *Manager) UpdateSpace(id string, opts SpaceOptions) (*Space, error) {
 	return m.GetSpace(id)
 }
 
-// DeleteSpace deletes a space. Checks for subnets first.
+// DeleteSpace deletes a space. A space that still has subnets is refused,
+// because ipam_subnets references ipam_spaces with ON DELETE CASCADE and
+// ipam_addresses does the same to ipam_subnets: proceeding would remove a
+// whole subtree, not the empty container the caller asked to delete.
+//
+// The count is read with its error checked. It used to discard it, which made
+// a check that could not run look exactly like a check that found nothing --
+// zero either way -- and the delete went ahead. That is the same failure this
+// project refuses everywhere else: something that could not be read must not
+// answer the way an empty list answers.
 func (m *Manager) DeleteSpace(id string) error {
 	var subnetCount int64
-	m.db.QueryRow("SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ?", id).Scan(&subnetCount)
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ?", id).Scan(&subnetCount); err != nil {
+		return fmt.Errorf("failed to check for subnets in space %s: %w", id, err)
+	}
 	if subnetCount > 0 {
 		return fmt.Errorf("%w: cannot delete space with subnets (%d subnets exist)", ErrSpaceInUse, subnetCount)
 	}

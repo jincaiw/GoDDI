@@ -47,10 +47,21 @@ const releasingId = ref('')
 
 const statusOptions = [
   { label: 'Active', value: 'active' },
+  { label: 'Offered', value: 'offered' },
   { label: 'Expired', value: 'expired' },
   { label: 'Released', value: 'released' },
-  { label: 'Declined', value: 'declined' },
+  { label: 'Conflict', value: 'conflict' },
 ]
+
+// Statuses that are not a confirmed binding must not look like one: an offer is
+// pending, and a conflict is an address held out of the pool after a DECLINE.
+const statusTagType: Record<string, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
+  active: 'success',
+  offered: 'info',
+  conflict: 'warning',
+  expired: 'default',
+  released: 'default',
+}
 
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
 
@@ -59,7 +70,7 @@ const columns = [
   { title: () => t('dhcp.leases.mac'), key: 'mac' },
   { title: () => t('dhcp.leases.hostname'), key: 'hostname', ellipsis: { tooltip: true } },
   { title: () => t('dhcp.leases.scope'), key: 'scope_name' },
-  { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: row.status === 'active' ? 'success' : 'default' }, { default: () => row.status }) },
+  { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: statusTagType[row.status] ?? 'default' }, { default: () => row.status }) },
   { title: () => t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
   { title: () => t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
   { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },

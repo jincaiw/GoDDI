@@ -52,9 +52,10 @@ func main() {
 	fmt.Println("--- Phase 1: Health & Unauthenticated ---")
 	test("GET /health", testHealth)
 	test("GET /health returns valid JSON", testHealthJSON)
+	test("GET /ready is served and has probes registered", testReady)
 	test("Unauthenticated GET /api/v1/users returns 401", testUnauthUsers)
 	test("Unauthenticated POST /api/v1/auth/login with bad creds returns 401", testBadLogin)
-	test("GET /metrics (Prometheus)", testMetrics)
+	test("GET /metrics without a credential returns 401", testMetricsRequiresAuth)
 
 	// ---- Phase 2: Authentication ----
 	fmt.Println("\n--- Phase 2: Authentication ---")
@@ -119,6 +120,7 @@ func main() {
 	test("GET /api/v1/audit-logs - audit logs", testAuditLogs)
 	test("GET /api/v1/tasks - task list", testTaskList)
 	test("GET /api/v1/dns/cache - DNS cache stats", testDNSCache)
+	test("GET /metrics with an admin credential - Prometheus payload", testMetricsWithToken)
 
 	// ---- Phase 11: Extensions (501) ----
 	fmt.Println("\n--- Phase 11: Extensions (501 Not Implemented) ---")
@@ -219,6 +221,30 @@ func testHealthJSON() error {
 	return nil
 }
 
+// testReady checks the readiness endpoint is served and that something is
+// being watched. A process with no probes registered answers 503 by design,
+// so this also catches a wiring change that drops the registration.
+func testReady() error {
+	resp, result := doRequest("GET", "/ready", nil)
+	if resp == nil {
+		return fmt.Errorf("no response")
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("expected 200, got %d (body %v)", resp.StatusCode, result)
+	}
+	status, _ := result["status"].(string)
+	if status != "ok" && status != "degraded" {
+		return fmt.Errorf("expected status ok or degraded, got %v", result["status"])
+	}
+	// The route is unauthenticated, so it must stay coarse: the level and
+	// nothing else. The planes, reasons and counters live on the authenticated
+	// route and would be reconnaissance here.
+	if len(result) != 1 {
+		return fmt.Errorf("expected only a status field on the unauthenticated route, got %v", result)
+	}
+	return nil
+}
+
 func testUnauthUsers() error {
 	savedToken := jwtToken
 	jwtToken = ""
@@ -247,7 +273,13 @@ func testBadLogin() error {
 	return nil
 }
 
-func testMetrics() error {
+// testMetricsRequiresAuth pins the fact that /metrics is part of the
+// management surface, not a probe. Its payload exposes request volumes, route
+// patterns and status distributions, so an unauthenticated caller must not
+// read it. This used to expect 200 with no credential; that assertion went
+// stale when the endpoint was hardened, and a stale pass here is worse than
+// no test because it reports the old contract as verified.
+func testMetricsRequiresAuth() error {
 	savedToken := jwtToken
 	jwtToken = ""
 	resp, data := doRequestRaw("GET", "/metrics", nil)
@@ -255,8 +287,25 @@ func testMetrics() error {
 	if resp == nil {
 		return fmt.Errorf("no response")
 	}
+	if resp.StatusCode != 401 {
+		return fmt.Errorf("expected 401 without a credential, got %d (body %s)", resp.StatusCode, string(data[:min(200, len(data))]))
+	}
+	if strings.Contains(string(data), "goddi_") {
+		return fmt.Errorf("metrics payload leaked to an unauthenticated caller")
+	}
+	return nil
+}
+
+// testMetricsWithToken checks the other half: a credential produces the
+// payload it is supposed to. Both halves are needed -- 401 alone is also what
+// a broken registry or a disabled endpoint returns.
+func testMetricsWithToken() error {
+	resp, data := doRequestRaw("GET", "/metrics", nil)
+	if resp == nil {
+		return fmt.Errorf("no response")
+	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("expected 200, got %d", resp.StatusCode)
+		return fmt.Errorf("expected 200 with a credential, got %d (body %s)", resp.StatusCode, string(data[:min(200, len(data))]))
 	}
 	if !strings.Contains(string(data), "goddi_") {
 		return fmt.Errorf("expected prometheus metrics, got: %s", string(data[:min(200, len(data))]))

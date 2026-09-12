@@ -800,6 +800,14 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 // check performed by the caller, which matches the behavior operators
 // expect from a zone that has been reloaded after a crash.
 func (m *ZoneManager) generateSerialForZone(currentSerial uint32) uint32 {
+	return NextSerial(currentSerial)
+}
+
+// NextSerial returns the next SOA serial in YYYYMMDDNN form that is strictly
+// greater than currentSerial. It is shared by the zone manager and the RFC 2136
+// dynamic update handler so that record edits and dynamic updates advance a
+// single monotonic series per zone.
+func NextSerial(currentSerial uint32) uint32 {
 	now := time.Now().UTC()
 	base := uint32(now.Year()*10000+int(now.Month())*100+now.Day()) * 100
 
