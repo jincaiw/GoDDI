@@ -146,6 +146,17 @@ func TestWakeNeverBlocksTheRequestPath(t *testing.T) {
 // idle pass cost something proportional to the lease table, not to measure a
 // microsecond count on a shared machine; the measured value is logged so a
 // regression is visible even while the bound holds.
+//
+// It is also an absolute figure, so it is only meaningful on a binary that is
+// doing the work and nothing else. The race detector is not that binary. On the
+// machine the bound was set on, the same pass measures 1.1ms without it and
+// 46ms with it -- forty times -- and on a shared four-vCPU CI runner, where the
+// suite runs as `go test -race ./...`, 179ms. Comparing an instrumented number
+// against an uninstrumented bound says nothing about the product, so under
+// -race the bound is widened rather than removed. The tight one is still
+// enforced by plain `go test ./...`, which release.yml runs on every tag and
+// which is what a local run uses; the measured value is logged either way, with
+// which bound was in force.
 func TestTheCostOfAnIdlePassAtTheDocumentedLeaseCeiling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeding twenty thousand leases is not a short-mode test")
@@ -168,10 +179,16 @@ func TestTheCostOfAnIdlePassAtTheDocumentedLeaseCeiling(t *testing.T) {
 	runner.Once(context.Background())
 	took := time.Since(started)
 
-	t.Logf("an idle pass with 20000 leases took %s, against a %s interval", took, time.Second)
-	if took > 100*time.Millisecond {
-		t.Fatalf("an idle pass took %s, which is more than ten percent of the poll "+
-			"interval: polling every second would then cost real work per pass", took)
+	bound := 100 * time.Millisecond
+	if raceDetectorEnabled {
+		bound = 500 * time.Millisecond
+	}
+
+	t.Logf("an idle pass with 20000 leases took %s, against a %s interval (bound %s, race %t)",
+		took, time.Second, bound, raceDetectorEnabled)
+	if took > bound {
+		t.Fatalf("an idle pass took %s, more than the %s this test allows: at that "+
+			"price polling every second costs real work per pass", took, bound)
 	}
 }
 
