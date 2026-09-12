@@ -451,6 +451,31 @@ func (s *Server) handleMessage(msg *dhcpv4.DHCPv4, addr net.Addr, conn net.Packe
 		return
 	}
 
+	// Option 82 is meaningful only when a relay populated giaddr. A present
+	// option on a directly attached request is treated as an untrusted claim;
+	// malformed or incomplete relay identity is dropped rather than used for
+	// scope or auditing decisions.
+	if rawRelayInfo := msg.Options.Get(dhcpv4.OptionRelayAgentInformation); rawRelayInfo != nil {
+		if msg.GatewayIPAddr == nil || msg.GatewayIPAddr.IsUnspecified() {
+			slog.Warn("DHCP: dropping Option 82 from a directly attached client",
+				"interface", ifaceName, "client", mac, "msg_type", msgType.String())
+			return
+		}
+		relayInfo, err := parseRelayAgentInfo(rawRelayInfo)
+		if err != nil {
+			slog.Warn("DHCP: dropping malformed relay agent information",
+				"giaddr", msg.GatewayIPAddr.String(), "interface", ifaceName,
+				"client", mac, "msg_type", msgType.String(), "error", err)
+			return
+		}
+		slog.Debug("DHCP: accepted relay agent information",
+			"giaddr", msg.GatewayIPAddr.String(),
+			"circuit_id", relayAgentInfoLogValue(relayInfo.CircuitID),
+			"remote_id", relayAgentInfoLogValue(relayInfo.RemoteID),
+			"unknown_suboptions", relayInfo.UnknownSubopts,
+			"interface", ifaceName, "client", mac)
+	}
+
 	switch msgType {
 	case dhcpv4.MessageTypeDiscover:
 		resp, err := s.HandleDiscover(msg, ifaceName, serverIP)

@@ -153,6 +153,50 @@ func TestARelayWeDoNotKnowIsDroppedInSilence(t *testing.T) {
 // TestAListedRelayIsServed is the control for the test above. Without it, a
 // server that dropped every relayed request -- because the allowlist check was
 // inverted, or because it fired before the message was parsed -- would pass.
+func TestOption82FromDirectClientIsDropped(t *testing.T) {
+	s, db := newDHCPTestServer(t)
+	conn := &recordingConn{}
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
+		dhcpv4.WithHwAddr(testMAC(5)),
+		dhcpv4.WithOption(dhcpv4.OptRelayAgentInfo(
+			dhcpv4.OptGeneric(dhcpv4.GenericOptionCode(1), []byte("port-1")),
+		)),
+	)
+	if err != nil {
+		t.Fatalf("build direct Option 82 request: %v", err)
+	}
+	s.handleMessage(msg, &net.UDPAddr{IP: net.ParseIP("192.0.2.50"), Port: 68}, conn, "eth0", net.ParseIP(testServerIP))
+	if n := conn.count(); n != 0 {
+		t.Errorf("direct client with Option 82 received %d response(s)", n)
+	}
+	if n := countLeases(t, db); n != 0 {
+		t.Errorf("direct client with Option 82 left %d lease(s)", n)
+	}
+}
+
+func TestMalformedOption82FromListedRelayIsDropped(t *testing.T) {
+	s, db := newDHCPTestServer(t)
+	s.SetTrustedRelays([]string{"192.0.2.0/24"})
+	conn := &recordingConn{}
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
+		dhcpv4.WithHwAddr(testMAC(6)),
+		dhcpv4.WithGatewayIP(net.ParseIP("192.0.2.254")),
+		dhcpv4.WithGeneric(dhcpv4.OptionRelayAgentInformation, []byte{1, 4, 'p'}),
+	)
+	if err != nil {
+		t.Fatalf("build malformed Option 82 request: %v", err)
+	}
+	s.handleMessage(msg, &net.UDPAddr{IP: net.ParseIP("192.0.2.254"), Port: 67}, conn, "eth0", net.ParseIP(testServerIP))
+	if n := conn.count(); n != 0 {
+		t.Errorf("malformed Option 82 received %d response(s)", n)
+	}
+	if n := countLeases(t, db); n != 0 {
+		t.Errorf("malformed Option 82 left %d lease(s)", n)
+	}
+}
+
 func TestAListedRelayIsServed(t *testing.T) {
 	s, db := newDHCPTestServer(t)
 	s.SetTrustedRelays([]string{"192.0.2.0/24"})

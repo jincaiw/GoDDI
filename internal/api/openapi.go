@@ -38,6 +38,7 @@ type apiOperationContract struct {
 	ResponseContentType string
 	ResponseSchema      map[string]interface{}
 	SuccessStatus       string
+	SuccessDescription  string
 }
 
 // documentedQueryParams defines the high-traffic operations whose contracts
@@ -78,6 +79,34 @@ var documentedOperationContracts = map[string]apiOperationContract{
 		RequestDescription: "Conditional forwarder configuration update.",
 	},
 	"DELETE /dns/conditional-forwarders/{id}": {SuccessStatus: "204"},
+	"GET /sso": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供 SSO 配置",
+	},
+	"PUT /sso": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供 SSO 配置",
+	},
+	"GET /cluster": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供多节点集群协调",
+	},
+	"POST /cluster": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供多节点集群协调",
+	},
+	"GET /apps": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供应用市场运行时",
+	},
+	"POST /apps/{id}/install": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供应用市场运行时",
+	},
+	"GET /dhcp/ha": {
+		SuccessStatus:      "501",
+		SuccessDescription: "预留扩展：当前版本不提供该配置 API",
+	},
 	"PUT /dns/listeners/dot": {
 		RequestContentType: "application/json",
 		RequestDescription: "DoT listener configuration.",
@@ -371,6 +400,17 @@ var routeDocs = []apiRouteDoc{
 	{"/settings", "PUT", "Settings", "批量更新设置（热生效）", true, nil},
 	{"/settings/{key}", "PUT", "Settings", "更新单个设置（热生效）", true, []string{"key"}},
 
+	// Reserved extension points. They are intentionally documented with their
+	// actual 501 response so generated clients do not mistake them for live
+	// enterprise capabilities.
+	{ "/sso", "GET", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
+	{ "/sso", "PUT", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
+	{ "/cluster", "GET", "Extensions", "多节点集群（当前版本未实现）", true, nil},
+	{ "/cluster", "POST", "Extensions", "多节点集群（当前版本未实现）", true, nil},
+	{ "/apps", "GET", "Extensions", "应用市场（当前版本未实现）", true, nil},
+	{ "/apps/{id}/install", "POST", "Extensions", "安装应用（当前版本未实现）", true, []string{"id"}},
+	{ "/dhcp/ha", "GET", "Extensions", "DHCP HA 配置 API（当前版本未实现）", true, nil},
+
 	// Configuration publishing: revision history, diff, rollback and the
 	// release queue. Guarded by the settings permission rather than a
 	// domain-specific one, because it can publish DNS, DHCP and IPAM
@@ -442,9 +482,13 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 		if successStatus == "" {
 			successStatus = "200"
 		}
+		successDescription := contract.SuccessDescription
+		if successDescription == "" {
+			successDescription = "成功"
+		}
 		responses := map[string]interface{}{
 			successStatus: map[string]interface{}{
-				"description": "成功",
+				"description": successDescription,
 				"content": map[string]interface{}{
 					contentType: map[string]interface{}{"schema": contentSchema},
 				},
@@ -453,7 +497,7 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
 			"500": map[string]interface{}{"description": "服务端错误"},
 		}
 		if successStatus == "204" {
-			responses[successStatus] = map[string]interface{}{"description": "成功"}
+			responses[successStatus] = map[string]interface{}{"description": successDescription}
 		}
 		op := map[string]interface{}{
 			"tags":        []string{rd.Tag},

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -134,6 +135,45 @@ func TestTheRevisionListDocumentsBothItsNarrowingParameters(t *testing.T) {
 // it yet, so the row is created on read. Both halves must therefore travel as
 // query parameters -- a client that thought `ip` was a path segment would build
 // `/ipam/addresses/view/10.0.0.1`, which is a different route entirely.
+func TestReservedExtensionsDocumentTheir501Contract(t *testing.T) {
+	rec := httptest.NewRecorder()
+	OpenAPIHandler(rec, httptest.NewRequest("GET", "/api/v1/openapi.json", nil))
+
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Description string `json:"description"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"GET /sso":               "预留扩展：当前版本不提供 SSO 配置",
+		"PUT /sso":               "预留扩展：当前版本不提供 SSO 配置",
+		"GET /cluster":           "预留扩展：当前版本不提供多节点集群协调",
+		"POST /cluster":          "预留扩展：当前版本不提供多节点集群协调",
+		"GET /apps":              "预留扩展：当前版本不提供应用市场运行时",
+		"POST /apps/{id}/install": "预留扩展：当前版本不提供应用市场运行时",
+		"GET /dhcp/ha":           "预留扩展：当前版本不提供该配置 API",
+	}
+	for key, description := range want {
+		parts := regexp.MustCompile(`^([A-Z]+) (.+)$`).FindStringSubmatch(key)
+		if len(parts) != 3 {
+			t.Fatalf("invalid test key %q", key)
+		}
+		op, ok := doc.Paths[parts[2]][strings.ToLower(parts[1])]
+		if !ok {
+			t.Errorf("OpenAPI is missing reserved route %s", key)
+			continue
+		}
+		if got := op.Responses["501"].Description; got != description {
+			t.Errorf("%s 501 description = %q, want %q", key, got, description)
+		}
+	}
+}
+
 func TestThe360ViewAddressesAnAddressByQueryNotByPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	OpenAPIHandler(rec, httptest.NewRequest("GET", "/api/v1/openapi.json", nil))
