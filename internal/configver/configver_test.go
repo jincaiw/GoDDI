@@ -188,6 +188,26 @@ func publishScope(t *testing.T, svc *Service, id string, expected int64, content
 
 // --- publish ----------------------------------------------------------------
 
+func TestDiffRevisions_FirstRevisionReportsAddedFields(t *testing.T) {
+	db := newTestDB(t)
+	svc, _ := newScopeService(t, db)
+	seedScope(t, db, "scope-first-diff")
+
+	publishScope(t, svc, "scope-first-diff", 0, scopeContent(t, nil))
+	changes, err := svc.DiffRevisions(ResourceDHCPScope, "scope-first-diff", 0, 1)
+	if err != nil {
+		t.Fatalf("diff first revision: %v", err)
+	}
+	if len(changes) == 0 {
+		t.Fatal("first revision diff is empty; expected added fields")
+	}
+	for _, change := range changes {
+		if change.Old != nil {
+			t.Fatalf("change %q has old value %v, want nil", change.Field, change.Old)
+		}
+	}
+}
+
 func TestPublish_FirstRevisionIsNumberedOne(t *testing.T) {
 	db := newTestDB(t)
 	svc, _ := newScopeService(t, db)
@@ -984,6 +1004,71 @@ func TestRollback_RefusesUnknownTarget(t *testing.T) {
 		ToRevision: 2, ExpectedRevision: 1,
 	}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound (a preview must not be addressable)", err)
+	}
+}
+
+func TestPruneRevisions_KeepsWindowAppliedAndOutboxReferenced(t *testing.T) {
+	db := newTestDB(t)
+	svc, _ := newScopeService(t, db)
+	seedScope(t, db, "scope-prune")
+
+	for i := 0; i < 4; i++ {
+		endIP := fmt.Sprintf("192.0.2.%d", 50+i)
+		publishScope(t, svc, "scope-prune", int64(i), scopeContent(t, func(c *DHCPScopeContent) {
+			c.EndIP = endIP
+		}))
+	}
+	if applied, err := svc.DrainOutbox(10); err != nil || applied != 4 {
+		t.Fatalf("drain = %d err = %v, want 4/nil", applied, err)
+	}
+
+	// The outbox normally retains every release row as history. Remove the
+	// oldest applied marker to model a separately compacted release queue, then
+	// protect revision 2 as if its release were still referenced by an
+	// operator-visible pending row. This exercises both retention guards.
+	if _, err := db.Exec(`DELETE FROM config_release_outbox WHERE revision = 1`); err != nil {
+		t.Fatalf("compact revision 1 release: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE config_release_outbox SET status = 'pending' WHERE revision = 2`); err != nil {
+		t.Fatalf("protect revision 2: %v", err)
+	}
+	removed, err := svc.PruneRevisions(ResourceDHCPScope, "scope-prune", 2)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (only revision 1 is eligible)", removed)
+	}
+
+	var revisions []int
+	rows, err := db.Query(`SELECT revision FROM config_revisions WHERE resource_id = 'scope-prune' ORDER BY revision`)
+	if err != nil {
+		t.Fatalf("list revisions: %v", err)
+	}
+	for rows.Next() {
+		var revision int
+		if err := rows.Scan(&revision); err != nil {
+			rows.Close()
+			t.Fatalf("scan revision: %v", err)
+		}
+		revisions = append(revisions, revision)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close revisions: %v", err)
+	}
+	if got, want := fmt.Sprint(revisions), "[2 3 4]"; got != want {
+		t.Fatalf("remaining revisions = %s, want %s", got, want)
+	}
+}
+
+func TestPruneRevisions_RejectsInvalidKeepAndType(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewService(db)
+	if _, err := svc.PruneRevisions(ResourceDHCPScope, "scope", 0); err == nil {
+		t.Fatal("keep=0 was accepted")
+	}
+	if _, err := svc.PruneRevisions(ResourceType("unknown"), "scope", 1); err == nil {
+		t.Fatal("unknown resource type was accepted")
 	}
 }
 

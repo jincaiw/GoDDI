@@ -13,8 +13,9 @@
   B 停机：control.stop() 后 DNS 仍用真 UDP 应答且答案与停机前一致；dnsdata.db 的
     副本没丢；dhcp 进程还活着，租约行仍 active、lease_end 不变；在控制库被真正
     置为「不可写」时新产生的租约只留下待上行标记而到不了控制库。
-  C 重启：control 用同一 data_dir/端口重启后，排队的那条变更追上、待上行队列清空；
-    再新建一条 A 记录，dns 进程同步到并能被真 UDP 查询解析。
+  C 重启：control 用同一 data_dir/端口重启后，排队的租约与 DHCP→DNS 事件追上控制库；
+    DHCP 事件 dirty 标记清空但 append-only 事实行保留，dns 进程消费下行事件并能被真
+    UDP 查询解析；readiness 恢复 ok；再新建一条 A 记录，验证普通 DNS 下行也恢复。
 
 它不验证什么（逐条见结尾「本脚本不能声称的」一节，这是本演练最重要的部分之一）
   * 没有一次真实的 DHCP REQUEST/ACK：本机非特权，:67 绑不上，只有「续租要读的那一行
@@ -60,6 +61,9 @@ BASE_NAME = "a1.drill.w14h.test"
 NEW_NAME = "a2.drill.w14h.test"
 BASE_IP = "203.0.113.7"
 NEW_IP = "203.0.113.8"
+DNS_EVENT_LEASE_ID = "w14h-dns-event"
+DNS_EVENT_HOSTNAME = "event-host"
+DNS_EVENT_IP = "10.9.0.70"
 
 SCOPE_NAME = "w14h-drill-scope"
 SCOPE_SUBNET = "10.9.0.0/24"
@@ -77,6 +81,8 @@ M_PUSH_OK = "dataplane: pushed lease changes"
 M_PUSH_REFUSED = "dataplane: the control database refused a change; it stays queued"
 M_SYNC_FAILED = "dataplane: configuration sync failed; the local copy stays in service"
 M_DHCP_DEGRADED = "failed to start DHCP server, running in degraded mode"
+M_READINESS_DEGRADED = "dataplane: readiness is below ok; the local copy stays in service"
+M_READINESS_OK = "dataplane: readiness ok"
 
 # "domain":"dns","revision":3,"rows":2 —— 一条真的把副本落地的同步记录，对应日志里
 # 的 "dataplane: configuration loaded from the control database"（首次）或
@@ -474,6 +480,37 @@ def local_dns_a_values(dns_db):
     return {r[0] for r in rows}
 
 
+def pending_dns_events(db_path):
+    try:
+        rows = query_rows(
+            db_path,
+            "SELECT lease_id, action, status FROM dhcp_dns_events "
+            "WHERE status = 'pending' ORDER BY id",
+        )
+    except sqlite3.Error:
+        return None
+    return rows
+
+
+def all_dns_events(db_path):
+    try:
+        rows = query_rows(
+            db_path,
+            "SELECT lease_id, action, status FROM dhcp_dns_events ORDER BY id",
+        )
+    except sqlite3.Error:
+        return None
+    return rows
+
+
+def dirty_dns_event_ids(db_path):
+    try:
+        rows = query_rows(db_path, "SELECT event_id FROM dhcp_dns_event_dirty")
+    except sqlite3.Error:
+        return None
+    return {r[0] for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # 各节
 # ---------------------------------------------------------------------------
@@ -640,6 +677,8 @@ def section_outage(checks, ports, control, dns, dhcp, data, state, lock):
     lock.acquire()
     checks.check("已用 BEGIN IMMEDIATE 把控制库置为不可写", lock.conn is not None)
 
+    # 同一条本地租约同时触发 DHCP→DNS 事件：先写租约，再写 durable outbox
+    # intent。两者都由数据面上行，控制库不可写期间必须留在 dhcp 本地库。
     write_row(data["leases_db"],
               "INSERT OR REPLACE INTO dhcp_leases (id, scope_id, ip_address, mac_address,"
               " hostname, client_id, lease_start, lease_end, status, last_seen, generation)"
@@ -647,15 +686,43 @@ def section_outage(checks, ports, control, dns, dhcp, data, state, lock):
               (LEASE_QUEUED_ID, state["scope_id"], LEASE_QUEUED_IP, "02:00:00:00:14:03",
                "w14h-queued", "2026-09-11T00:00:00Z", "2030-01-01T00:00:00Z",
                "2026-09-11T00:00:00Z"))
+    write_row(data["leases_db"],
+              "INSERT OR REPLACE INTO dhcp_leases (id, scope_id, ip_address, mac_address,"
+              " hostname, client_id, lease_start, lease_end, status, last_seen, generation)"
+              " VALUES (?, ?, ?, ?, ?, '', ?, ?, 'active', ?, 1)",
+              (DNS_EVENT_LEASE_ID, state["scope_id"], DNS_EVENT_IP, "02:00:00:00:14:04",
+               DNS_EVENT_HOSTNAME + "." + ZONE, "2026-09-11T00:00:00Z",
+               "2030-01-01T00:00:00Z", "2026-09-11T00:00:00Z"))
+    write_row(data["leases_db"],
+              "INSERT INTO dhcp_dns_events (lease_id, generation, action, scope_id, ip_address,"
+              " mac_address, hostname) VALUES (?, 1, 'create', ?, ?, ?, ?)",
+              (DNS_EVENT_LEASE_ID, state["scope_id"], DNS_EVENT_IP,
+               "02:00:00:00:14:04", DNS_EVENT_HOSTNAME + "." + ZONE))
 
     dirty = local_dirty(data["leases_db"])
     checks.check("停机期间产生的租约留下了待上行标记", dirty is not None and LEASE_QUEUED_ID in dirty,
                  f"dirty={dirty}")
+    local_events = pending_dns_events(data["leases_db"])
+    checks.check("DHCP→DNS 事件在本地 outbox 中待上行",
+                 local_events is not None and any(r[0] == DNS_EVENT_LEASE_ID for r in local_events),
+                 f"pending events={local_events}")
+    checks.check("控制库暂时没有该 DHCP→DNS 事件",
+                 not any(r[0] == DNS_EVENT_LEASE_ID for r in (all_dns_events(data["control_db"]) or [])),
+                 f"control events={all_dns_events(data['control_db'])}")
 
     # 等一次推送尝试失败（busy_timeout 5s + 退避），再断言控制库还没有它。
     ok, _ = wait_until(lambda: (M_PUSH_REFUSED in dhcp.log(), None), timeout=25)
     checks.check("dhcp 进程日志记录了控制库拒绝写入、变更留在队列", ok,
                  f"未出现 {M_PUSH_REFUSED!r}")
+    degraded_before = dhcp.log().count(M_READINESS_DEGRADED)
+    ok, _ = wait_until(lambda: (dhcp.log().count(M_READINESS_DEGRADED) > degraded_before, None), timeout=15)
+    checks.check("控制库不可写后 dhcp readiness 进入 degraded", ok,
+                 f"degraded 日志数 {dhcp.log().count(M_READINESS_DEGRADED)}，之前 {degraded_before}")
+    degraded_count = dhcp.log().count(M_READINESS_DEGRADED)
+    time.sleep(2.0)
+    checks.check("readiness 保持 degraded 时不重复记录同级别日志",
+                 dhcp.log().count(M_READINESS_DEGRADED) == degraded_count,
+                 f"前后计数 {degraded_count}/{dhcp.log().count(M_READINESS_DEGRADED)}")
 
     checks.check("控制库中确实还没有这条排队租约",
                  not control_has_lease(data["control_db"], LEASE_QUEUED_ID),
@@ -679,6 +746,8 @@ def section_restart(checks, ports, control_node, dns, dhcp, data, state, lock, p
 
     lock.release()
     checks.check("已释放控制库写锁", lock.conn is None)
+    degraded_count = dhcp.log().count(M_READINESS_DEGRADED)
+    ready_count = dhcp.log().count(M_READINESS_OK)
 
     control = Node(control_node[0], "control", control_node[1], control_node[2],
                    env=control_node[3])
@@ -692,12 +761,56 @@ def section_restart(checks, ports, control_node, dns, dhcp, data, state, lock, p
     checks.check("停机期间排队的租约在重启后追上了控制库", ok,
                  f"控制库中仍没有 {LEASE_QUEUED_ID}")
 
+    ok, _ = wait_until(
+        lambda: (any(r[0] == DNS_EVENT_LEASE_ID for r in (all_dns_events(data["control_db"]) or [])), None),
+        timeout=45)
+    checks.check("DHCP→DNS 事件在控制库恢复后完成上行", ok,
+                 f"控制库 events={all_dns_events(data['control_db'])}")
+
     def queue_empty():
         d = local_dirty(data["leases_db"])
         return d is not None and len(d) == 0, d
 
     ok, d = wait_until(queue_empty, timeout=30)
     checks.check("本地待上行队列回到 0", ok, f"dirty={d}")
+
+    # DHCP 本地事件是 append-only 事实源：成功上行只清除 dirty marker，事件本身
+    # 仍保留为 pending，供 DNS 副本下行后由 DNSConsumer 消费；不能把「本地事件行」
+    # 误判成「本地上行队列」，否则会错误要求生产者删除它。
+    def event_dirty_cleared():
+        rows = query_rows(data["leases_db"],
+                          "SELECT COUNT(*) FROM dhcp_dns_event_dirty d "
+                          "JOIN dhcp_dns_events e ON e.id = d.event_id "
+                          "WHERE e.lease_id = ?", (DNS_EVENT_LEASE_ID,))
+        return int(rows[0][0]) == 0, rows
+
+    ok, _ = wait_until(event_dirty_cleared, timeout=30)
+    checks.check("DHCP 本地 DNS 事件成功上行后 dirty 标记清空", ok,
+                 f"event_dirty={dirty_dns_event_ids(data['leases_db'])}")
+    local_event_rows = all_dns_events(data["leases_db"])
+    checks.check("DHCP 本地 DNS 事件事实行仍保留且未被生产者删除",
+                 local_event_rows is not None and any(
+                     r[0] == DNS_EVENT_LEASE_ID and r[2] == "pending" for r in local_event_rows),
+                 f"local events={local_event_rows}")
+
+    def dns_event_applied():
+        rows = query_rows(data["dns_db"],
+                          "SELECT value FROM dns_records WHERE owner = 'dhcp' AND owner_ref = ?",
+                          (DNS_EVENT_LEASE_ID,))
+        return bool(rows and any(r[0] == DNS_EVENT_IP for r in rows)), rows
+
+    ok, records = wait_until(dns_event_applied, timeout=45)
+    checks.check("DNS 副本消费下行事件并写入 DHCP A 记录", ok,
+                 f"dns records={records}")
+    check_dns_answer(checks, "真 UDP 查询 DHCP→DNS 事件名拿到正确 A 答案",
+                     DNS_EVENT_HOSTNAME + "." + ZONE, ports["dns"], DNS_EVENT_IP)
+
+    ok, _ = wait_until(lambda: (dhcp.log().count(M_READINESS_OK) > ready_count, None), timeout=30)
+    checks.check("控制库恢复后 dhcp readiness 恢复 ok", ok,
+                 f"ok 日志数 {dhcp.log().count(M_READINESS_OK)}，之前 {ready_count}")
+    checks.check("readiness 恢复后没有再次产生重复 degraded 日志",
+                 dhcp.log().count(M_READINESS_DEGRADED) == degraded_count,
+                 f"degraded 日志数 {degraded_count}/{dhcp.log().count(M_READINESS_DEGRADED)}")
 
     ok, _ = wait_until(
         lambda: (control_has_lease(data["control_db"], LEASE_DIRECT_ID + "-2"), None), timeout=30)
@@ -755,9 +868,9 @@ def caveats():
     不可写持续几小时/几天后队列会不会涨破、退避会不会退化，这里没有测。
   * 下行同步的验证靠轮询本地副本 + 真 UDP 查询，覆盖的是 1s 轮询这个默认节奏；把
     sync_interval_seconds 调大后客户端等待变长的量级，这里没有测。
-  * 直接写库种租约绕过了 DHCP 服务端的 lease.Manager（唯一合法写者）。它能触发与真实
-    发放相同的租约脏标记，但生成的那一行的字段（client_id、generation 等）是脚本手填
-    的，不保证与真实发放逐字段相同。
+  * 直接写库种租约与直接插入 DHCP→DNS 事件绕过了 DHCP 服务端的 lease.Manager /
+    enqueueDNSEvent（唯一合法写者）。它们复用了同样的持久化表和上行/下行链路，但不
+    等同于一次真实 DHCP REQUEST/ACK；字段（client_id、generation 等）是脚本手填的。
   * 控制进程重启用的是同一 data_dir 与端口，验证的是进程重启；不是升级/迁移过程、
     也不是控制库文件本身丢失或损坏后的恢复。
 """)

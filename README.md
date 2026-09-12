@@ -160,8 +160,8 @@ The frontend must be built before the Go binary because `web/dist` is embedded a
 - Persist both security keys securely across restarts and back them up separately. Changing the encryption key makes existing encrypted TOTP secrets unreadable. Do not regenerate keys during routine upgrades.
 - See the [v0.1.1 production review](docs/production-review-v0.1.1.md) for the baseline verified coverage and remaining deployment qualification requirements.
 
-- Put GoDDI behind HTTPS or a trusted private network; the built-in HTTP listener does not terminate TLS.
-- Restrict `/metrics` and the management console with firewall or reverse-proxy policy.
+- Put GoDDI behind HTTPS or a trusted private network. The built-in listener supports TLS when `server.tls.enabled` is enabled; otherwise it is plain HTTP and must be protected by a TLS-terminating reverse proxy.
+- Restrict `/metrics` and the management console with firewall or reverse-proxy policy. The repository alert rules are examples; qualify the Prometheus scrape and alert firing in the target environment.
 - Back up `/var/lib/goddi` and test restore procedures regularly.
 - Use API token expiration, IP restrictions, least-privilege roles, and TOTP for administrators.
 

@@ -165,7 +165,7 @@ go build ./cmd/goddi
 6. **监听端口**：DNS/DHCP 监听地址正确（53/67 需 root 或 `CAP_NET_BIND_SERVICE`），必要时用 `GODDI_DNS_LISTENERS_UDP_ADDR`/`GODDI_DNS_LISTENERS_TCP_ADDR` 覆盖。
 7. **日志与保留**：`log.query_log_enabled` 与 `log.retention_days` 按合规要求配置。
 8. **备份**：确认定时备份任务在运行，并**实际执行一次恢复演练**。
-9. **监控**：已抓取 `/metrics` 并导入告警规则（示例见 [docs/prometheus-alerts.yml](docs/prometheus-alerts.yml)）。
+9. **监控**：已抓取 `/metrics`，并在目标环境实际加载告警规则；仓库中的 [docs/prometheus-alerts.yml](docs/prometheus-alerts.yml) 只是示例，未作为真实 Prometheus 告警链路证据。
 10. **升级路径**：使用 systemd（`deployments/goddi.service`）或 Docker 管理进程，重启后数据目录与密钥保持不变。
 
 ## 安全建议

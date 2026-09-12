@@ -142,10 +142,6 @@ func GetConfigRevision(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == nil:
 			out["changes"] = changes
-		case errors.Is(err, configver.ErrNotFound):
-			// A first revision has nothing to compare against; that is not an
-			// error, it just has no diff.
-			out["changes"] = []configver.FieldChange{}
 		default:
 			response.InternalErrorWithLog(w, "计算差异失败", err)
 			return

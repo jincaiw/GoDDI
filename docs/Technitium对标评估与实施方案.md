@@ -98,7 +98,7 @@ GoDDI 现状来源：`internal/api/router.go`、`internal/dns/**`、`web-admin/s
 | Zone History | ✅ zone history（基于变更日志回放） | ⚠️ 有 logChange 写库（record.go L196），无查询 API/页面 | 低 |
 | 记录类型 | 标准 15 + 专有 ANAME/FWD/APP + 未知类型 rdata | 28 种标准类型（record.go L15-20，含 SVCB/HTTPS/TLSA/SSHFP/DNAME/CAA 等），**无 FWD/APP/ANAME** | 低 |
 | 记录 expiryTtl / overwrite | ✅ | ❌ expires_at 字段已有（L185），缺 expiryTtl 语义暴露 | 低 |
-| DNSSEC | ✅ 14 API（NSEC/NSEC3、KSK/ZSK 生命周期、DS Info） | 部分：签名、NSEC、轮换已有；无 NSEC3 参数管理、无 DS Info、无密钥生命周期 UI（嵌在 zone 页） | 中 |
+| DNSSEC | ✅ 14 API（NSEC/NSEC3、KSK/ZSK 生命周期、DS Info） | 实验性：已有密钥/DS/参数管理入口，但当前不生成 RRSIG/DNSKEY，真实签名链路未完成；无 NSEC3 参数管理、无 DS Info、无完整密钥生命周期 UI | 高 |
 
 ### 3.3 统计与日志对比
 
@@ -106,7 +106,7 @@ GoDDI 现状来源：`internal/api/router.go`、`internal/dns/**`、`web-admin/s
 |---|---|---|---|
 | stats API | LastHour~LastYear + Custom 区间 + 3 Top 榜 | stats.go + dashboard 概览 | 中：缺时间范围参数与 Top 榜 API |
 | 统计页面 | Dashboard 11 卡 + 趋势图 + 饼图 | dashboard 单页概览 | 中 |
-| Prometheus | ✅ /api/dashboard/metrics/text | ✅ docs/prometheus-alerts.yml 表明已有 metrics | — |
+| Prometheus | ✅ /api/dashboard/metrics/text | ✅ `/metrics` 与示例告警规则存在；真实 Prometheus/`promtool` 接入与告警触发尚未作为本仓证据闭合 | 中 |
 | 查询日志 | ✅ 分页查询日志 | ✅ logs_dns（含 cached/blocked 标记） | — |
 
 ### 3.4 认证/权限/集群

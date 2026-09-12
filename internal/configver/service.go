@@ -402,16 +402,86 @@ func (s *Service) List(f ListFilter) ([]Revision, int64, error) {
 }
 
 // DiffRevisions compares two revisions of the same resource.
+//
+// A from revision of zero means the resource had no prior published content;
+// it is therefore compared with an empty object, just like Publish reports for
+// the first revision. Keeping that rule here makes the API's first-revision
+// view agree with the publish result instead of silently turning "all fields
+// added" into an empty diff.
 func (s *Service) DiffRevisions(rt ResourceType, id string, from, to int64) ([]FieldChange, error) {
-	oldRev, err := s.GetByNumber(rt, id, from)
-	if err != nil {
-		return nil, err
+	if from < 0 || to <= 0 {
+		return nil, fmt.Errorf("%w: revision numbers must be non-negative and to must be positive", ErrInvalidRevision)
+	}
+	var oldContent json.RawMessage
+	if from > 0 {
+		oldRev, err := s.GetByNumber(rt, id, from)
+		if err != nil {
+			return nil, err
+		}
+		oldContent = oldRev.Content
 	}
 	newRev, err := s.GetByNumber(rt, id, to)
 	if err != nil {
 		return nil, err
 	}
-	return Diff(oldRev.Content, newRev.Content)
+	return Diff(oldContent, newRev.Content)
+}
+
+// PruneRevisions removes old applied revisions for one resource.
+//
+// Retention is deliberately explicit rather than an implicit background
+// deletion: an operator or scheduled maintenance job chooses the keep window
+// and receives the number of rows removed. The newest keep revisions are
+// retained, the last applied revision is always retained, and any revision
+// referenced by the release outbox is protected. Non-applied rows are never
+// deleted here, preserving failed/staged evidence for incident review.
+func (s *Service) PruneRevisions(rt ResourceType, id string, keep int) (int64, error) {
+	if !rt.Valid() {
+		return 0, fmt.Errorf("configver: unknown resource type %q", rt)
+	}
+	if strings.TrimSpace(id) == "" {
+		return 0, fmt.Errorf("configver: resource id is required")
+	}
+	if keep < 1 {
+		return 0, fmt.Errorf("configver: keep must be at least 1")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("configver: begin revision prune: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.Exec(`DELETE FROM config_revisions
+		WHERE resource_type = ? AND resource_id = ? AND status = ?
+		  AND revision NOT IN (
+			  SELECT revision FROM config_revisions
+			  WHERE resource_type = ? AND resource_id = ?
+			  ORDER BY revision DESC LIMIT ?
+		  )
+		  AND id <> COALESCE((
+			  SELECT id FROM config_revisions
+			  WHERE resource_type = ? AND resource_id = ? AND status = ?
+			  ORDER BY revision DESC LIMIT 1
+		  ), '')
+		  AND NOT EXISTS (
+			  SELECT 1 FROM config_release_outbox
+			  WHERE config_release_outbox.revision_id = config_revisions.id
+		  )`,
+		rt, id, StatusApplied,
+		rt, id, keep,
+		rt, id, StatusApplied)
+	if err != nil {
+		return 0, fmt.Errorf("configver: prune revisions: %w", err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("configver: count pruned revisions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("configver: commit revision prune: %w", err)
+	}
+	return removed, nil
 }
 
 // diffAgainstBase diffs a revision's content against the content of the
