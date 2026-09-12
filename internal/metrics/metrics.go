@@ -170,6 +170,42 @@ var (
 		Help: "1 when this DHCP node may acknowledge a binding or a renewal, 0 when it is withholding them. Absent when HA is disabled.",
 	}, []string{"node_id"})
 
+	DHCPRequestsInflight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_requests_inflight",
+		Help: "Current number of DHCP requests being processed by workers.",
+	})
+
+	DHCPRequestQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_request_queue_depth",
+		Help: "Current number of DHCP requests waiting for a worker.",
+	})
+
+	DHCPRequestQueueCapacity = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_request_queue_capacity",
+		Help: "Configured capacity of the bounded DHCP request queue.",
+	})
+
+	DHCPRequestsDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dhcp_requests_dropped_total",
+		Help: "DHCP requests dropped because the bounded request queue was full.",
+	})
+
+	DHCPRequestTimeoutsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dhcp_request_timeouts_total",
+		Help: "DHCP request processing attempts that exceeded the server's observation threshold.",
+	})
+
+	DHCPSQLBusyTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goddi_dhcp_sql_busy_total",
+		Help: "DHCP request failures caused by SQLite busy or locked errors.",
+	})
+
+	DHCPRequestDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goddi_dhcp_request_duration_seconds",
+		Help:    "DHCP request processing duration in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+
 	// Data-plane readiness and footprint. These are the numbers behind
 	// /ready; the probe itself serves the level only, and the reasons and
 	// figures live here and on the authenticated detail endpoint.
@@ -661,6 +697,13 @@ func InitMetrics() {
 			DataPlaneRefusedChanges,
 			DHCPHARedundant,
 			DHCPHAPromising,
+			DHCPRequestsInflight,
+			DHCPRequestQueueDepth,
+			DHCPRequestQueueCapacity,
+			DHCPRequestsDroppedTotal,
+			DHCPRequestTimeoutsTotal,
+			DHCPSQLBusyTotal,
+			DHCPRequestDurationSeconds,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine
@@ -789,6 +832,37 @@ func Shutdown() {
 			close(stopUptime)
 		}
 	}
+}
+
+// SetDHCPRequestQueue records the current bounded queue depth and capacity.
+func SetDHCPRequestQueue(depth, capacity int) {
+	DHCPRequestQueueDepth.Set(float64(depth))
+	DHCPRequestQueueCapacity.Set(float64(capacity))
+}
+
+// AddDHCPRequestInflight records worker concurrency.
+func AddDHCPRequestInflight(delta int) {
+	DHCPRequestsInflight.Add(float64(delta))
+}
+
+// RecordDHCPRequestDropped records an admission drop.
+func RecordDHCPRequestDropped() {
+	DHCPRequestsDroppedTotal.Inc()
+}
+
+// RecordDHCPRequestTimeout records a slow request.
+func RecordDHCPRequestTimeout() {
+	DHCPRequestTimeoutsTotal.Inc()
+}
+
+// RecordDHCPRequestDuration records one request processing duration.
+func RecordDHCPRequestDuration(duration time.Duration) {
+	DHCPRequestDurationSeconds.Observe(duration.Seconds())
+}
+
+// RecordDHCPSQLBusy records a SQLite lock contention failure.
+func RecordDHCPSQLBusy() {
+	DHCPSQLBusyTotal.Inc()
 }
 
 // RecordDNSQuery records a DNS query metric.

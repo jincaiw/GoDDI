@@ -180,17 +180,65 @@ func TestAPreviewForAMissingSubnetIsNotFound(t *testing.T) {
 	}
 }
 
-// TestASubnetPreviewSaysItIsNotImplemented. Returning a report for a type that
-// would not be imported would be a worse answer than saying so.
-func TestASubnetPreviewSaysItIsNotImplemented(t *testing.T) {
+func TestSubnetPreviewReportsChangesWithoutWriting(t *testing.T) {
 	db := newControlPlaneTestDB(t)
+	if _, err := db.Exec(`INSERT INTO ipam_spaces (id, name) VALUES ('sp1', 'space-sp1')`); err != nil {
+		t.Fatalf("seed space: %v", err)
+	}
 	withIPAMServices(t, &IPAMServiceContainer{DB: db})
 
 	rec := postImport(t, "/api/v1/ipam/import/preview",
-		importBody(t, "subnets", "sp1", "name,cidr\nsite-a,192.0.2.0/24\n"))
+		importBody(t, "subnets", "sp1", "name,cidr,vlan_id,location,description\nsite-a,192.0.2.5/24,100,dc-a,first\n"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("subnet preview = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var report struct {
+		Data struct {
+			Creates int      `json:"creates"`
+			Applied bool     `json:"applied"`
+			Errors  []string `json:"errors"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if report.Data.Creates != 1 || report.Data.Applied || len(report.Data.Errors) != 0 {
+		t.Fatalf("preview report = %+v, want one create, not applied, no errors", report.Data)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_subnets WHERE space_id = 'sp1'`).Scan(&count); err != nil {
+		t.Fatalf("count subnets: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("preview wrote %d subnet(s)", count)
+	}
+}
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("a subnet preview = %d, want 501: %s", rec.Code, rec.Body.String())
+func TestSubnetImportRejectsOverlapAndWritesNothing(t *testing.T) {
+	db := newControlPlaneTestDB(t)
+	if _, err := db.Exec(`INSERT INTO ipam_spaces (id, name) VALUES ('sp1', 'space-sp1')`); err != nil {
+		t.Fatalf("seed space: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ipam_subnets (id, space_id, name, cidr, created_at, updated_at) VALUES ('existing', 'sp1', 'existing', '192.0.2.0/24', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("seed subnet: %v", err)
+	}
+	withIPAMServices(t, &IPAMServiceContainer{DB: db})
+
+	rec := postImport(t, "/api/v1/ipam/import/preview",
+		importBody(t, "subnets", "sp1", "name,cidr\nsite-a,192.0.2.0/25\n"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overlap preview = %d, want 200 report: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Errors []string `json:"errors"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode overlap preview: %v", err)
+	}
+	if len(body.Data.Errors) != 1 {
+		t.Fatalf("overlap errors = %v, want one", body.Data.Errors)
 	}
 }
 

@@ -937,7 +937,17 @@ func PreviewIPAMImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "subnets":
-		response.NotImplemented(w, "导入预览目前只支持 addresses")
+		if req.Format != "csv" {
+			response.BadRequest(w, "子网的JSON导入暂不支持，请使用CSV")
+			return
+		}
+		report, err := ipam.NewImportExport(IPAMServices.DB).
+			PreviewSubnetsCSV(req.ParentID, []byte(req.Data))
+		if err != nil {
+			respondIPAMError(w, r, err, "子网导入预览失败")
+			return
+		}
+		response.OK(w, report)
 		return
 	default:
 		response.BadRequest(w, "无效的类型，必须为'addresses'或'subnets'")
@@ -981,11 +991,8 @@ func ImportIPAMData(w http.ResponseWriter, r *http.Request) {
 			response.BadRequest(w, "子网的JSON导入暂不支持，请使用CSV")
 			return
 		}
-		if err := ie.ImportSubnetsCSV(req.ParentID, []byte(req.Data)); err != nil {
-			response.InternalErrorWithLog(w, "导入子网失败", err)
-			return
-		}
-		response.OKWithMessage(w, "import completed", nil)
+		report, err := ie.ImportSubnetsCSVReport(req.ParentID, []byte(req.Data))
+		respondSubnetImportResult(w, r, report, err)
 	default:
 		response.BadRequest(w, "无效的类型，必须为'addresses'或'subnets'")
 	}
@@ -1004,6 +1011,17 @@ func respondImportResult(w http.ResponseWriter, r *http.Request, report *ipam.Im
 		response.BadRequestWithData(w, "导入被拒绝，未写入任何行", report)
 	default:
 		respondIPAMError(w, r, err, fallback)
+	}
+}
+
+func respondSubnetImportResult(w http.ResponseWriter, r *http.Request, report *ipam.SubnetImportReport, err error) {
+	switch {
+	case err == nil:
+		response.OK(w, report)
+	case errors.Is(err, ipam.ErrImportRejected):
+		response.BadRequestWithData(w, "导入被拒绝，未写入任何行", report)
+	default:
+		respondIPAMError(w, r, err, "导入子网失败")
 	}
 }
 

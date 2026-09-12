@@ -15,6 +15,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dhcp/option"
 	"github.com/jasonwa/goddi/internal/dhcp/reservation"
 	"github.com/jasonwa/goddi/internal/dhcp/scope"
+	"github.com/jasonwa/goddi/internal/metrics"
 
 	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
 )
@@ -40,6 +41,17 @@ type Server struct {
 	relayAllowListBroken bool
 	listeners            []net.PacketConn
 	serverIPs            map[string]net.IP // interface -> server IP
+
+	// request admission is deliberately bounded: a slow lease database must not
+	// let an unbounded number of packets accumulate in memory. A full queue
+	// drops the packet silently from the protocol's point of view; the client
+	// retries, while the drop is visible to operators through metrics.
+	requestQueue chan dhcpRequest
+	workers      int
+	queueOnce    sync.Once
+	workerWG     sync.WaitGroup
+	admissionMu  sync.Mutex
+	started      bool
 
 	// leaseObserver is told about every lease state change. It is optional:
 	// when it is nil the data plane still works, because an IPAM view that is
@@ -176,6 +188,20 @@ func (s *Server) replicateLeaseStateAfterRelease(id string) {
 	s.leaseReplicator.Replicate(l)
 }
 
+const (
+	defaultRequestQueueCapacity = 256
+	defaultRequestWorkers       = 8
+	requestProcessingTimeout    = 2 * time.Second
+)
+
+type dhcpRequest struct {
+	msg       *dhcpv4.DHCPv4
+	addr      net.Addr
+	conn      net.PacketConn
+	ifaceName string
+	serverIP  net.IP
+}
+
 // New creates a new DHCP server.
 //
 // Everything the request path touches -- scopes, leases, reservations, options,
@@ -191,15 +217,17 @@ func (s *Server) replicateLeaseStateAfterRelease(id string) {
 // handle to a zone table it must not write to.
 func New(leaseDB *sql.DB, interfaces []string, eventLogger *dhcpinternal.EventLogger) *Server {
 	return &Server{
-		scopeMgr:    scope.NewManager(leaseDB),
-		leaseMgr:    lease.NewManager(leaseDB),
-		reservMgr:   reservation.NewManager(leaseDB),
-		optionMgr:   option.NewManager(leaseDB),
-		outbox:      dhcpinternal.NewDNSOutbox(leaseDB),
-		eventLogger: eventLogger,
-		interfaces:  interfaces,
-		serverIPs:   make(map[string]net.IP),
-		quit:        make(chan struct{}),
+		scopeMgr:     scope.NewManager(leaseDB),
+		leaseMgr:     lease.NewManager(leaseDB),
+		reservMgr:    reservation.NewManager(leaseDB),
+		optionMgr:    option.NewManager(leaseDB),
+		outbox:       dhcpinternal.NewDNSOutbox(leaseDB),
+		eventLogger:  eventLogger,
+		interfaces:   interfaces,
+		serverIPs:    make(map[string]net.IP),
+		requestQueue: make(chan dhcpRequest, defaultRequestQueueCapacity),
+		workers:      defaultRequestWorkers,
+		quit:         make(chan struct{}),
 	}
 }
 
@@ -285,6 +313,9 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Start bounded request workers before receive loops can admit packets.
+	s.startWorkers()
+
 	// Bind the DHCP socket exactly once. Binding 0.0.0.0:67 once per
 	// interface is impossible (EADDRINUSE from the second bind on) — the
 	// single socket receives broadcasts arriving on any interface, and each
@@ -364,6 +395,10 @@ func (s *Server) registerInterfaceServerIP(ifaceName string) error {
 
 // receiveLoop reads DHCP packets from a connection and processes them.
 func (s *Server) receiveLoop(conn net.PacketConn, ifaceName string, serverIP net.IP) {
+	// Some process-level tests exercise the receive loop directly rather than
+	// through Start. Starting admission here keeps that entry point faithful to
+	// production while queueOnce makes the normal Start path idempotent.
+	s.startWorkers()
 	defer s.wg.Done()
 
 	buf := make([]byte, 1500)
@@ -395,10 +430,56 @@ func (s *Server) receiveLoop(conn net.PacketConn, ifaceName string, serverIP net
 			continue
 		}
 
-		// Process the message. handleMessage recovers panics internally so
-		// one malformed/hostile packet cannot kill the receive loop and
-		// silently take DHCP down for the whole interface.
-		s.handleMessage(msg, addr, conn, ifaceName, serverIP)
+		// Admission is non-blocking. A saturated queue fails closed: the client
+		// receives no reply and will retry, while the receive loop keeps reading.
+		s.admitRequest(dhcpRequest{msg: msg, addr: addr, conn: conn, ifaceName: ifaceName, serverIP: serverIP}, ifaceName)
+	}
+}
+
+func (s *Server) admitRequest(req dhcpRequest, ifaceName string) {
+	select {
+	case s.requestQueue <- req:
+		metrics.SetDHCPRequestQueue(len(s.requestQueue), cap(s.requestQueue))
+	default:
+		metrics.RecordDHCPRequestDropped()
+		slog.Warn("DHCP server: request queue full; dropping packet", "interface", ifaceName)
+	}
+}
+
+func (s *Server) startWorkers() {
+	s.admissionMu.Lock()
+	s.started = true
+	s.admissionMu.Unlock()
+	s.queueOnce.Do(func() {
+		for i := 0; i < s.workers; i++ {
+			s.workerWG.Add(1)
+			go s.requestWorker()
+		}
+		metrics.SetDHCPRequestQueue(0, cap(s.requestQueue))
+	})
+}
+
+func (s *Server) requestWorker() {
+	defer s.workerWG.Done()
+	for {
+		select {
+		case <-s.quit:
+			return
+		case req := <-s.requestQueue:
+			if req.msg == nil {
+				continue
+			}
+			started := time.Now()
+			metrics.AddDHCPRequestInflight(1)
+			s.handleMessage(req.msg, req.addr, req.conn, req.ifaceName, req.serverIP)
+			metrics.AddDHCPRequestInflight(-1)
+			elapsed := time.Since(started)
+			metrics.RecordDHCPRequestDuration(elapsed)
+			if elapsed > 2*time.Second {
+				metrics.RecordDHCPRequestTimeout()
+			}
+			metrics.SetDHCPRequestQueue(len(s.requestQueue), cap(s.requestQueue))
+		}
 	}
 }
 
@@ -678,6 +759,24 @@ func (s *Server) enqueueDNSEvent(l *lease.Lease, action dhcpinternal.DNSEventAct
 // feeding.
 func (s *Server) SetOutboxWake(fn func()) { s.outboxWake = fn }
 
+// SetRequestAdmission configures the bounded request queue and worker count.
+// It must be called before Start; non-positive values restore safe defaults.
+func (s *Server) SetRequestAdmission(queueCapacity, workers int) {
+	if queueCapacity <= 0 {
+		queueCapacity = defaultRequestQueueCapacity
+	}
+	if workers <= 0 {
+		workers = defaultRequestWorkers
+	}
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	if s.started {
+		return
+	}
+	s.requestQueue = make(chan dhcpRequest, queueCapacity)
+	s.workers = workers
+}
+
 func (s *Server) wakeOutbox() {
 	if s.outboxWake != nil {
 		s.outboxWake()
@@ -704,10 +803,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		conn.Close()
 	}
 
-	// Wait for receive loops to finish with a timeout.
+	// Wait for receive loops and workers to finish with a timeout.
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
+		s.workerWG.Wait()
 		close(done)
 	}()
 	select {

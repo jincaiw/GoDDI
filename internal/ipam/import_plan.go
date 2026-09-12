@@ -363,10 +363,15 @@ var ErrImportRejected = errors.New("import rejected")
 // ImportRejectedError carries the report that explains the refusal, so a
 // caller can answer with the per-row reasons instead of a summary of them.
 type ImportRejectedError struct {
-	Report *ImportReport
+	Report       *ImportReport
+	SubnetReport *SubnetImportReport
 }
 
 func (e *ImportRejectedError) Error() string {
+	if e.SubnetReport != nil {
+		return fmt.Sprintf("%s: %d error(s): %s",
+			ErrImportRejected, len(e.SubnetReport.Errors), strings.Join(e.SubnetReport.Errors, "; "))
+	}
 	return fmt.Sprintf("%s: %d error(s): %s",
 		ErrImportRejected, len(e.Report.Errors), strings.Join(e.Report.Errors, "; "))
 }

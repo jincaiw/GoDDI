@@ -5,10 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/ipam/address"
@@ -146,70 +143,8 @@ func (ie *ImportExport) ExportAddressesCSV(subnetID string) ([]byte, error) {
 // ImportSubnetsCSV imports subnets from CSV data into a space.
 // CSV format: name,cidr,vlan_id,location,description
 func (ie *ImportExport) ImportSubnetsCSV(spaceID string, data []byte) error {
-	reader := csv.NewReader(bytes.NewReader(data))
-	reader.TrimLeadingSpace = true
-
-	// Skip header row.
-	if _, err := reader.Read(); err != nil {
-		return fmt.Errorf("failed to read CSV header: %w", err)
-	}
-
-	lineNum := 1
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("CSV parse error at line %d: %w", lineNum+1, err)
-		}
-		lineNum++
-
-		if len(record) < 2 {
-			continue
-		}
-
-		name := record[0]
-		cidr := record[1]
-
-		// Validate the CIDR before touching the database; an invalid subnet
-		// in the store breaks usage stats and DHCP scope generation later.
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("line %d: invalid CIDR %q for subnet %q", lineNum, cidr, name)
-		}
-
-		vlanID := ""
-		if len(record) > 2 {
-			vlanID = record[2]
-		}
-		location := ""
-		if len(record) > 3 {
-			location = record[3]
-		}
-		description := ""
-		if len(record) > 4 {
-			description = record[4]
-		}
-
-		id := uuid.New().String()
-		var vlanIDVal interface{}
-		if vlanID != "" {
-			vlanInt, err := strconv.Atoi(vlanID)
-			if err != nil {
-				return fmt.Errorf("line %d: invalid VLAN ID %q for subnet %q", lineNum, vlanID, name)
-			}
-			vlanIDVal = vlanInt
-		}
-
-		if _, err = ie.db.Exec(`
-			INSERT OR IGNORE INTO ipam_subnets (id, space_id, name, cidr, vlan_id, location, description, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-			id, spaceID, name, cidr, vlanIDVal, location, description); err != nil {
-			return fmt.Errorf("line %d: failed to import subnet %q: %w", lineNum, name, err)
-		}
-	}
-
-	return nil
+	_, err := ie.applySubnets(spaceID, data)
+	return err
 }
 
 // ExportSubnetsCSV exports subnets from a space as CSV data.
