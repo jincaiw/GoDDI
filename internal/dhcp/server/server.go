@@ -23,7 +23,7 @@ import (
 // Server represents a DHCPv4 server.
 type Server struct {
 	scopeMgr    *scope.Manager
-	leaseMgr    *lease.Manager
+	leaseMgr    LeaseStore
 	reservMgr   *reservation.Manager
 	optionMgr   *option.Manager
 	outbox      *dhcpinternal.DNSOutbox
@@ -64,6 +64,11 @@ type Server struct {
 	// which is the single-node case and behaves exactly as it did before this
 	// hook existed.
 	leaseReplicator LeaseReplicator
+
+	// durableGate is optional during the staged migration. When configured, a
+	// binding must cross the WAL durable boundary before an ACK is built. The
+	// default SQLite constructor leaves it nil and retains the existing path.
+	durableGate DurableLeaseGate
 
 	// outboxWake is told that a DNS change was just queued, so the store's
 	// replication loop can push it without waiting for its next poll. Optional:
@@ -216,9 +221,23 @@ type dhcpRequest struct {
 // the other side applies it. A DHCP process with no DNS role therefore holds no
 // handle to a zone table it must not write to.
 func New(leaseDB *sql.DB, interfaces []string, eventLogger *dhcpinternal.EventLogger) *Server {
+	return NewWithLeaseStore(
+		lease.NewManager(leaseDB), leaseDB, interfaces, eventLogger,
+	)
+}
+
+// NewWithLeaseStore constructs a DHCP server with an explicitly supplied
+// packet-path lease store. The database is still used by scope, reservation,
+// option, and DNS outbox managers. New keeps the existing SQLite-backed
+// production behavior; this seam allows a staged store migration without
+// changing packet handling or ACK semantics in the first step.
+func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, eventLogger *dhcpinternal.EventLogger) *Server {
+	if store == nil {
+		panic("dhcp server: nil lease store")
+	}
 	return &Server{
 		scopeMgr:     scope.NewManager(leaseDB),
-		leaseMgr:     lease.NewManager(leaseDB),
+		leaseMgr:     store,
 		reservMgr:    reservation.NewManager(leaseDB),
 		optionMgr:    option.NewManager(leaseDB),
 		outbox:       dhcpinternal.NewDNSOutbox(leaseDB),
@@ -229,6 +248,14 @@ func New(leaseDB *sql.DB, interfaces []string, eventLogger *dhcpinternal.EventLo
 		workers:      defaultRequestWorkers,
 		quit:         make(chan struct{}),
 	}
+}
+
+// SetDurableLeaseGate enables the staged WAL durable boundary for ACKs. It is
+// intentionally explicit: the default constructor remains SQLite-compatible
+// until the memory store, replay, apply and external durability evidence are
+// complete.
+func (s *Server) SetDurableLeaseGate(gate DurableLeaseGate) {
+	s.durableGate = gate
 }
 
 // SetTrustedRelays restricts relayed requests to relay agents inside the given

@@ -22,9 +22,18 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ![Backup management](docs/images/backup.png)
 
-## Version 0.1.2 Scope
+## Version 0.8.2 Scope
 
-GoDDI v0.1.3 is designed for a stable single-node deployment and supports SQLite only. DNS-over-TLS/HTTPS/QUIC configuration, DHCP high availability, SSO, clustering, and the application extension runtime are reserved APIs and return `501 Not Implemented` in this release.
+GoDDI v0.8.2
+
+The previous `v0.8.1` release established the same capability-claim baseline; this release adds the staged LeaseStore/WAL implementation contracts without changing the default SQLite data path. is a self-hosted, single-node DDI platform backed by SQLite/WAL. The following boundaries are explicit:
+
+- **Implemented in the current release:** authoritative and recursive DNS, DHCP data-plane processing, DHCP lease HA primitives (replication, fencing, takeover and rejoin), IPAM, configuration revisions/release outbox, backup/restore, and DoT/DoH/DoQ listener configuration.
+- **Experimental/incomplete:** DNSSEC key and DS management is available, but the release does not provide a complete signing chain with RRSIG, DNSKEY and NSEC/NSEC3 serving.
+- **Reserved APIs (`501 Not Implemented`):** SSO, general multi-node cluster coordination, the application extension runtime, and the management-plane DHCP HA extension. DHCP data-plane HA must not be confused with the reserved management extension.
+- **External-validation-required (`external-validation-required`):** real relay/Option 82 interoperability, cross-host HA and network-partition behavior, power-loss recovery, enterprise CA lifecycle, real DoT/DoH/DoQ client handshakes, Prometheus alert firing, and target-hardware capacity/soak testing.
+
+The built-in management TLS listener is available but disabled by default; enable it explicitly or place GoDDI behind an HTTPS reverse proxy or trusted private network.
 
 ## Quick Start
 
@@ -34,7 +43,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.3/goddi-v0.1.3-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.8.2/goddi-v0.8.2-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

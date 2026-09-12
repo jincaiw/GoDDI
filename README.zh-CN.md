@@ -22,9 +22,18 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.1.3 功能边界
+## v0.8.2 功能边界
 
-GoDDI v0.1.3 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HTTPS/QUIC 配置、DHCP 高可用、SSO、集群和应用扩展运行时为预留 API，本版本会返回 `501 Not Implemented`。
+GoDDI v0.8.2 是一套基于 SQLite/WAL 的自托管单节点 DDI 平台，当前能力边界明确如下。
+
+上一版 `v0.8.1` 已建立同一能力声明基线；本版本新增 LeaseStore/WAL 分阶段实现契约，但默认 DHCP 数据路径仍保持 SQLite。
+
+- **当前版本已实现**：权威与递归 DNS、DHCP 数据面处理、DHCP 租约 HA 基础能力（复制、围栏、接管与重入）、IPAM、配置版本/发布 outbox、备份恢复，以及 DoT/DoH/DoQ 监听器配置。
+- **实验性/不完整**：DNSSEC 已提供密钥与 DS 管理入口，但当前版本尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
+- **预留 API（`501 Not Implemented`）**：SSO、通用多节点集群协调、应用扩展运行时，以及管理面 DHCP HA 扩展。DHCP 数据面 HA 不得与预留的管理面扩展混同。
+- **必须外部验收（`external-validation-required`）**：真实 relay/Option 82 互操作、跨主机 HA 与网络分区、真实掉电恢复、企业 CA 生命周期、真实 DoT/DoH/DoQ 客户端握手、Prometheus 告警触发，以及目标硬件容量/长稳测试。
+
+内置管理面 TLS 监听器可用但默认关闭；生产环境应显式启用，或将 GoDDI 置于 HTTPS 反向代理及可信私有网络之后。
 
 ## 快速开始
 
@@ -34,7 +43,7 @@ GoDDI v0.1.3 面向稳定的单节点部署，仅支持 SQLite。DNS-over-TLS/HT
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.1.3/goddi-v0.1.3-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.8.2/goddi-v0.8.2-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

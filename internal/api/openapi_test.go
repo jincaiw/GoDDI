@@ -150,13 +150,13 @@ func TestReservedExtensionsDocumentTheir501Contract(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"GET /sso":               "预留扩展：当前版本不提供 SSO 配置",
-		"PUT /sso":               "预留扩展：当前版本不提供 SSO 配置",
-		"GET /cluster":           "预留扩展：当前版本不提供多节点集群协调",
-		"POST /cluster":          "预留扩展：当前版本不提供多节点集群协调",
-		"GET /apps":              "预留扩展：当前版本不提供应用市场运行时",
+		"GET /sso":                "预留扩展：当前版本不提供 SSO 配置",
+		"PUT /sso":                "预留扩展：当前版本不提供 SSO 配置",
+		"GET /cluster":            "预留扩展：当前版本不提供多节点集群协调",
+		"POST /cluster":           "预留扩展：当前版本不提供多节点集群协调",
+		"GET /apps":               "预留扩展：当前版本不提供应用市场运行时",
 		"POST /apps/{id}/install": "预留扩展：当前版本不提供应用市场运行时",
-		"GET /dhcp/ha":           "预留扩展：当前版本不提供该配置 API",
+		"GET /dhcp/ha":            "预留扩展：当前版本不提供该配置 API",
 	}
 	for key, description := range want {
 		parts := regexp.MustCompile(`^([A-Z]+) (.+)$`).FindStringSubmatch(key)

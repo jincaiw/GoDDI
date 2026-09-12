@@ -403,13 +403,13 @@ var routeDocs = []apiRouteDoc{
 	// Reserved extension points. They are intentionally documented with their
 	// actual 501 response so generated clients do not mistake them for live
 	// enterprise capabilities.
-	{ "/sso", "GET", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
-	{ "/sso", "PUT", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
-	{ "/cluster", "GET", "Extensions", "多节点集群（当前版本未实现）", true, nil},
-	{ "/cluster", "POST", "Extensions", "多节点集群（当前版本未实现）", true, nil},
-	{ "/apps", "GET", "Extensions", "应用市场（当前版本未实现）", true, nil},
-	{ "/apps/{id}/install", "POST", "Extensions", "安装应用（当前版本未实现）", true, []string{"id"}},
-	{ "/dhcp/ha", "GET", "Extensions", "DHCP HA 配置 API（当前版本未实现）", true, nil},
+	{"/sso", "GET", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
+	{"/sso", "PUT", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
+	{"/cluster", "GET", "Extensions", "多节点集群（当前版本未实现）", true, nil},
+	{"/cluster", "POST", "Extensions", "多节点集群（当前版本未实现）", true, nil},
+	{"/apps", "GET", "Extensions", "应用市场（当前版本未实现）", true, nil},
+	{"/apps/{id}/install", "POST", "Extensions", "安装应用（当前版本未实现）", true, []string{"id"}},
+	{"/dhcp/ha", "GET", "Extensions", "DHCP HA 配置 API（当前版本未实现）", true, nil},
 
 	// Configuration publishing: revision history, diff, rollback and the
 	// release queue. Guarded by the settings permission rather than a

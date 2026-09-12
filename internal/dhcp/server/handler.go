@@ -502,6 +502,15 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		}
 	}
 
+	// The staged WAL path has its own durable boundary. Keep this gate after
+	// the lease mutation and replication confirmation but before any ACK is
+	// built, so a failed flush cannot be mistaken for a client-visible lease.
+	if err := RequireDurable(context.Background(), s.durableGate, bound); err != nil {
+		slog.Warn("DHCP: withholding the ACK; lease WAL durable boundary failed",
+			"mac", mac, "ip", requestedIP, "lease_id", bound.ID, "error", err)
+		return nil, nil
+	}
+
 	// Build option map.
 	optionMap, err := s.optionMgr.BuildOptionMapForScope(sc.ID, reservID)
 	if err != nil {
