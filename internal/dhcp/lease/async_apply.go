@@ -35,6 +35,8 @@ type AsyncApplier struct {
 	applied   atomic.Int64
 	started   chan struct{}
 	done      chan struct{}
+	notify    chan struct{}
+	inflight  bool
 	closeOnce sync.Once
 }
 
@@ -55,6 +57,7 @@ func NewAsyncApplier(parent context.Context, capacity int, applied int64, apply 
 		apply:   apply,
 		started: make(chan struct{}),
 		done:    make(chan struct{}),
+		notify:  make(chan struct{}, 1),
 	}
 	a.applied.Store(applied)
 	go a.run()
@@ -65,14 +68,42 @@ func (a *AsyncApplier) run() {
 	close(a.started)
 	defer close(a.done)
 	for {
+		a.mu.RLock()
+		closed := a.closed
+		a.mu.RUnlock()
+		if closed || a.ctx.Err() != nil {
+			a.mu.Lock()
+			a.closed = true
+			a.mu.Unlock()
+			a.signal()
+			return
+		}
 		select {
 		case <-a.ctx.Done():
 			return
-		case event := <-a.queue:
-			if err := a.applyOne(event); err != nil {
-				a.mu.Lock()
+		case event, ok := <-a.queue:
+			if !ok {
+				return
+			}
+			a.mu.RLock()
+			closed = a.closed
+			a.mu.RUnlock()
+			if closed || a.ctx.Err() != nil {
+				a.signal()
+				return
+			}
+			a.mu.Lock()
+			a.inflight = true
+			a.mu.Unlock()
+			err := a.applyOne(event)
+			a.mu.Lock()
+			a.inflight = false
+			if err != nil {
 				a.failed = err
-				a.mu.Unlock()
+			}
+			a.mu.Unlock()
+			a.signal()
+			if err != nil {
 				a.cancel()
 				return
 			}
@@ -111,6 +142,7 @@ func (a *AsyncApplier) Submit(event WALEvent) error {
 	}
 	select {
 	case a.queue <- event:
+		a.signal()
 		return nil
 	default:
 		return ErrApplyQueueFull
@@ -129,25 +161,49 @@ func (a *AsyncApplier) Failed() error {
 	return a.failed
 }
 
-// Wait blocks until all currently queued work is applied or the applier fails.
+// Wait blocks until the queue is empty and no event is being applied. It is
+// a strict drain barrier for work accepted before the call; callers should
+// serialize new submissions when they need a fixed cut-off. A closed applier
+// is reported as ErrApplierClosed, including when cancellation left queued
+// durable work that must be replayed at startup.
 func (a *AsyncApplier) Wait(ctx context.Context) error {
 	for {
-		if err := a.Failed(); err != nil {
-			return err
+		a.mu.RLock()
+		failed := a.failed
+		closed := a.closed
+		idle := len(a.queue) == 0 && !a.inflight
+		queued := len(a.queue)
+		a.mu.RUnlock()
+		if failed != nil {
+			return failed
 		}
-		if len(a.queue) == 0 {
+		if idle {
+			if closed {
+				return ErrApplierClosed
+			}
 			return nil
+		}
+		if closed && queued > 0 {
+			select {
+			case <-a.done:
+				return ErrApplierClosed
+			default:
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-a.done:
-			if err := a.Failed(); err != nil {
-				return err
-			}
-			return nil
-		default:
+			continue
+		case <-a.notify:
 		}
+	}
+}
+
+func (a *AsyncApplier) signal() {
+	select {
+	case a.notify <- struct{}{}:
+	default:
 	}
 }
 

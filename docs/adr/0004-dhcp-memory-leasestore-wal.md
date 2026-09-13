@@ -1,8 +1,9 @@
 # ADR-0004：DHCP 内存 LeaseStore 与异步 WAL（设计与 spike）
 
-- 状态：**设计完成，未进入生产实现**（2026-09-12）
-- 范围：B8.6
-- 基线：已发布 `v0.8.0` / `28ed5aa`
+- 状态：**分阶段契约完成，默认生产实现未切换**（2026-09-13）
+- 本轮边界守卫：默认 `dhcpserver.New` 仍使用 SQLite-backed `lease.Manager`；`MemoryIndex.ClaimAvailable` 不满足 DHCP `LeaseStore` 接口，未接入 `HandleDiscover`；`durableGate` 默认为空，WAL durable ACK 仍为可选 hook。
+- 范围：B8.6 / N3 / N4
+- 基线：已发布 `v0.8.2` / `ccf9eff`；历史设计基线为 `v0.8.0` / `28ed5aa`
 - 相关：ADR 0001、ADR 0003、`internal/dhcp/lease/lease.go`、`internal/dhcp/lease/durability_test.go`
 
 ## 背景与现状
@@ -26,7 +27,7 @@ N3.4 已新增版本化 WAL 记录、顺序重放、重复幂等、gap/corruptio
 
 N3.5 已新增 `internal/dhcp/lease/wal_file.go` 文件级生命周期组件：以 owner-only `0600` 创建/打开带 magic/version header 的 WAL，启动时先校验 header 并完整 replay 校验已有记录，再恢复追加 sequence；追加与 `Sync` 分离，关闭后的操作 fail-closed，临时文件重启、gap、损坏、权限和关闭语义均有真实文件测试。该组件仍是可注入的文件级基础设施，不改变默认 SQLite `Manager`，不接入生产 ACK 路径，也不等同真实掉电耐久性。
 
-N3.6 已新增 `internal/dhcp/lease/async_apply.go` 有界异步投影组件：单 worker 按 sequence 顺序消费已 durable 的 WAL 事件，容量固定、提交非阻塞，队列满返回 `ErrApplyQueueFull`；apply 错误、sequence gap 和关闭后提交均 fail-closed，并暴露 applied watermark、队列深度和容量。apply 回调必须由上层在同一事务中完成 SQLite 租约/DNS outbox/applied watermark 写入；本组件不改变默认 SQLite `Manager`，不接入生产 ACK 路径。
+N3.6 已新增 `internal/dhcp/lease/async_apply.go` 有界异步投影组件：单 worker 按 sequence 顺序消费已 durable 的 WAL 事件，容量固定、提交非阻塞，队列满返回 `ErrApplyQueueFull`；apply 错误、sequence gap 和关闭后提交均 fail-closed，并暴露 applied watermark、队列深度和容量。`Wait` 现在同时确认队列为空且没有 in-flight apply，避免仅按队列长度提前返回。apply 回调必须由上层在同一事务中完成 SQLite 租约/DNS outbox/applied watermark 写入；本组件不改变默认 SQLite `Manager`，不接入生产 ACK 路径。
 
 N3.7 已将 `DurableLeaseGate` 作为显式可选装配点接入 `Server.HandleRequest` 的 ACK 构建前：配置 gate 时 durable 失败保持静默不 ACK，未配置时旧 SQLite 路径保持原行为；集成测试覆盖成功 ACK、失败静默和默认路径兼容。该接线仍属于 staged contract，不代表默认 DHCP 已迁移到内存事实源，也不代表真实 WAL 已由生产装配提供。
 
@@ -34,7 +35,7 @@ N4.1 已新增 `RecoverMemoryIndex`：先在临时 map 上装载 SQLite/快照�
 
 N4.2 将恢复编排接入 `WALFile` 生命周期：`WALFile.RecoverMemoryIndex` 复用已打开文件的 header/replay 校验，不重复打开或绕过文件锁；真实临时 WAL 测试验证 append、sync、恢复和目标索引发布。N4.2 仍只提供装配适配器，尚未改变 `New` 的默认 SQLite 路径。
 
-N4.3 新增 `WALDurableGate`：由 ACK 前置 gate 显式执行事件构造、WAL append 和 `Sync`，上下文取消、nil 依赖和文件错误均 fail-closed；不自动提交 SQLite applier，不把 WAL durable 误写成 SQLite applied，也不改变默认 Server 构造。
+N4.3 新增 `WALDurableGate`：由 ACK 前置 gate 显式执行事件构造、WAL append 和 `Sync`，上下文取消、nil 依赖和文件错误均 fail-closed；不自动提交 SQLite applier，不把 WAL durable 误写成 SQLite applied，也不改变默认 Server 构造。本轮补充 `WALFile.AppendDurable`，将 sequence 分配、append 和 `Sync` 置于同一文件临界区，避免多 worker 并发 gate 读取同一旧 sequence 后发生重复序号竞态，并补充文件级自动序列与关闭后 fail-closed 测试。
 
 N4.4 新增 `MemoryWriteBridge`：按 memory update -> WAL durable -> async projection submit 的顺序协调一次租约状态变更；WAL durable 失败时恢复旧内存值且不提交 projection，projection queue 满或 apply 失败时保留已 durable 的内存值并返回错误，后续由 replay 追平。该桥是 staged contract，不替换 `lease.Manager`，也不自动接管 DHCP 热路径。
 
@@ -82,7 +83,7 @@ DHCP request
 }
 ```
 
-必须拒绝：版本未知、`seq <= 0`、空租约 ID、未知操作、JSON 损坏、跨事件序号缺口。尾部未完成的最后一条记录可以在启动恢复时被截断或忽略，但必须记录告警并保留原始证据；中间损坏不能静默跳过。
+必须拒绝：版本未知、`seq <= 0`、空租约 ID、未知操作、JSON 损坏、跨事件序号缺口。当前实现对尾部未完成记录与中间损坏统一 fail-closed：`ReplayWAL` 遇到无法完整解码的行直接返回 `ErrWALCorrupt`，不截断、不静默忽略；恢复前必须保留原始 WAL 供取证。若未来改为允许截断尾部半条记录，必须单独变更 ADR、增加告警和回归测试，不能隐式改变语义。
 
 ### 3. 三个状态边界必须分开
 

@@ -77,6 +77,23 @@ func TestIndexedLeaseStoreUsesRebuiltIndexWhenReady(t *testing.T) {
 	}
 }
 
+func TestIndexedLeaseStoreQuarantineTombstoneUpdatesReadyIndex(t *testing.T) {
+	primary := &indexedProbeStore{available: "192.0.2.10"}
+	index := lease.NewMemoryIndex()
+	index.Replace(nil, []lease.AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
+	store := NewIndexedLeaseStore(primary, index)
+	store.MarkReady()
+
+	primary.value = &lease.Lease{ID: "tombstone", ScopeID: "scope", IPAddress: "192.0.2.10", MACAddress: "aa", Status: lease.LeaseStatusConflict}
+	got, err := store.QuarantineIP("scope", "192.0.2.10", "aa")
+	if err != nil || got == nil {
+		t.Fatalf("quarantine = %#v, %v", got, err)
+	}
+	if ip, err := store.FindAvailableIP("scope"); err != nil || ip != "192.0.2.11" {
+		t.Fatalf("available after tombstone = %q, %v", ip, err)
+	}
+}
+
 func TestIndexedLeaseStoreWriteReflectsPostCommitState(t *testing.T) {
 	value := &lease.Lease{ID: "l1", ScopeID: "scope", IPAddress: "192.0.2.10", MACAddress: "aa", Status: lease.LeaseStatusActive}
 	primary := &indexedProbeStore{value: value}

@@ -42,6 +42,12 @@ func (s *shadowStore) QuarantineIP(string, string, string) (*lease.Lease, error)
 	return s.lease, s.err
 }
 func (s *shadowStore) ExpireLeases() ([]*lease.Lease, error) { return nil, s.err }
+func (s *shadowStore) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
 func (s *shadowStore) read() (*lease.Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,7 +76,7 @@ func TestReadShadowLeaseStoreKeepsPrimaryReadAndReportsMatch(t *testing.T) {
 		t.Fatalf("find available: %v", err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for candidate.calls < 2 && time.Now().Before(deadline) {
+	for candidate.callCount() < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	shadow.Close()

@@ -1,8 +1,8 @@
 # ADR-0005：多节点配置发布协调（设计契约，未实现）
 
-- 状态：**设计完成，生产多节点协调未实现**（2026-09-12）
+- 状态：**设计完成，生产多节点协调未实现**（2026-09-13）
 - 范围：B8.7
-- 基线：已发布 `v0.8.0` / `28ed5aa`
+- 基线：已发布 `v0.8.2` / `ccf9eff`；历史设计基线为 `v0.8.0` / `28ed5aa`
 - 现状：`internal/configver.Service` 仍是单节点 revision/outbox；`internal/cluster` 仍返回 `ErrNotImplemented`
 
 ## 背景

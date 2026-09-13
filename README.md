@@ -43,7 +43,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.8.2/goddi-v0.8.2-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.8.3/goddi-v0.8.3-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

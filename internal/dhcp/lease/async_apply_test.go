@@ -70,6 +70,26 @@ func TestAsyncApplierRejectsQueueOverflowAndPreservesDurableBoundary(t *testing.
 	waitForApplied(t, applier, 2)
 }
 
+func TestAsyncApplierParentCancellationStopsAndWaitReportsClosed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	applier, err := NewAsyncApplier(ctx, 1, 0, func(context.Context, WALEvent) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer applier.Close()
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for applier.Failed() == nil && time.Now().Before(deadline) {
+		if err := applier.Wait(context.Background()); errors.Is(err, ErrApplierClosed) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := applier.Wait(context.Background()); !errors.Is(err, ErrApplierClosed) {
+		t.Fatalf("Wait after parent cancellation = %v, want ErrApplierClosed", err)
+	}
+}
+
 func TestAsyncApplierStopsOnApplyErrorAndFailsClosed(t *testing.T) {
 	want := errors.New("sqlite unavailable")
 	applier, err := NewAsyncApplier(context.Background(), 2, 0, func(context.Context, WALEvent) error {
@@ -91,6 +111,67 @@ func TestAsyncApplierStopsOnApplyErrorAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAsyncApplierWaitsForInFlightApply(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	applier, err := NewAsyncApplier(context.Background(), 1, 0, func(context.Context, WALEvent) error {
+		close(started)
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer applier.Close()
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 1, Op: WALEventRemove, LeaseID: "l"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- applier.Wait(context.Background()) }()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("Wait returned before in-flight apply completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-waitDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAsyncApplierWaitReturnsClosedWhenCancelledWithQueuedWork(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	applier, err := NewAsyncApplier(context.Background(), 1, 0, func(context.Context, WALEvent) error {
+		startOnce.Do(func() { close(started) })
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 1, Op: WALEventRemove, LeaseID: "l1"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 2, Op: WALEventRemove, LeaseID: "l2"}); err != nil {
+		t.Fatal(err)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- applier.Close() }()
+	close(release)
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := applier.Wait(ctx); !errors.Is(err, ErrApplierClosed) {
+		t.Fatalf("Wait after cancelled queued work = %v, want ErrApplierClosed", err)
+	}
+}
+
 func TestAsyncApplierRejectsInvalidConfigurationAndClosedSubmit(t *testing.T) {
 	if _, err := NewAsyncApplier(context.Background(), 0, 0, func(context.Context, WALEvent) error { return nil }); err == nil {
 		t.Fatal("capacity zero unexpectedly accepted")
@@ -104,6 +185,9 @@ func TestAsyncApplierRejectsInvalidConfigurationAndClosedSubmit(t *testing.T) {
 	}
 	if err := applier.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := applier.Wait(context.Background()); !errors.Is(err, ErrApplierClosed) {
+		t.Fatalf("closed idle wait = %v, want ErrApplierClosed", err)
 	}
 	if err := applier.Submit(WALEvent{Version: 1, Seq: 1, Op: WALEventRemove, LeaseID: "l"}); !errors.Is(err, ErrApplierClosed) {
 		t.Fatalf("closed submit = %v, want ErrApplierClosed", err)

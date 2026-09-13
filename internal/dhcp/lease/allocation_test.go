@@ -166,8 +166,12 @@ func TestQuarantineIP_WritesTombstoneWhenNoLeaseExists(t *testing.T) {
 
 	// A DECLINE can arrive for an address we never leased (statically
 	// configured host, or a conflict observed by a peer).
-	if _, err := m.QuarantineIP("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:05"); err != nil {
+	tombstone, err := m.QuarantineIP("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:05")
+	if err != nil {
 		t.Fatalf("QuarantineIP: %v", err)
+	}
+	if tombstone == nil || tombstone.Status != LeaseStatusConflict || tombstone.IPAddress != "192.0.2.10" {
+		t.Fatalf("tombstone = %#v, want returned conflict lease", tombstone)
 	}
 
 	got, err := m.FindAvailableIP("scope-1")

@@ -250,8 +250,8 @@ func TestADeclineForAnUnknownAddressIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QuarantineIP: %v", err)
 	}
-	if held != nil {
-		t.Fatalf("QuarantineIP returned a lease for an address nothing held: %+v", held)
+	if held == nil || held.Status != LeaseStatusConflict || held.IPAddress != "192.0.2.11" {
+		t.Fatalf("QuarantineIP tombstone = %+v, want returned conflict lease", held)
 	}
 
 	entry := onlyAuditRow(t, db)

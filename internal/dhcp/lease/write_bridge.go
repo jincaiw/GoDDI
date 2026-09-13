@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 var (
@@ -31,6 +32,7 @@ type EventSubmitter interface {
 // This is an explicit migration component; it does not replace Manager or
 // change the default DHCP constructor.
 type MemoryWriteBridge struct {
+	mu      sync.Mutex
 	index   *MemoryIndex
 	durable DurableEventSink
 	submit  EventSubmitter
@@ -56,6 +58,11 @@ func NewMemoryWriteBridge(index *MemoryIndex, durable DurableEventSink, submit E
 func (b *MemoryWriteBridge) Commit(ctx context.Context, value Lease) error {
 	if b == nil || b.index == nil {
 		return ErrWriteBridgeClosed
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if value.ID == "" {
 		return fmt.Errorf("%w: lease id is empty", ErrWALCorrupt)

@@ -73,6 +73,8 @@ func recoverMemoryIndex(target *MemoryIndex, baseline []Lease, pools []AddressPo
 		recovered = append(recovered, value)
 	}
 	sort.Slice(recovered, func(i, j int) bool { return recovered[i].ID < recovered[j].ID })
-	target.Replace(recovered, pools)
+	if err := target.ReplaceChecked(recovered, pools); err != nil {
+		return last, fmt.Errorf("%w: publish recovered snapshot: %v", ErrWALCorrupt, err)
+	}
 	return last, nil
 }

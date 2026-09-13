@@ -33,7 +33,9 @@ func NewWALDurableGate(wal *WALFile, nextOp func(*Lease) WALEvent) (*WALDurableG
 
 // Durable appends and syncs one lease event. Context cancellation is checked
 // before touching the file; once file I/O begins, the WAL Sync result is the
-// authoritative boundary and any error is propagated fail-closed.
+// authoritative boundary and any error is propagated fail-closed. Sequence
+// assignment and append+sync are one WAL critical section so concurrent DHCP
+// workers cannot reserve the same sequence.
 func (g *WALDurableGate) Durable(ctx context.Context, value *Lease) error {
 	if g == nil || g.wal == nil {
 		return ErrWALGateClosed
@@ -50,9 +52,6 @@ func (g *WALDurableGate) Durable(ctx context.Context, value *Lease) error {
 	if event.Version == 0 {
 		event.Version = currentWALEventVersion
 	}
-	if event.Seq == 0 {
-		event.Seq = g.wal.Sequence() + 1
-	}
 	if event.Op == "" {
 		event.Op = WALEventUpsert
 	}
@@ -60,11 +59,6 @@ func (g *WALDurableGate) Durable(ctx context.Context, value *Lease) error {
 		copy := *value
 		event.Lease = &copy
 	}
-	if err := g.wal.Append(event); err != nil {
-		return err
-	}
-	if err := g.wal.Sync(); err != nil {
-		return err
-	}
-	return nil
+	_, err := g.wal.AppendDurable(event)
+	return err
 }

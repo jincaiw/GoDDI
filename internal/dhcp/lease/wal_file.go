@@ -103,6 +103,27 @@ func (w *WALFile) Append(event WALEvent) error {
 	return w.writer.Append(event)
 }
 
+// AppendDurable assigns the next sequence, appends the event, and synchronizes
+// it while holding one file-level critical section. This is the atomic
+// append-plus-durable operation required by concurrent ACK workers.
+func (w *WALFile) AppendDurable(event WALEvent) (WALEvent, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil || w.writer == nil {
+		return event, ErrWALClosed
+	}
+	if event.Seq == 0 {
+		event.Seq = w.writer.Sequence() + 1
+	}
+	if err := w.writer.Append(event); err != nil {
+		return event, err
+	}
+	if err := w.writer.Sync(); err != nil {
+		return event, err
+	}
+	return event, nil
+}
+
 // Sync flushes the WAL through the operating system's file sync boundary.
 func (w *WALFile) Sync() error {
 	w.mu.Lock()

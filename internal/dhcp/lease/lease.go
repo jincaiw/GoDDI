@@ -583,8 +583,9 @@ func (m *Manager) MarkLeaseConflict(id string) error {
 // server never recorded (a statically configured host, or a conflict seen by a
 // peer) and without the tombstone the next DISCOVER would offer it again.
 //
-// It returns the lease the address was bound to, or nil when only a tombstone
-// was written. A declined address must also lose its DNS record: the client
+// It returns the lease whose state was changed, including a newly-created
+// conflict tombstone when the address was not previously recorded. A declined
+// address must also lose its DNS record: the client
 // just told us the binding is wrong, so leaving the name published would keep
 // handing out an address that is already in use by something else.
 func (m *Manager) QuarantineIP(scopeID, ip, mac string) (*Lease, error) {
@@ -626,13 +627,17 @@ func (m *Manager) QuarantineIP(scopeID, ip, mac string) (*Lease, error) {
 	// A decline for an address this server never recorded is still a decline,
 	// and it is the one a reader is most likely to need: the address is being
 	// quarantined on nothing but the client's word.
-	if tombstone, found, err := m.findLease(tombstoneID); err != nil {
+	tombstone, found, err := m.findLease(tombstoneID)
+	if err != nil {
 		slog.Error("dhcp: could not read back the conflict tombstone for auditing",
 			"lease", tombstoneID, "ip", ip, "error", err)
-	} else if found {
-		m.auditDecline(nil, tombstone)
+		return nil, fmt.Errorf("failed to read conflict tombstone for %s: %w", ip, err)
 	}
-	return nil, nil
+	if !found {
+		return nil, fmt.Errorf("failed to read conflict tombstone for %s: row disappeared after insert", ip)
+	}
+	m.auditDecline(nil, tombstone)
+	return tombstone, nil
 }
 
 // ExpireLeases moves every held lease whose time is up to expired, which
