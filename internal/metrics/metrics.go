@@ -238,6 +238,26 @@ var (
 		Help: "Queued changes the control database has refused; they stay queued and are retried with a widening delay.",
 	}, []string{"plane"})
 
+	DataPlaneStartupConfigured = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_startup_recovery_configured",
+		Help: "1 when an optional data-plane startup recovery gate is configured, 0 otherwise.",
+	}, []string{"plane"})
+
+	DataPlaneStartupReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_startup_recovery_ready",
+		Help: "1 when the optional data-plane startup recovery gate is ready, 0 otherwise.",
+	}, []string{"plane"})
+
+	DataPlaneStartupLastSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_startup_recovery_last_seq",
+		Help: "Last durable sequence observed by data-plane startup recovery.",
+	}, []string{"plane"})
+
+	DataPlaneStartupState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_startup_recovery_state",
+		Help: "Current data-plane startup recovery state; the active state has value 1.",
+	}, []string{"plane", "state"})
+
 	DataPlaneHeldLeases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dataplane_held_leases",
 		Help: "Leases a data plane currently holds.",
@@ -512,6 +532,16 @@ type DataPlaneSample struct {
 	// QuotaRatio is the fraction of each configured bound in use, by bound
 	// name. A value at or above 1 means the bound is crossed.
 	QuotaRatio map[string]float64
+	// StartupConfigured reports whether an optional startup recovery gate is
+	// installed for this plane.
+	StartupConfigured bool
+	// StartupReady reports whether the configured startup recovery gate is ready.
+	StartupReady bool
+	// StartupState is a bounded state such as unconfigured, recovering, ready,
+	// failed or closed. It is used as a low-cardinality metric label.
+	StartupState string
+	// StartupLastSeq is the last durable sequence observed by startup recovery.
+	StartupLastSeq int64
 }
 
 var (
@@ -695,6 +725,10 @@ func InitMetrics() {
 			DataPlaneHeldLeases,
 			DataPlaneQuotaUsageRatio,
 			DataPlaneRefusedChanges,
+			DataPlaneStartupConfigured,
+			DataPlaneStartupReady,
+			DataPlaneStartupLastSequence,
+			DataPlaneStartupState,
 			DHCPHARedundant,
 			DHCPHAPromising,
 			DHCPRequestsInflight,
@@ -804,6 +838,17 @@ func sampleProviders() {
 			DataPlaneStoreBytes.WithLabelValues(s.Plane).Set(float64(s.StoreBytes))
 			DataPlaneHeldLeases.WithLabelValues(s.Plane).Set(float64(s.HeldLeases))
 			DataPlaneRefusedChanges.WithLabelValues(s.Plane).Set(float64(s.RefusedRows))
+			DataPlaneStartupConfigured.WithLabelValues(s.Plane).Set(boolGauge(s.StartupConfigured))
+			DataPlaneStartupReady.WithLabelValues(s.Plane).Set(boolGauge(s.StartupReady))
+			DataPlaneStartupLastSequence.WithLabelValues(s.Plane).Set(float64(s.StartupLastSeq))
+			for _, state := range []string{"unconfigured", "cold", "recovering", "ready", "failed", "closed", "custom"} {
+				DataPlaneStartupState.WithLabelValues(s.Plane, state).Set(0)
+			}
+			state := s.StartupState
+			if state == "" {
+				state = "unknown"
+			}
+			DataPlaneStartupState.WithLabelValues(s.Plane, state).Set(1)
 			for queue, n := range s.Pending {
 				DataPlanePendingChanges.WithLabelValues(s.Plane, queue).Set(float64(n))
 			}

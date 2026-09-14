@@ -13,9 +13,10 @@ var (
 )
 
 // DurableEventSink is the durable boundary used by MemoryWriteBridge. The
-// event must be appended and synchronized before the method returns.
+// returned event is canonical: it contains the WAL-assigned sequence and must
+// be the exact event submitted to the asynchronous projection.
 type DurableEventSink interface {
-	DurableEvent(context.Context, WALEvent) error
+	DurableEvent(context.Context, WALEvent) (WALEvent, error)
 }
 
 // EventSubmitter hands an already durable event to the asynchronous SQLite
@@ -71,11 +72,12 @@ func (b *MemoryWriteBridge) Commit(ctx context.Context, value Lease) error {
 	b.index.Upsert(value)
 
 	event := b.build(&value)
-	if err := b.durable.DurableEvent(ctx, event); err != nil {
+	canonical, err := b.durable.DurableEvent(ctx, event)
+	if err != nil {
 		b.restore(value.ID, previous, existed)
 		return fmt.Errorf("%w: %v", ErrWriteBridgeFailed, err)
 	}
-	if err := b.submit.Submit(event); err != nil {
+	if err := b.submit.Submit(canonical); err != nil {
 		// The WAL is already durable. Keep memory ahead of SQLite and return the
 		// failure so readiness/ACK policy can stop further new bindings; replay
 		// will recover this event after restart.

@@ -1,0 +1,64 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// This is a migration boundary guard, not proof of production WAL assembly.
+// The staged WAL/applier helpers are intentionally not wired into the default
+// process until their transaction, readiness, and shutdown contracts are closed.
+func TestDefaultProcessLeavesWALProjectionLifecycleExplicitlyUnassembled(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	mainPath := filepath.Join(filepath.Dir(file), "main.go")
+	data, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mainPath, err)
+	}
+	source := string(data)
+
+	for _, required := range []string{
+		"dhcpSrv.Start(context.Background())",
+		"dhcpSrv.Shutdown(ctx)",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("default process lost existing DHCP lifecycle call %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"lease.NewAsyncApplier(",
+		"lease.RecoverSQLiteProjection(",
+		"dhcpSrv.SetStartupGate(",
+		"lease.OpenWAL(",
+		"wal.Sync()",
+		"applier.Wait(",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("default process unexpectedly assembled staged WAL lifecycle hook %q", forbidden)
+		}
+	}
+
+	shutdownMarkers := []string{
+		"shutting down HTTP server",
+		"shutting down DNS server",
+		"shutting down DHCP server",
+		"flushing DHCP event logs",
+	}
+	last := -1
+	for _, marker := range shutdownMarkers {
+		pos := strings.Index(source, marker)
+		if pos < 0 {
+			t.Fatalf("shutdown sequence lost marker %q", marker)
+		}
+		if pos <= last {
+			t.Fatalf("shutdown marker %q is out of order", marker)
+		}
+		last = pos
+	}
+}

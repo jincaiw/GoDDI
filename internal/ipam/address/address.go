@@ -720,14 +720,26 @@ func (m *Manager) ReleaseAddress(id, actor, reason, source string) (*Address, er
 }
 
 // ObserveBySpaceIP records what a data plane reported about an address.
-//
-// The observation columns are always refreshed. The allocation status is only
-// changed when PlanLeaseObservation says the lease implies a change, so a
-// DHCP renewal cannot overwrite an administrative reservation.
-//
-// It returns changed=false with no error when the address has no row: the
-// caller decides whether the address is worth materialising.
+// It owns a transaction for compatibility callers; ObserveBySpaceIPTx lets a
+// durable facts consumer include the projection and its watermark in one commit.
 func (m *Manager) ObserveBySpaceIP(spaceID, ip string, obs Observation) (bool, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin observation: %w", err)
+	}
+	changed, err := m.ObserveBySpaceIPTx(tx, spaceID, ip, obs)
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit observation: %w", err)
+	}
+	return changed, nil
+}
+
+// ObserveBySpaceIPTx applies an observation without committing.
+func (m *Manager) ObserveBySpaceIPTx(tx *sql.Tx, spaceID, ip string, obs Observation) (bool, error) {
 	canonical, err := NormalizeIP(ip)
 	if err != nil {
 		return false, err
@@ -735,13 +747,6 @@ func (m *Manager) ObserveBySpaceIP(spaceID, ip string, obs Observation) (bool, e
 	if !obs.State.Valid() {
 		return false, fmt.Errorf("%w: %q", ErrInvalidStatus, obs.State)
 	}
-
-	tx, err := m.db.Begin()
-	if err != nil {
-		return false, fmt.Errorf("begin observation: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	current, err := getAddressBySpaceIPTx(tx, spaceID, canonical)
 	if err != nil {
 		return false, err
@@ -749,47 +754,30 @@ func (m *Manager) ObserveBySpaceIP(spaceID, ip string, obs Observation) (bool, e
 	if current == nil {
 		return false, nil
 	}
-
 	newStatus, changed, reason := PlanLeaseObservation(current.Status, obs.State)
-
-	if _, err := tx.Exec(`
-		UPDATE ipam_addresses SET observed_state=?, observed_at=datetime('now'),
-			observed_source=?, observed_mac=?, observed_hostname=?, last_seen=datetime('now'),
-			dhcp_lease_id=COALESCE(NULLIF(?, ''), dhcp_lease_id),
-			updated_at=datetime('now')
-		WHERE id = ?`,
-		string(obs.State), obs.Source, nullIfEmpty(obs.MAC), nullIfEmpty(obs.Hostname),
-		obs.LeaseID, current.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE ipam_addresses SET observed_state=?, observed_at=datetime('now'),
+		observed_source=?, observed_mac=?, observed_hostname=?, last_seen=datetime('now'),
+		dhcp_lease_id=COALESCE(NULLIF(?, ''), dhcp_lease_id), updated_at=datetime('now') WHERE id = ?`,
+		string(obs.State), obs.Source, nullIfEmpty(obs.MAC), nullIfEmpty(obs.Hostname), obs.LeaseID, current.ID); err != nil {
 		return false, fmt.Errorf("record observation: %w", err)
 	}
-
-	if changed {
-		res, err := tx.Exec(`UPDATE ipam_addresses SET status=?, updated_at=datetime('now')
-			WHERE id = ? AND status = ?`, string(newStatus), current.ID, string(current.Status))
-		if err != nil {
-			return false, fmt.Errorf("apply observation status: %w", err)
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return false, err
-		} else if n == 0 {
-			// A concurrent writer moved the status. The observation itself is
-			// recorded, which is the part that matters; leave the status alone
-			// rather than forcing a decision onto a state we never read.
-			return false, tx.Commit()
-		}
-		if err := insertHistoryTx(tx, historyEntry{
-			SpaceID: current.SpaceID, SubnetID: current.SubnetID, IPAddress: canonical,
-			Action: "observe", OldStatus: string(current.Status), NewStatus: string(newStatus),
-			Actor: obs.Actor, Reason: reason, Source: defaultSource(obs.Source),
-		}); err != nil {
-			return false, err
-		}
+	if !changed {
+		return false, nil
 	}
-
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit observation: %w", err)
+	res, err := tx.Exec(`UPDATE ipam_addresses SET status=?, updated_at=datetime('now') WHERE id = ? AND status = ?`, string(newStatus), current.ID, string(current.Status))
+	if err != nil {
+		return false, fmt.Errorf("apply observation status: %w", err)
 	}
-	return changed, nil
+	if n, err := res.RowsAffected(); err != nil {
+		return false, err
+	} else if n == 0 {
+		return false, nil
+	}
+	if err := insertHistoryTx(tx, historyEntry{SpaceID: current.SpaceID, SubnetID: current.SubnetID, IPAddress: canonical,
+		Action: "observe", OldStatus: string(current.Status), NewStatus: string(newStatus), Actor: obs.Actor, Reason: reason, Source: defaultSource(obs.Source)}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EnsureAddress creates the row for an address if it does not exist.

@@ -49,6 +49,7 @@ func withProviders(t *testing.T) {
 		dhcpScopeStatsFn = nil
 		backupStatsFn = nil
 		secondaryZoneStatsFn = nil
+		dataPlaneStatsFn = nil
 	})
 }
 
@@ -64,6 +65,36 @@ func samples(text, metric string) []string {
 		}
 	}
 	return out
+}
+
+func TestSampleProvidersPublishesStartupRecoveryState(t *testing.T) {
+	withProviders(t)
+	dataPlaneStatsFn = func() []DataPlaneSample {
+		return []DataPlaneSample{{
+			Plane:             "lease",
+			Level:             "failing",
+			StartupConfigured: true,
+			StartupReady:      false,
+			StartupState:      "failed",
+			StartupLastSeq:    41,
+		}}
+	}
+
+	sampleProviders()
+	text := expose(t, DataPlaneStartupConfigured, DataPlaneStartupReady, DataPlaneStartupLastSequence, DataPlaneStartupState)
+	for _, want := range []string{
+		`goddi_dataplane_startup_recovery_configured{plane="lease"} 1`,
+		`goddi_dataplane_startup_recovery_ready{plane="lease"} 0`,
+		`goddi_dataplane_startup_recovery_last_seq{plane="lease"} 41`,
+		`goddi_dataplane_startup_recovery_state{plane="lease",state="failed"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "secret") || strings.Contains(text, "permission denied") {
+		t.Errorf("startup error text leaked into metrics: %s", text)
+	}
 }
 
 func TestSampleProvidersPublishesDHCPPoolUtilisation(t *testing.T) {

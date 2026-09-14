@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/jasonwa/goddi/internal/dhcp/lease"
 )
 
 // DNSEventAction is the kind of change a lease transition owes the DNS side.
@@ -82,6 +84,34 @@ func (o *DNSOutbox) Enqueue(e DNSEvent) error {
 		e.ScopeID, e.IPAddress, e.MACAddress, e.Hostname)
 	if err != nil {
 		return fmt.Errorf("dns outbox: enqueue %s for lease %s: %w", e.Action, e.LeaseID, err)
+	}
+	return nil
+}
+
+// EnqueueTx writes the compatibility DNS event without committing the caller's
+// transaction. It is used only by the staged facts mutation seam.
+func (o *DNSOutbox) EnqueueTx(tx *sql.Tx, l *lease.Lease, action lease.DNSMutationAction) error {
+	if o == nil || o.db == nil {
+		return fmt.Errorf("dns outbox: nil outbox")
+	}
+	if tx == nil || l == nil || l.ID == "" {
+		return fmt.Errorf("dns outbox: transaction and lease are required")
+	}
+	var dnsAction DNSEventAction
+	switch action {
+	case lease.DNSActionUpsert:
+		dnsAction = DNSEventCreate
+	case lease.DNSActionDelete:
+		dnsAction = DNSEventDelete
+	default:
+		return fmt.Errorf("dns outbox: unsupported mutation action %q", action)
+	}
+	_, err := tx.Exec(`INSERT INTO dhcp_dns_events
+		(lease_id, generation, action, scope_id, ip_address, mac_address, hostname)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, l.ID, l.Generation, string(dnsAction),
+		l.ScopeID, l.IPAddress, l.MACAddress, l.Hostname)
+	if err != nil {
+		return fmt.Errorf("dns outbox: enqueue tx %s for lease %s: %w", dnsAction, l.ID, err)
 	}
 	return nil
 }

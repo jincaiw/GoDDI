@@ -1,6 +1,10 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
@@ -31,5 +35,66 @@ func TestClaimAvailableRemainsOutsideLeaseStoreContract(t *testing.T) {
 	index := lease.NewMemoryIndex()
 	if _, ok := any(index).(LeaseStore); ok {
 		t.Fatal("MemoryIndex unexpectedly satisfies the DHCP LeaseStore contract")
+	}
+}
+
+func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	cases := []struct {
+		name   string
+		path   string
+		must   []string
+		forbid []string
+	}{
+		{
+			name: "dhcp handler",
+			path: filepath.Join(root, "internal", "dhcp", "server", "handler.go"),
+			must: []string{
+				"s.leaseMgr.ReserveAddress",
+				"s.leaseMgr.CreateLease",
+				"s.leaseMgr.ActivateLease",
+				"s.leaseMgr.RenewLease",
+				"s.leaseMgr.ReleaseLease",
+				"s.leaseMgr.QuarantineIP",
+			},
+			forbid: []string{
+				"MutationCommand{",
+			},
+		},
+		{
+			name:   "dhcp expiry",
+			path:   filepath.Join(root, "internal", "dhcp", "server", "server.go"),
+			must:   []string{"s.leaseMgr.ExpireLeases()"},
+			forbid: []string{"MutationCommand{"},
+		},
+		{
+			name:   "management delete",
+			path:   filepath.Join(root, "internal", "api", "handler", "dhcp_lease.go"),
+			must:   []string{"DHCPServices.LeaseMgr.ReleaseLease(id)"},
+			forbid: []string{"MutationCommand{"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.path, err)
+			}
+			text := string(data)
+			for _, pattern := range tc.must {
+				if !strings.Contains(text, pattern) {
+					t.Fatalf("%s no longer contains boundary evidence %q", tc.path, pattern)
+				}
+			}
+			for _, pattern := range tc.forbid {
+				if strings.Contains(text, pattern) {
+					t.Fatalf("%s unexpectedly contains production migration hook %q", tc.path, pattern)
+				}
+			}
+		})
 	}
 }

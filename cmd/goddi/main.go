@@ -60,7 +60,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.8.3"
+	Version   = "0.8.4"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -1415,6 +1415,7 @@ func runServer(configPath string) error {
 				}
 			}
 			st := dataPlaneStatus(dhcpRunner)
+			mergeStartupStatus(&st, dhcpStartupStatus(dhcpSrv))
 			if haEnabled {
 				// Losing the second copy is a caveat on top of whatever the
 				// data plane reports, not a replacement for it. Both are true
@@ -1431,7 +1432,16 @@ func runServer(configPath string) error {
 			out = append(out, dataPlaneSample("zone", dnsRunner))
 		}
 		if dhcpRunner != nil {
-			out = append(out, dataPlaneSample("lease", dhcpRunner))
+			sample := dataPlaneSample("lease", dhcpRunner)
+			startup := dhcpStartupStatus(dhcpSrv)
+			sample.StartupConfigured = startup.Configured
+			sample.StartupReady = startup.Ready
+			sample.StartupState = startup.State
+			sample.StartupLastSeq = startup.LastSeq
+			if startup.Configured && !startup.Ready {
+				sample.Level = handler.Worse(sample.Level, handler.LevelFailing)
+			}
+			out = append(out, sample)
 		}
 		return out
 	})
@@ -3157,6 +3167,43 @@ func currentHAState(role string, repl *ha.Replicator, mirror *ha.Mirror) ha.Stat
 	default:
 		return ha.StateSolo
 	}
+}
+
+func dhcpStartupStatus(s *dhcpserver.Server) dhcpserver.StartupGateStatus {
+	if s == nil {
+		return dhcpserver.StartupGateStatus{State: "unconfigured", Ready: true}
+	}
+	return s.StartupStatus()
+}
+
+// mergeStartupStatus folds the optional DHCP recovery gate into readiness.
+//
+// The recovery gate is deliberately reported as a DHCP-plane failure when it
+// is configured but not ready: the server must not admit clients until its
+// durable projection has been recovered. Only bounded state is exposed in the
+// authenticated detail endpoint; the coordinator's error text may contain
+// paths or implementation details and is therefore never copied into the
+// readiness payload.
+func mergeStartupStatus(st *handler.PlaneStatus, status dhcpserver.StartupGateStatus) {
+	if st == nil {
+		return
+	}
+	st.Details = mergeDetails(st.Details, map[string]any{
+		"startup_recovery_configured": status.Configured,
+		"startup_recovery_ready":      status.Ready,
+		"startup_recovery_state":      status.State,
+		"startup_recovery_last_seq":   status.LastSeq,
+	})
+	if !status.Configured || status.Ready {
+		return
+	}
+
+	st.Level = handler.Worse(st.Level, handler.LevelFailing)
+	if status.State == "failed" {
+		st.Reasons = append(st.Reasons, "startup_recovery_failed")
+		return
+	}
+	st.Reasons = append(st.Reasons, "startup_recovery_not_ready")
 }
 
 // mergeHAStatus folds this node's redundancy into the DHCP plane's readiness.

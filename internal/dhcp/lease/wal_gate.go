@@ -31,34 +31,40 @@ func NewWALDurableGate(wal *WALFile, nextOp func(*Lease) WALEvent) (*WALDurableG
 	return &WALDurableGate{wal: wal, nextOp: nextOp}, nil
 }
 
-// Durable appends and syncs one lease event. Context cancellation is checked
-// before touching the file; once file I/O begins, the WAL Sync result is the
-// authoritative boundary and any error is propagated fail-closed. Sequence
-// assignment and append+sync are one WAL critical section so concurrent DHCP
-// workers cannot reserve the same sequence.
-func (g *WALDurableGate) Durable(ctx context.Context, value *Lease) error {
+// DurableEvent appends and syncs an already-built lease event, returning the
+// canonical event with the sequence assigned by the WAL. The returned value is
+// the only event that may be submitted to a projection: it prevents the old
+// sequence-less builder event from diverging from the durable record.
+func (g *WALDurableGate) DurableEvent(ctx context.Context, event WALEvent) (WALEvent, error) {
 	if g == nil || g.wal == nil {
-		return ErrWALGateClosed
-	}
-	if value == nil {
-		return fmt.Errorf("%w: lease is nil", ErrWALGateClosed)
+		return event, ErrWALGateClosed
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return event, ctx.Err()
 	default:
 	}
-	event := g.nextOp(value)
 	if event.Version == 0 {
 		event.Version = currentWALEventVersion
 	}
 	if event.Op == "" {
 		event.Op = WALEventUpsert
 	}
+	return g.wal.AppendDurable(event)
+}
+
+// Durable builds one lease event, appends and syncs it, and discards no
+// sequence information. It remains the compatibility implementation of the
+// server DurableLeaseGate interface.
+func (g *WALDurableGate) Durable(ctx context.Context, value *Lease) error {
+	if value == nil {
+		return fmt.Errorf("%w: lease is nil", ErrWALGateClosed)
+	}
+	event := g.nextOp(value)
 	if event.Lease == nil && event.Op == WALEventUpsert {
 		copy := *value
 		event.Lease = &copy
 	}
-	_, err := g.wal.AppendDurable(event)
+	_, err := g.DurableEvent(ctx, event)
 	return err
 }

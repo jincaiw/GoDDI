@@ -19,11 +19,12 @@ var (
 // WALEvent is the versioned durable boundary record. The complete Lease value
 // is carried so replay can rebuild the read index without consulting SQLite.
 type WALEvent struct {
-	Version int    `json:"version"`
-	Seq     int64  `json:"seq"`
-	Op      string `json:"op"`
-	Lease   *Lease `json:"lease,omitempty"`
-	LeaseID string `json:"lease_id,omitempty"`
+	Version  int          `json:"version"`
+	Seq      int64        `json:"seq"`
+	Op       string       `json:"op"`
+	Mutation MutationKind `json:"mutation,omitempty"`
+	Lease    *Lease       `json:"lease,omitempty"`
+	LeaseID  string       `json:"lease_id,omitempty"`
 }
 
 const (
@@ -41,6 +42,11 @@ func EncodeWALEvent(event WALEvent) ([]byte, error) {
 func validateWALEvent(event WALEvent) error {
 	if event.Version != currentWALEventVersion || event.Seq <= 0 {
 		return fmt.Errorf("%w: version=%d seq=%d", ErrWALCorrupt, event.Version, event.Seq)
+	}
+	if event.Mutation != "" {
+		if _, err := ContractFor(event.Mutation); err != nil {
+			return fmt.Errorf("%w: mutation: %v", ErrWALCorrupt, err)
+		}
 	}
 	switch event.Op {
 	case WALEventUpsert:

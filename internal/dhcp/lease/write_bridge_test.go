@@ -14,12 +14,15 @@ type durableEventProbe struct {
 	calls int
 }
 
-func (p *durableEventProbe) DurableEvent(_ context.Context, event WALEvent) error {
+func (p *durableEventProbe) DurableEvent(_ context.Context, event WALEvent) (WALEvent, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
 	p.event = event
-	return p.err
+	if event.Seq == 0 && p.err == nil {
+		event.Seq = int64(p.calls)
+	}
+	return event, p.err
 }
 
 type submitEventProbe struct {
@@ -117,10 +120,17 @@ func TestMemoryWriteBridgeCommitsMemoryDurabilityThenProjection(t *testing.T) {
 	if got, ok := index.Get(value.ID); !ok || got.IPAddress != value.IPAddress {
 		t.Fatalf("memory value = %+v, %v", got, ok)
 	}
-	if durable.calls != 1 || submit.calls != 1 {
-		t.Fatalf("durable calls=%d submit calls=%d", durable.calls, submit.calls)
+	durable.mu.Lock()
+	durableCalls := durable.calls
+	durable.mu.Unlock()
+	submit.mu.Lock()
+	submitCalls := submit.calls
+	submitEvent := submit.event
+	submit.mu.Unlock()
+	if durableCalls != 1 || submitCalls != 1 {
+		t.Fatalf("durable calls=%d submit calls=%d", durableCalls, submitCalls)
 	}
-	if submit.event.Lease == nil || submit.event.Lease.ID != value.ID {
+	if submitEvent.Seq != 1 || submitEvent.Lease == nil || submitEvent.Lease.ID != value.ID {
 		t.Fatalf("submitted event = %+v", submit.event)
 	}
 }

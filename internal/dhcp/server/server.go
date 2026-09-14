@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -70,6 +71,10 @@ type Server struct {
 	// default SQLite constructor leaves it nil and retains the existing path.
 	durableGate DurableLeaseGate
 
+	// startupGate is optional. When configured, Start must complete recovery
+	// before binding UDP :67. The default constructor leaves it nil.
+	startupGate StartupGate
+
 	// outboxWake is told that a DNS change was just queued, so the store's
 	// replication loop can push it without waiting for its next poll. Optional:
 	// unset means the entry waits for the poll, which is correct and slower.
@@ -77,6 +82,9 @@ type Server struct {
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+
+	requestHandler func(dhcpRequest)
+	shutdownOnce   sync.Once
 }
 
 // Lease actions passed to a LeaseObserver.
@@ -235,7 +243,7 @@ func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, e
 	if store == nil {
 		panic("dhcp server: nil lease store")
 	}
-	return &Server{
+	s := &Server{
 		scopeMgr:     scope.NewManager(leaseDB),
 		leaseMgr:     store,
 		reservMgr:    reservation.NewManager(leaseDB),
@@ -248,6 +256,10 @@ func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, e
 		workers:      defaultRequestWorkers,
 		quit:         make(chan struct{}),
 	}
+	s.requestHandler = func(req dhcpRequest) {
+		s.handleMessage(req.msg, req.addr, req.conn, req.ifaceName, req.serverIP)
+	}
+	return s
 }
 
 // SetDurableLeaseGate enables the staged WAL durable boundary for ACKs. It is
@@ -256,6 +268,18 @@ func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, e
 // complete.
 func (s *Server) SetDurableLeaseGate(gate DurableLeaseGate) {
 	s.durableGate = gate
+}
+
+// SetStartupGate installs an explicit recovery gate. Start will run recovery
+// before opening the DHCP socket and will fail closed if recovery is not ready.
+// Leaving it unset preserves the current default SQLite startup behavior.
+func (s *Server) SetStartupGate(gate StartupGate) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	if s.started {
+		return
+	}
+	s.startupGate = gate
 }
 
 // SetTrustedRelays restricts relayed requests to relay agents inside the given
@@ -320,6 +344,18 @@ func (s *Server) relayIsTrusted(msg *dhcpv4.DHCPv4) bool {
 
 // Start starts the DHCP server.
 func (s *Server) Start(ctx context.Context) error {
+	s.admissionMu.Lock()
+	gate := s.startupGate
+	s.admissionMu.Unlock()
+	if gate != nil {
+		if err := gate.Recover(ctx); err != nil {
+			return fmt.Errorf("DHCP startup recovery: %w", err)
+		}
+		if err := RequireStartupReady(gate); err != nil {
+			return err
+		}
+	}
+
 	// Expire old leases on startup. Bindings that lapsed while the process was
 	// down must take their DNS records with them, otherwise a name keeps
 	// pointing at an address the pool has already reissued.
@@ -464,6 +500,12 @@ func (s *Server) receiveLoop(conn net.PacketConn, ifaceName string, serverIP net
 }
 
 func (s *Server) admitRequest(req dhcpRequest, ifaceName string) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	if s.isStopped() {
+		metrics.RecordDHCPRequestDropped()
+		return
+	}
 	select {
 	case s.requestQueue <- req:
 		metrics.SetDHCPRequestQueue(len(s.requestQueue), cap(s.requestQueue))
@@ -498,7 +540,11 @@ func (s *Server) requestWorker() {
 			}
 			started := time.Now()
 			metrics.AddDHCPRequestInflight(1)
-			s.handleMessage(req.msg, req.addr, req.conn, req.ifaceName, req.serverIP)
+			if s.requestHandler != nil {
+				s.requestHandler(req)
+			} else {
+				s.handleMessage(req.msg, req.addr, req.conn, req.ifaceName, req.serverIP)
+			}
 			metrics.AddDHCPRequestInflight(-1)
 			elapsed := time.Since(started)
 			metrics.RecordDHCPRequestDuration(elapsed)
@@ -820,32 +866,45 @@ func (s *Server) isStopped() bool {
 	}
 }
 
-// Shutdown gracefully stops the DHCP server.
+var ErrShutdownTimeout = errors.New("dhcp server: shutdown timed out")
+
+// Shutdown gracefully stops the DHCP server. A timeout or cancelled context is
+// returned to the caller instead of being reported as a successful drain.
+// Already-durable WAL events remain in the WAL; staged projection owners must
+// replay them on the next startup when their applier did not drain.
 func (s *Server) Shutdown(ctx context.Context) error {
-	slog.Info("DHCP server: shutting down...")
-	close(s.quit)
-
-	// Close all listeners.
-	for _, conn := range s.listeners {
-		conn.Close()
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	slog.Info("DHCP server: shutting down...")
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	s.shutdownOnce.Do(func() {
+		close(s.quit)
+		for _, conn := range s.listeners {
+			_ = conn.Close()
+		}
+	})
 
-	// Wait for receive loops and workers to finish with a timeout.
+	// Wait for receive loops and workers with both a bounded fallback and the
+	// caller's cancellation. Neither path is a successful drain.
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		s.workerWG.Wait()
 		close(done)
 	}()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	select {
 	case <-done:
 		slog.Info("DHCP server: receive loops exited cleanly")
-	case <-time.After(5 * time.Second):
+		return nil
+	case <-timer.C:
 		slog.Warn("DHCP server: shutdown timed out waiting for receive loops")
+		return ErrShutdownTimeout
 	case <-ctx.Done():
 		slog.Warn("DHCP server: shutdown context cancelled")
+		return ctx.Err()
 	}
-
-	slog.Info("DHCP server: stopped")
-	return nil
 }

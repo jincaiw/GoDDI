@@ -1,6 +1,6 @@
 # ADR-0004：DHCP 内存 LeaseStore 与异步 WAL（设计与 spike）
 
-- 状态：**分阶段契约完成，默认生产实现未切换**（2026-09-13）
+- 状态：**分阶段契约继续收敛，默认生产实现未切换**（2026-09-13）
 - 本轮边界守卫：默认 `dhcpserver.New` 仍使用 SQLite-backed `lease.Manager`；`MemoryIndex.ClaimAvailable` 不满足 DHCP `LeaseStore` 接口，未接入 `HandleDiscover`；`durableGate` 默认为空，WAL durable ACK 仍为可选 hook。
 - 范围：B8.6 / N3 / N4
 - 基线：已发布 `v0.8.2` / `ccf9eff`；历史设计基线为 `v0.8.0` / `28ed5aa`
@@ -35,9 +35,11 @@ N4.1 已新增 `RecoverMemoryIndex`：先在临时 map 上装载 SQLite/快照�
 
 N4.2 将恢复编排接入 `WALFile` 生命周期：`WALFile.RecoverMemoryIndex` 复用已打开文件的 header/replay 校验，不重复打开或绕过文件锁；真实临时 WAL 测试验证 append、sync、恢复和目标索引发布。N4.2 仍只提供装配适配器，尚未改变 `New` 的默认 SQLite 路径。
 
-N4.3 新增 `WALDurableGate`：由 ACK 前置 gate 显式执行事件构造、WAL append 和 `Sync`，上下文取消、nil 依赖和文件错误均 fail-closed；不自动提交 SQLite applier，不把 WAL durable 误写成 SQLite applied，也不改变默认 Server 构造。本轮补充 `WALFile.AppendDurable`，将 sequence 分配、append 和 `Sync` 置于同一文件临界区，避免多 worker 并发 gate 读取同一旧 sequence 后发生重复序号竞态，并补充文件级自动序列与关闭后 fail-closed 测试。
+N4.3 新增 `WALDurableGate`：由 ACK 前置 gate 显式执行事件构造、WAL append 和 `Sync`，上下文取消、nil 依赖和文件错误均 fail-closed；不自动提交 SQLite applier，不把 WAL durable 误写成 SQLite applied，也不改变默认 Server 构造。本轮补充 `WALFile.AppendDurable`，将 sequence 分配、append 和 `Sync` 置于同一文件临界区，避免多 worker 并发 gate 读取同一旧 sequence 后发生重复序号竞态，并补充文件级自动序列与关闭后 fail-closed 测试。N5 继续收敛时，`WALDurableGate.DurableEvent` 返回带 WAL canonical sequence 的完整事件，供 projection 原样提交，避免 durable 记录与异步 apply 事件失配。
 
 N4.4 新增 `MemoryWriteBridge`：按 memory update -> WAL durable -> async projection submit 的顺序协调一次租约状态变更；WAL durable 失败时恢复旧内存值且不提交 projection，projection queue 满或 apply 失败时保留已 durable 的内存值并返回错误，后续由 replay 追平。该桥是 staged contract，不替换 `lease.Manager`，也不自动接管 DHCP 热路径。
+
+N5 前置契约新增 `MutationContract` / `MutationCommand`：统一登记 DISCOVER offer、REQUEST activate/renew、RELEASE、DECLINE、EXPIRE 的允许前状态、结果状态、WAL 操作、DNS/IPAM 派生动作、generation 规则和 replay 形态。`MutationCommand.WALEvent` 只生成未分配 sequence 的 canonical snapshot，sequence 仍由 WAL 负责；未知 mutation、非法前状态或结果状态在副作用前 fail-closed。WAL 事件可携带 mutation kind，重放校验会拒绝未知 kind。另新增 `lease_projection_watermark` 持久化表与 `ApplyWatermark`：重复 sequence 幂等忽略、下一连续 sequence 才推进、gap/非正 sequence fail-closed；`ApplyWALEventTx` 可在调用方事务内将租约快照 upsert/remove 与该水位一起提交或回滚，并已覆盖 gap 与 rollback 测试；`NewSQLiteProjectionApplier` 提供显式的 AsyncApplier 装配辅助，每个事件单独开启并提交一个包含租约投影和水位的 SQL transaction，并覆盖异步成功、重复和 gap 失败。新增 `RecoverSQLiteProjection`：启动时读取持久化 `applied_seq`，通过打开的 `WALFile` 重放未应用事件，事件逐个经同一投影事务提交；任何 gap、损坏或投影错误均返回 `ErrStartupNotReady`，不修改失败事件的投影状态。该恢复辅助尚未接入默认进程启动、admission 或 `/ready`。新增 `StartupCoordinator` 作为显式 fail-closed 状态门：只有同步恢复函数成功后才从 `cold/recovering` 进入 `ready`；恢复失败、上下文取消、重复恢复或关闭均不得放行。DHCP `StartupGate` 可选接入 `Server.Start`，配置后必须在绑定 UDP :67 前完成恢复并确认 ready；默认构造不配置该 gate。`Server.StartupStatus` 提供无 I/O 的 `configured/ready/state/last_seq/error` 观测，未配置 gate 时报告 `unconfigured` 且保持兼容 ready 语义；现已由 DHCP readiness probe 接入认证 `/api/v1/system/dataplane` 详情，并由现有 data-plane metrics 发布低基数的 configured/ready/state/last_seq；匿名 `/ready` 仍只返回粗粒度状态。恢复错误原文不进入 readiness 或 metrics payload，失败与未就绪分别映射为稳定 reason。DNS outbox、IPAM observation 和该水位仍未接入同一生产事务。以上契约目前用于 shadow/测试/后续事务编排，不改变默认 SQLite Manager。
 
 后续必须完成真实内存写事实源、启动 replay/apply 装配、崩溃/掉电/容量验收，并保留 SQLite fallback 和独立负向测试。
 
@@ -123,6 +125,8 @@ SQLite apply 以 `seq` 或等价事件 ID 做幂等闸门：
 5. 恢复 admission；在 replay 未完成、发现 gap 或 WAL 不可读时保持 fail-closed。
 
 当前 `durability_test.go` 的 SIGKILL 证据可复用于 SQLite apply 的崩溃一致性，但**不能**代替内存 LeaseStore WAL replay spike，也不能证明真实掉电。真实掉电仍须在目标硬件上切断电源验证。
+
+DHCP 关闭边界：`Server.Shutdown` 先停止新的 request admission，再关闭监听器，随后等待 receive loop 和 request worker。context 取消返回调用方错误，固定上限返回 `ErrShutdownTimeout`；不得把未完成 worker drain 记录为成功。`Server` 不直接拥有 `AsyncApplier`，因此 WAL/applier 的关闭、drain 和启动 replay 顺序必须由外层装配方负责。已 durable 但未投影的 WAL 事件不得删除，关闭后必须保留给下一次启动恢复。该边界收紧的是 fail-closed 语义，不代表默认 DHCP 已切换到 WAL durable ACK 或内存事实源。
 
 ## 未决实现选择
 
