@@ -90,6 +90,27 @@ groups:
 
   - name: goddi-dhcp
     rules:
+      - alert: GoDDIDHCPUtilizationScrapeFailed
+        expr: goddi_dhcp_scope_utilization_scrape_error == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP 地址池利用率采样失败"
+          description: "最近一次 DHCP scope 利用率读取失败，scope 利用率序列会保留最后一次成功值而不是伪造为 0。检查 lease 数据面数据库、连接池和服务日志。"
+
+      - alert: GoDDIDHCPScopeUtilizationStale
+        expr: time() - goddi_dhcp_scope_utilization_last_success_timestamp_seconds > 15 * 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP 地址池利用率数据过旧"
+          description: "DHCP scope 利用率超过 15 分钟没有成功采样；该指标可能仍是旧值。若服务刚启动且从未成功采样，时间戳序列缺席，应检查采样失败告警和服务日志。"
+
+      # The utilization values are retained across a failed lease-store read;
+      # alert on the health signal separately so a stale value is not mistaken
+      # for a fresh measurement.
       - alert: GoDDIDHCPScopeNearlyFull
         expr: goddi_dhcp_scope_usage_ratio > 0.9
         for: 15m
@@ -97,7 +118,7 @@ groups:
           severity: warning
         annotations:
           summary: "DHCP 地址池接近用尽"
-          description: "scope {{ $labels.scope }} 的地址池占用超过 90%。分子是分配器拒绝发放的同一集合（active/offered/conflict），所以这个比例下降只能靠租约到期或扩容池。"
+          description: "scope {{ $labels.scope }} 的地址池占用超过 90%。分子是分配器拒绝发放的不可用地址集合（active/offered/conflict 租约与启用的 reservation，重复 IP 只计一次），所以这个比例下降只能靠租约释放/到期、取消 reservation 或扩容池。"
 
       - alert: GoDDIDHCPScopeExhausted
         expr: goddi_dhcp_scope_usage_ratio >= 1

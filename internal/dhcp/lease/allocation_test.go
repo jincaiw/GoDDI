@@ -203,6 +203,29 @@ func TestQuarantineIP_WritesTombstoneWhenNoLeaseExists(t *testing.T) {
 	}
 }
 
+func TestQuarantineIPDoesNotCrossScopeForSameIP(t *testing.T) {
+	db := newAllocDB(t)
+	seedScope(t, db, "scope-2", "other", "198.51.100.0/24", "192.0.2.10", "192.0.2.12")
+	m := NewManager(db)
+	lease, err := m.CreateLease("scope-2", "192.0.2.10", "aa:bb:cc:dd:ee:08", "other-host", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateLease: %v", err)
+	}
+	if _, err := m.QuarantineIP("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:09"); err != nil {
+		t.Fatalf("QuarantineIP: %v", err)
+	}
+	if got := statusOf(t, db, lease.ID); got != LeaseStatusActive {
+		t.Fatalf("cross-scope lease status = %s, want active", got)
+	}
+	var tombstones int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_leases WHERE scope_id=? AND ip_address=? AND status=?`, "scope-1", "192.0.2.10", string(LeaseStatusConflict)).Scan(&tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if tombstones != 1 {
+		t.Fatalf("scope-1 tombstones = %d, want 1", tombstones)
+	}
+}
+
 func TestQuarantineIP_RequiresScope(t *testing.T) {
 	db := newAllocDB(t)
 	m := NewManager(db)

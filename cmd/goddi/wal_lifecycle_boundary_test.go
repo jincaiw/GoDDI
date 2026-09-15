@@ -62,3 +62,69 @@ func TestDefaultProcessLeavesWALProjectionLifecycleExplicitlyUnassembled(t *test
 		last = pos
 	}
 }
+
+func TestDefaultProcessKeepsLegacyDNSConsumerUntilFactsMigrationIsComplete(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	mainPath := filepath.Join(filepath.Dir(file), "main.go")
+	data, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mainPath, err)
+	}
+	source := string(data)
+
+	if !strings.Contains(source, "dhcpinternal.NewDNSConsumer(dnsStore.DB, link)") {
+		t.Fatal("default process no longer assembles the legacy DHCP-to-DNS consumer")
+	}
+	for _, forbidden := range []string{
+		"facts.NewObservationOutbox(",
+		"facts.NewSequenceAllocator(",
+		"facts.NewWatermarkStore(",
+		"NewFactsDNSConsumer(",
+		"FactsDNSConsumer",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("default process unexpectedly assembled unified facts DNS migration hook %q", forbidden)
+		}
+	}
+}
+
+func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	mainPath := filepath.Join(filepath.Dir(file), "main.go")
+	data, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mainPath, err)
+	}
+	source := string(data)
+
+	for _, forbidden := range []string{
+		"ipam.NewFactsConsumer(",
+		"ipam.NewFactsConsumerWithOptions(",
+		"factsConsumer.Start(",
+		"factsConsumer.Wake(",
+		"factsConsumer.Stop(",
+		"FactsConsumerLifecycle",
+		"facts.ObservationOutbox",
+		"facts.NewSequenceAllocator(",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("default process unexpectedly assembled opt-in facts consumer lifecycle hook %q", forbidden)
+		}
+	}
+
+	for _, required := range []string{
+		"ipam.NewLinkage(db.DB)",
+		"dhcpSrv.SetLeaseObserver(ipamLinkage)",
+		"ipamLinkage.Reconcile(ipamReconcileLimit)",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("default process lost existing legacy IPAM path %q", required)
+		}
+	}
+}

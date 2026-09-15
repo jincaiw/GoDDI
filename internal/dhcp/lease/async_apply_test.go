@@ -172,6 +172,73 @@ func TestAsyncApplierWaitReturnsClosedWhenCancelledWithQueuedWork(t *testing.T) 
 	}
 }
 
+func TestAsyncApplierDrainAndCloseWaitsForAcceptedEvents(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	applier, err := NewAsyncApplier(context.Background(), 2, 0, func(context.Context, WALEvent) error {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 1, Op: WALEventRemove, LeaseID: "l1"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 2, Op: WALEventRemove, LeaseID: "l2"}); err != nil {
+		t.Fatal(err)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- applier.DrainAndClose(context.Background()) }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("DrainAndClose returned before accepted work completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if applier.Applied() != 2 {
+		t.Fatalf("applied = %d, want 2", applier.Applied())
+	}
+}
+
+func TestAsyncApplierDrainAndCloseHonorsContext(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	applier, err := NewAsyncApplier(context.Background(), 1, 0, func(context.Context, WALEvent) error {
+		close(started)
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		close(release)
+		_ = applier.Close()
+	}()
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 1, Op: WALEventRemove, LeaseID: "l"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := applier.DrainAndClose(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DrainAndClose error = %v, want deadline exceeded", err)
+	}
+	if err := applier.Submit(WALEvent{Version: 1, Seq: 2, Op: WALEventRemove, LeaseID: "l"}); err != nil {
+		t.Fatalf("applier remained unavailable after failed drain: %v", err)
+	}
+}
+
 func TestAsyncApplierRejectsInvalidConfigurationAndClosedSubmit(t *testing.T) {
 	if _, err := NewAsyncApplier(context.Background(), 0, 0, func(context.Context, WALEvent) error { return nil }); err == nil {
 		t.Fatal("capacity zero unexpectedly accepted")

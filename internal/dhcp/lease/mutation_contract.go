@@ -222,6 +222,10 @@ func (c MutationContract) Allows(status LeaseStatus) bool {
 	return false
 }
 
+// maxLeaseGeneration is the largest generation that can be incremented without
+// wrapping the signed int64 persisted by SQLite and carried by facts/WAL.
+const maxLeaseGeneration int64 = 1<<63 - 1
+
 // validateGeneration enforces the generation rule before any WAL, SQLite, DNS,
 // or IPAM side effect is attempted.
 func validateGeneration(rule GenerationRule, before, after *Lease) error {
@@ -254,8 +258,12 @@ func validateGeneration(rule GenerationRule, before, after *Lease) error {
 			return fmt.Errorf("%w: resulting generation=%d, want 1", ErrInvalidMutationState, after.Generation)
 		}
 	case GenerationIncrement:
-		if after.Generation != before.Generation+1 {
-			return fmt.Errorf("%w: resulting generation=%d, want %d", ErrInvalidMutationState, after.Generation, before.Generation+1)
+		if before.Generation == maxLeaseGeneration {
+			return fmt.Errorf("%w: generation would overflow at %d", ErrInvalidMutationState, before.Generation)
+		}
+		want := before.Generation + 1
+		if after.Generation != want {
+			return fmt.Errorf("%w: resulting generation=%d, want %d", ErrInvalidMutationState, after.Generation, want)
 		}
 	default:
 		return fmt.Errorf("%w: unknown generation rule %q", ErrInvalidMutation, rule)

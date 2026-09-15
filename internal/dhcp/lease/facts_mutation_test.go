@@ -88,6 +88,24 @@ func TestFactsMutationWriterDerivesEventIDWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestFactsMutationWriterActivateRejectsGenerationOverflow(t *testing.T) {
+	writer, db, manager := newFactsMutationWriter(t)
+	offered := seedOfferedLease(t, db, manager)
+	if _, err := db.Exec(`UPDATE dhcp_leases SET generation=9223372036854775807 WHERE id=?`, offered.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.ActivateLease(context.Background(), "event-activate-overflow", "dhcp-node-a", "space-1", offered.ID, time.Hour); !errors.Is(err, ErrInvalidMutationState) {
+		t.Fatalf("ActivateLease() error = %v, want overflow rejection", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_leases WHERE id=? AND status=?`, offered.ID, string(LeaseStatusOffered)).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("offered lease changed after rejected activation: rows=%d", count)
+	}
+}
+
 func TestFactsMutationWriterActivateCommitsLeaseAndFactTogether(t *testing.T) {
 	writer, db, manager := newFactsMutationWriter(t)
 	offered := seedOfferedLease(t, db, manager)
@@ -163,6 +181,28 @@ func TestFactsMutationWriterRenewCommitsGenerationAndFact(t *testing.T) {
 	}
 	if action != string(MutationRenew) {
 		t.Fatalf("fact action = %s", action)
+	}
+}
+
+func TestFactsMutationWriterRenewRejectsGenerationOverflow(t *testing.T) {
+	writer, db, manager := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	lease, err := manager.CreateLease("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", "host-10", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE dhcp_leases SET generation=? WHERE id=?`, maxLeaseGeneration, lease.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.RenewLease(context.Background(), "event-overflow", "dhcp-node-a", "space-1", lease.ID, time.Hour); !errors.Is(err, ErrInvalidMutationState) {
+		t.Fatalf("RenewLease() error = %v, want overflow rejection", err)
+	}
+	var generation int64
+	if err := db.QueryRow(`SELECT generation FROM dhcp_leases WHERE id=?`, lease.ID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	if generation != maxLeaseGeneration {
+		t.Fatalf("generation = %d, want unchanged max generation", generation)
 	}
 }
 

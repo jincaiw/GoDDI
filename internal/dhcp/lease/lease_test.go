@@ -18,6 +18,31 @@ func newTestDB(t *testing.T) *sql.DB {
 // used to compare it lexicographically against datetime('now') output
 // (" " separator), so leases expiring on the current day were never matched
 // ('T' > ' '). The julianday() comparison must expire them.
+func TestRenewLeaseRejectsGenerationOverflow(t *testing.T) {
+	db := newTestDB(t)
+	m := NewManager(db)
+	lease, err := m.CreateLease("scope-1", "192.168.10.100", "aa:bb:cc:dd:ee:01", "host1", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateLease: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE dhcp_leases SET generation=9223372036854775806 WHERE id=?`, lease.ID); err != nil {
+		t.Fatalf("set generation before boundary: %v", err)
+	}
+	if _, err := m.RenewLease(lease.ID, time.Hour); err != nil {
+		t.Fatalf("RenewLease at max-1: %v", err)
+	}
+	if _, err := m.RenewLease(lease.ID, time.Hour); err == nil {
+		t.Fatal("RenewLease accepted generation overflow")
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_leases WHERE id=? AND generation=9223372036854775807 AND status=?`, lease.ID, string(LeaseStatusActive)).Scan(&count); err != nil {
+		t.Fatalf("read lease boundary after rejected renew: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("lease did not remain active at max generation; matching rows=%d", count)
+	}
+}
+
 func TestExpireLeasesRFC3339(t *testing.T) {
 	db := newTestDB(t)
 	m := NewManager(db)
@@ -57,6 +82,50 @@ func TestExpireLeasesRFC3339(t *testing.T) {
 	}
 	if got.Status != LeaseStatusExpired {
 		t.Fatalf("lease should be expired, got %s (lease_end=%s)", got.Status, got.LeaseEnd)
+	}
+}
+
+func TestReleaseLeaseIsIdempotentAfterStateTransition(t *testing.T) {
+	db := newTestDB(t)
+	m := NewManager(db)
+	lease, err := m.CreateLease("scope-1", "192.168.10.101", "aa:bb:cc:dd:ee:02", "host2", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateLease: %v", err)
+	}
+	if err := m.ReleaseLease(lease.ID); err != nil {
+		t.Fatalf("first ReleaseLease: %v", err)
+	}
+	if err := m.ReleaseLease(lease.ID); err != nil {
+		t.Fatalf("second ReleaseLease: %v", err)
+	}
+	got, err := m.GetLease(lease.ID)
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	if got.Status != LeaseStatusReleased || got.Generation != lease.Generation {
+		t.Fatalf("released lease = %+v, want released without generation change", got)
+	}
+}
+
+func TestMarkLeaseConflictIsIdempotentAfterStateTransition(t *testing.T) {
+	db := newTestDB(t)
+	m := NewManager(db)
+	lease, err := m.CreateLease("scope-1", "192.168.10.102", "aa:bb:cc:dd:ee:03", "host3", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateLease: %v", err)
+	}
+	if err := m.MarkLeaseConflict(lease.ID); err != nil {
+		t.Fatalf("first MarkLeaseConflict: %v", err)
+	}
+	if err := m.MarkLeaseConflict(lease.ID); err != nil {
+		t.Fatalf("second MarkLeaseConflict: %v", err)
+	}
+	got, err := m.GetLease(lease.ID)
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	if got.Status != LeaseStatusConflict || got.Generation != lease.Generation {
+		t.Fatalf("conflicted lease = %+v, want conflict without generation change", got)
 	}
 }
 

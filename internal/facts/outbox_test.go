@@ -85,6 +85,40 @@ func TestObservationOutboxEnqueueTxRollsBackWithCaller(t *testing.T) {
 	}
 }
 
+func TestObservationOutboxStatusReportsBacklogCoordinates(t *testing.T) {
+	db := newFactsOutboxDB(t)
+	outbox, _ := NewObservationOutbox(db)
+	ctx := context.Background()
+	if err := outbox.Enqueue(ctx, testEnvelope(1)); err != nil {
+		t.Fatal(err)
+	}
+	second := testEnvelope(2)
+	second.EventID = "event-2"
+	if err := outbox.Enqueue(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	status, err := outbox.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending != 2 || status.Failed != 0 || status.HeadSequence != 2 || status.FirstOutstandingSequence != 1 {
+		t.Fatalf("status = %+v, want pending=2 failed=0 head=2 first=1", status)
+	}
+	if err := outbox.MarkDone(ctx, "event-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.MarkRetry(ctx, "event-2", "projection unavailable", 1); err != nil {
+		t.Fatal(err)
+	}
+	status, err = outbox.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending != 0 || status.Failed != 1 || status.HeadSequence != 2 || status.FirstOutstandingSequence != 2 {
+		t.Fatalf("failed status = %+v, want pending=0 failed=1 head=2 first=2", status)
+	}
+}
+
 func TestObservationOutboxPendingAndRetryKeepFailedFactsVisible(t *testing.T) {
 	db := newFactsOutboxDB(t)
 	outbox, _ := NewObservationOutbox(db)

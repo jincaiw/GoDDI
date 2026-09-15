@@ -207,8 +207,22 @@ func (a *AsyncApplier) signal() {
 	}
 }
 
-// Close stops admission and waits for the worker. It does not discard already
-// durable events from the WAL; un-applied events remain replayable at startup.
+// DrainAndClose waits for all events accepted before the call to finish, then
+// stops the worker. Callers must stop submissions before invoking it when they
+// need a fixed drain cut-off; durable events remain replayable if draining
+// fails or the caller context expires.
+func (a *AsyncApplier) DrainAndClose(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("lease applier: drain context is nil")
+	}
+	if err := a.Wait(ctx); err != nil {
+		return err
+	}
+	return a.Close()
+}
+
+// Close stops admission and waits for the worker. It is an abortive close:
+// queued durable events are left for startup WAL replay rather than discarded.
 func (a *AsyncApplier) Close() error {
 	a.closeOnce.Do(func() {
 		a.mu.Lock()

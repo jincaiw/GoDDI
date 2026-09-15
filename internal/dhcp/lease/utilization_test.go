@@ -32,9 +32,27 @@ func TestTheUsageCountIsTheSameSetTheAllocatorRefuses(t *testing.T) {
 	seedLease(t, store.DB, "l-active", "scope-1", "192.0.2.10", string(LeaseStatusActive))
 	seedLease(t, store.DB, "l-offered", "scope-1", "192.0.2.11", string(LeaseStatusOffered))
 	seedLease(t, store.DB, "l-conflict", "scope-1", "192.0.2.12", string(LeaseStatusConflict))
-	// And two that are not held: they must not inflate the figure.
-	seedLease(t, store.DB, "l-released", "scope-1", "192.0.2.13", string(LeaseStatusReleased))
-	seedLease(t, store.DB, "l-expired", "scope-1", "192.0.2.14", string(LeaseStatusExpired))
+	// An enabled reservation also blocks allocation and must count once.
+	if _, err := store.DB.Exec(`
+		INSERT INTO dhcp_reservations (id, scope_id, ip_address, mac_address, enabled)
+		VALUES ('r-enabled', 'scope-1', '192.0.2.13', '02:00:00:00:00:13', 1)`); err != nil {
+		t.Fatalf("seed enabled reservation: %v", err)
+	}
+	// A reservation may overlap a historical held row; utilization counts the
+	// unavailable address once, just like FindAvailableIP's UNION set.
+	if _, err := store.DB.Exec(`
+		INSERT INTO dhcp_reservations (id, scope_id, ip_address, mac_address, enabled)
+		VALUES ('r-overlap', 'scope-1', '192.0.2.10', '02:00:00:00:00:10', 1)`); err != nil {
+		t.Fatalf("seed overlapping reservation: %v", err)
+	}
+	// A disabled reservation and two non-held lease states must not inflate the figure.
+	if _, err := store.DB.Exec(`
+		INSERT INTO dhcp_reservations (id, scope_id, ip_address, mac_address, enabled)
+		VALUES ('r-disabled', 'scope-1', '192.0.2.14', '02:00:00:00:00:14', 0)`); err != nil {
+		t.Fatalf("seed disabled reservation: %v", err)
+	}
+	seedLease(t, store.DB, "l-released", "scope-1", "192.0.2.15", string(LeaseStatusReleased))
+	seedLease(t, store.DB, "l-expired", "scope-1", "192.0.2.16", string(LeaseStatusExpired))
 
 	usage, err := NewManager(store.DB).ScopeUtilization()
 	if err != nil {
@@ -48,14 +66,14 @@ func TestTheUsageCountIsTheSameSetTheAllocatorRefuses(t *testing.T) {
 	if got.Scope != "scope-1" {
 		t.Errorf("scope = %q, want scope-1 (the metric label is the id, not the name)", got.Scope)
 	}
-	if got.Held != len(heldStatuses) {
-		t.Errorf("held = %d, want %d: one lease in each held state, and released/expired must not count",
-			got.Held, len(heldStatuses))
+	if got.Held != len(heldStatuses)+1 {
+		t.Errorf("held = %d, want %d: held lease states plus one enabled reservation, with disabled/released/expired excluded",
+			got.Held, len(heldStatuses)+1)
 	}
 	if got.Pool != 10 {
 		t.Errorf("pool = %d, want 10 (start and end inclusive)", got.Pool)
 	}
-	if want := float64(len(heldStatuses)) / 10; math.Abs(got.Ratio-want) > 1e-9 {
+	if want := float64(len(heldStatuses)+1) / 10; math.Abs(got.Ratio-want) > 1e-9 {
 		t.Errorf("ratio = %v, want %v", got.Ratio, want)
 	}
 }

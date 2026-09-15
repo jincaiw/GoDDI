@@ -114,3 +114,121 @@ func TestFactsConsumerRejectsSequenceGapAndKeepsEventPending(t *testing.T) {
 		t.Fatalf("event status after gap = %q", status)
 	}
 }
+
+func TestFactsConsumerLifecycleStartsAndWakeDrainsWithoutPolling(t *testing.T) {
+	db := newConsumerDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	outbox, _ := facts.NewObservationOutbox(db)
+	consumer, err := NewFactsConsumerWithOptions(NewLinkage(db), outbox, FactsConsumerOptions{
+		PollInterval: time.Hour,
+		BatchSize:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := consumer.Status(context.Background())
+	if err != nil || status.State != FactsConsumerIdle || status.Started || status.NextExpectedSequence != 1 || status.Lag != 0 || status.Gap || status.Readiness() != FactsReadinessUnconfigured {
+		t.Fatalf("initial status = %+v, %v", status, err)
+	}
+	if err := consumer.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = consumer.Stop(context.Background()) }()
+	seedObservationEvent(t, outbox, 1, LeaseActionBind)
+	consumer.Wake()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		status, err = consumer.Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.LastApplied == 1 && status.Pending == 0 && status.Failed == 0 && status.Lag == 0 && !status.Gap && status.Running && status.Readiness() == FactsReadinessOK {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("consumer did not drain after wake: %+v", status)
+}
+
+func TestFactsConsumerStatusReportsDegradedBacklog(t *testing.T) {
+	db := newConsumerDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	outbox, _ := facts.NewObservationOutbox(db)
+	consumer, err := NewFactsConsumer(NewLinkage(db), outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedObservationEvent(t, outbox, 1, LeaseActionBind)
+	status, err := consumer.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending != 1 || status.Failed != 0 || status.LastApplied != 0 || status.NextExpectedSequence != 1 || status.HeadSequence != 1 || status.Lag != 1 || status.Gap || status.Readiness() != FactsReadinessUnconfigured {
+		t.Fatalf("backlog status = %+v", status)
+	}
+	if err := consumer.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = consumer.Stop(context.Background()) }()
+	status, err = consumer.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Readiness() != FactsReadinessDegraded {
+		t.Fatalf("running backlog readiness = %q, status=%+v", status.Readiness(), status)
+	}
+}
+
+func TestFactsConsumerLifecycleRetainsFailureAndLeavesEventPending(t *testing.T) {
+	db := newConsumerDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	outbox, _ := facts.NewObservationOutbox(db)
+	consumer, err := NewFactsConsumerWithOptions(NewLinkage(db), outbox, FactsConsumerOptions{PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedObservationEvent(t, outbox, 2, LeaseActionBind)
+	if err := consumer.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		status, statusErr := consumer.Status(context.Background())
+		if statusErr != nil {
+			t.Fatal(statusErr)
+		}
+		if status.State == FactsConsumerFailed {
+			if !errors.Is(consumer.Start(context.Background()), ErrFactsConsumerFailed) {
+				t.Fatal("second Start should remain fail-closed")
+			}
+			if status.LastError == "" || status.Pending != 1 || status.Failed != 0 || status.LastApplied != 0 || status.NextExpectedSequence != 1 || status.HeadSequence != 2 || status.Lag != 2 || !status.Gap || status.Readiness() != FactsReadinessFailing {
+				t.Fatalf("failure status = %+v", status)
+			}
+			if err := consumer.Stop(context.Background()); !errors.Is(err, ErrFactsConsumerFailed) {
+				t.Fatalf("Stop after failure = %v", err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("consumer did not enter failed state")
+}
+
+func TestFactsConsumerLifecycleStopIsIdempotentAndWakeNeverBlocks(t *testing.T) {
+	db := newConsumerDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	outbox, _ := facts.NewObservationOutbox(db)
+	consumer, err := NewFactsConsumer(NewLinkage(db), outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Wake()
+	if err := consumer.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	consumer.Wake()
+	status, err := consumer.Status(context.Background())
+	if err != nil || status.State != FactsConsumerStopped || status.Readiness() != FactsReadinessStopped {
+		t.Fatalf("stopped status = %+v, %v", status, err)
+	}
+}

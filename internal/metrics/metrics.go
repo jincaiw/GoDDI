@@ -122,13 +122,26 @@ var (
 
 	DHCPLeasesActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_leases_active",
-		Help: "Number of active DHCP leases.",
+		Help: "Number of distinct addresses unavailable to the DHCP allocator in each scope (active/offered/conflict leases and enabled reservations).",
 	}, []string{"scope"})
 
 	DHCPScopeUsageRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_scope_usage_ratio",
 		Help: "DHCP scope address usage ratio (0.0-1.0).",
 	}, []string{"scope"})
+
+	DHCPScopeUtilizationScrapeError = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_scope_utilization_scrape_error",
+		Help: "1 when the most recent DHCP scope utilization sample failed, 0 after a successful sample.",
+	})
+
+	// A zero-label vector is deliberately untouched until the first successful
+	// sample. Prometheus then sees an absent series rather than a misleading
+	// epoch.
+	DHCPScopeUtilizationLastSuccessTimestampSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_scope_utilization_last_success_timestamp_seconds",
+		Help: "Unix time of the most recent successful DHCP scope utilization sample; absent before the first success.",
+	}, []string{})
 
 	// Secondary-zone refresh health. A secondary that cannot reach its primary
 	// keeps answering from a copy that is quietly going stale, and RFC 1035
@@ -257,6 +270,34 @@ var (
 		Name: "goddi_dataplane_startup_recovery_state",
 		Help: "Current data-plane startup recovery state; the active state has value 1.",
 	}, []string{"plane", "state"})
+
+	// Facts projection metrics are opt-in. Their labels identify the projection
+	// domain only; lifecycle state and readiness are bounded values, not event
+	// IDs or error strings.
+	FactsConsumerPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_pending",
+		Help: "Durable facts events pending projection.",
+	}, []string{"domain"})
+	FactsConsumerFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_failed",
+		Help: "Durable facts events retained after projection failure.",
+	}, []string{"domain"})
+	FactsConsumerAppliedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_applied_sequence",
+		Help: "Durable facts projection watermark.",
+	}, []string{"domain"})
+	FactsConsumerLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_lag",
+		Help: "Durable facts sequences above the projection watermark.",
+	}, []string{"domain"})
+	FactsConsumerGap = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_gap",
+		Help: "1 when a durable facts sequence gap is detected.",
+	}, []string{"domain"})
+	FactsConsumerReadiness = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_consumer_readiness",
+		Help: "Facts consumer readiness: 1 at ok, 0.5 at degraded, 0 otherwise.",
+	}, []string{"domain"})
 
 	DataPlaneHeldLeases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dataplane_held_leases",
@@ -513,6 +554,18 @@ type BackupStatsSample struct {
 // It carries the level as well as the numbers because the level is what an
 // alert is written against: the figures say how close a bound is, the level
 // says whether anything has already crossed it.
+// FactsConsumerSample is an opt-in projection snapshot. Domain is a stable
+// low-cardinality identifier such as "ipam".
+type FactsConsumerSample struct {
+	Domain    string
+	Pending   int64
+	Failed    int64
+	Applied   int64
+	Lag       int64
+	Gap       bool
+	Readiness string
+}
+
 type DataPlaneSample struct {
 	// Plane names the store: "lease" or "zone".
 	Plane string
@@ -557,8 +610,10 @@ var (
 	// backupStatsFn, when non-nil, is sampled by the metrics ticker.
 	backupStatsFn func() []BackupStatsSample
 
-	// dhcpScopeStatsFn, when non-nil, is sampled by the metrics ticker.
-	dhcpScopeStatsFn func() []DHCPScopeSample
+	// dhcpScopeStatsFn, when non-nil, is sampled by the metrics ticker. The
+	// boolean distinguishes a successful empty result from a failed read.
+	dhcpScopeStatsFn func() ([]DHCPScopeSample, bool)
+	dhcpScopeLabels  = make(map[string]struct{})
 
 	// dhcpHAStatsFn, when non-nil, is sampled by the metrics ticker. It
 	// returns nothing on a node with HA switched off, which is what keeps the
@@ -570,6 +625,8 @@ var (
 
 	// dataPlaneStatsFn, when non-nil, is sampled by the metrics ticker.
 	dataPlaneStatsFn func() []DataPlaneSample
+
+	factsConsumerStatsFn func() []FactsConsumerSample
 
 	// last samples used to convert absolute gauges into counter deltas.
 	lastCacheHits           int64
@@ -614,7 +671,7 @@ func RegisterBackupStatsProvider(fn func() []BackupStatsSample) {
 
 // RegisterDHCPScopeStatsProvider registers a callback sampled by the metrics
 // ticker to publish DHCP pool utilisation.
-func RegisterDHCPScopeStatsProvider(fn func() []DHCPScopeSample) {
+func RegisterDHCPScopeStatsProvider(fn func() ([]DHCPScopeSample, bool)) {
 	dhcpScopeStatsFn = fn
 }
 
@@ -639,6 +696,12 @@ func RegisterSecondaryZoneStatsProvider(fn func() []SecondaryZoneSample) {
 // ticker to publish data-plane readiness and footprint metrics.
 func RegisterDataPlaneStatsProvider(fn func() []DataPlaneSample) {
 	dataPlaneStatsFn = fn
+}
+
+// RegisterFactsConsumerStatsProvider registers an optional callback sampled by
+// the metrics ticker. It does not construct or start a consumer.
+func RegisterFactsConsumerStatsProvider(fn func() []FactsConsumerSample) {
+	factsConsumerStatsFn = fn
 }
 
 // dataPlaneReadyValue maps a readiness level onto the gauge. Degraded is
@@ -693,6 +756,8 @@ func InitMetrics() {
 			UpstreamConsecutiveFailures,
 			DHCPLeasesActive,
 			DHCPScopeUsageRatio,
+			DHCPScopeUtilizationScrapeError,
+			DHCPScopeUtilizationLastSuccessTimestampSeconds,
 			SecondaryZoneSyncFailures,
 			SecondaryZoneLastSyncTimestampSeconds,
 			APIRequestsTotal,
@@ -729,6 +794,12 @@ func InitMetrics() {
 			DataPlaneStartupReady,
 			DataPlaneStartupLastSequence,
 			DataPlaneStartupState,
+			FactsConsumerPending,
+			FactsConsumerFailed,
+			FactsConsumerAppliedSequence,
+			FactsConsumerLag,
+			FactsConsumerGap,
+			FactsConsumerReadiness,
 			DHCPHARedundant,
 			DHCPHAPromising,
 			DHCPRequestsInflight,
@@ -813,9 +884,31 @@ func sampleProviders() {
 		}
 	}
 	if fn := dhcpScopeStatsFn; fn != nil {
-		for _, s := range fn() {
-			DHCPLeasesActive.WithLabelValues(s.Scope).Set(float64(s.Held))
-			DHCPScopeUsageRatio.WithLabelValues(s.Scope).Set(s.Ratio)
+		samples, ok := fn()
+		if !ok {
+			DHCPScopeUtilizationScrapeError.Set(1)
+			// Preserve the last successful scope values. A failed read is not
+			// an empty pool, and must not suppress the other providers below.
+		} else {
+			DHCPScopeUtilizationScrapeError.Set(0)
+			DHCPScopeUtilizationLastSuccessTimestampSeconds.WithLabelValues().Set(float64(time.Now().Unix()))
+			current := make(map[string]struct{})
+			for _, s := range samples {
+				if s.Scope == "" {
+					continue
+				}
+				current[s.Scope] = struct{}{}
+				DHCPLeasesActive.WithLabelValues(s.Scope).Set(float64(s.Held))
+				DHCPScopeUsageRatio.WithLabelValues(s.Scope).Set(s.Ratio)
+			}
+			for scope := range dhcpScopeLabels {
+				if _, ok := current[scope]; ok {
+					continue
+				}
+				DHCPLeasesActive.DeleteLabelValues(scope)
+				DHCPScopeUsageRatio.DeleteLabelValues(scope)
+			}
+			dhcpScopeLabels = current
 		}
 	}
 	if fn := dhcpHAStatsFn; fn != nil {
@@ -830,6 +923,19 @@ func sampleProviders() {
 			if s.HasSynced {
 				SecondaryZoneLastSyncTimestampSeconds.WithLabelValues(s.Zone).Set(float64(s.LastSync.Unix()))
 			}
+		}
+	}
+	if fn := factsConsumerStatsFn; fn != nil {
+		for _, s := range fn() {
+			if s.Domain == "" {
+				continue
+			}
+			FactsConsumerPending.WithLabelValues(s.Domain).Set(float64(s.Pending))
+			FactsConsumerFailed.WithLabelValues(s.Domain).Set(float64(s.Failed))
+			FactsConsumerAppliedSequence.WithLabelValues(s.Domain).Set(float64(s.Applied))
+			FactsConsumerLag.WithLabelValues(s.Domain).Set(float64(s.Lag))
+			FactsConsumerGap.WithLabelValues(s.Domain).Set(boolGauge(s.Gap))
+			FactsConsumerReadiness.WithLabelValues(s.Domain).Set(dataPlaneReadyValue(s.Readiness))
 		}
 	}
 	if fn := dataPlaneStatsFn; fn != nil {

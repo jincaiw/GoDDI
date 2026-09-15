@@ -22,6 +22,17 @@ type ObservationOutbox struct {
 	db *sql.DB
 }
 
+// ObservationOutboxStatus is a durable, point-in-time backlog snapshot. A
+// missing first outstanding sequence is represented by zero; callers must not
+// treat zero as a healthy sequence because it means the outbox has no
+// pending/failed event to inspect.
+type ObservationOutboxStatus struct {
+	Pending                  int64
+	Failed                   int64
+	HeadSequence             int64
+	FirstOutstandingSequence int64
+}
+
 func NewObservationOutbox(db *sql.DB) (*ObservationOutbox, error) {
 	if db == nil {
 		return nil, ErrOutboxClosed
@@ -245,15 +256,31 @@ func (o *ObservationOutbox) MarkDoneTx(ctx context.Context, tx *sql.Tx, eventID 
 }
 
 func (o *ObservationOutbox) Stats(ctx context.Context) (pending, failed int64, err error) {
-	if o == nil || o.db == nil {
-		return 0, 0, ErrOutboxClosed
-	}
-	err = o.db.QueryRowContext(ctx, `SELECT
-		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0)
-		FROM dhcp_ipam_observation_events`).Scan(&pending, &failed)
+	status, err := o.Status(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("facts outbox: stats: %w", err)
+		return 0, 0, err
 	}
-	return pending, failed, nil
+	return status.Pending, status.Failed, nil
+}
+
+// Status returns durable backlog counts and sequence coordinates. HeadSequence
+// is the highest durable sequence, while FirstOutstandingSequence is the
+// lowest pending or failed sequence. A failed event remains outstanding so a
+// readiness consumer cannot mistake a retained failure for a drained stream.
+func (o *ObservationOutbox) Status(ctx context.Context) (ObservationOutboxStatus, error) {
+	if o == nil || o.db == nil {
+		return ObservationOutboxStatus{}, ErrOutboxClosed
+	}
+	var status ObservationOutboxStatus
+	err := o.db.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
+		COALESCE(MAX(sequence), 0),
+		COALESCE(MIN(CASE WHEN status IN ('pending', 'failed') THEN sequence END), 0)
+		FROM dhcp_ipam_observation_events`).Scan(
+		&status.Pending, &status.Failed, &status.HeadSequence, &status.FirstOutstandingSequence)
+	if err != nil {
+		return ObservationOutboxStatus{}, fmt.Errorf("facts outbox: status: %w", err)
+	}
+	return status, nil
 }

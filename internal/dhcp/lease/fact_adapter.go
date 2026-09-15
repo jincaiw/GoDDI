@@ -27,13 +27,14 @@ func (c MutationCommand) FactEnvelope(eventID, source, spaceID string, sequence 
 	}
 	payloadLease := c.After
 	payload := struct {
-		Action   string `json:"action"`
-		LeaseID  string `json:"lease_id"`
-		ScopeID  string `json:"scope_id"`
-		SpaceID  string `json:"space_id"`
-		IP       string `json:"ip"`
-		MAC      string `json:"mac"`
-		Hostname string `json:"hostname"`
+		Action    string `json:"action"`
+		LeaseID   string `json:"lease_id"`
+		ScopeID   string `json:"scope_id"`
+		SpaceID   string `json:"space_id"`
+		IP        string `json:"ip"`
+		MAC       string `json:"mac"`
+		Hostname  string `json:"hostname"`
+		Tombstone bool   `json:"tombstone,omitempty"`
 	}{
 		Action: mutationFactAction(c.Kind), LeaseID: payloadLease.ID, ScopeID: payloadLease.ScopeID,
 		SpaceID: spaceID, IP: payloadLease.IPAddress, MAC: payloadLease.MACAddress, Hostname: payloadLease.Hostname,

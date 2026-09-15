@@ -47,7 +47,7 @@
 - IPAM `ObserveLease` / `Reconcile` 继续按现有接口运行；
 - 不删除旧表，不改变既有 generation 语义；
 - 不把 envelope 测试标记为三者最终一致；
-- DHCP、DNS、IPAM 的跨重启 replay、共享 durable watermark 和 lag/gap 指标仍未完成。
+- DHCP、DNS、IPAM 的默认跨重启 replay、默认共享 durable watermark 和默认 lag/gap 指标仍未完成；facts consumer 的 opt-in replay、watermark、backlog/readiness 与低基数指标不改变该边界。
 
 ## 验证
 

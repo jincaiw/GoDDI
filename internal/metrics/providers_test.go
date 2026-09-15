@@ -47,9 +47,16 @@ func withProviders(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		dhcpScopeStatsFn = nil
+		dhcpScopeLabels = make(map[string]struct{})
 		backupStatsFn = nil
 		secondaryZoneStatsFn = nil
 		dataPlaneStatsFn = nil
+		factsConsumerStatsFn = nil
+		dhcpScopeLabels = make(map[string]struct{})
+		DHCPLeasesActive.Reset()
+		DHCPScopeUsageRatio.Reset()
+		DHCPScopeUtilizationScrapeError.Set(0)
+		DHCPScopeUtilizationLastSuccessTimestampSeconds.Reset()
 	})
 }
 
@@ -65,6 +72,43 @@ func samples(text, metric string) []string {
 		}
 	}
 	return out
+}
+
+func TestSampleProvidersPublishesFactsConsumerStatus(t *testing.T) {
+	withProviders(t)
+	factsConsumerStatsFn = func() []FactsConsumerSample {
+		return []FactsConsumerSample{{
+			Domain: "ipam", Pending: 2, Failed: 1, Applied: 7, Lag: 3,
+			Gap: true, Readiness: "failing",
+		}}
+	}
+
+	sampleProviders()
+	text := expose(t, FactsConsumerPending, FactsConsumerFailed, FactsConsumerAppliedSequence, FactsConsumerLag, FactsConsumerGap, FactsConsumerReadiness)
+	for _, want := range []string{
+		`goddi_facts_consumer_pending{domain="ipam"} 2`,
+		`goddi_facts_consumer_failed{domain="ipam"} 1`,
+		`goddi_facts_consumer_applied_sequence{domain="ipam"} 7`,
+		`goddi_facts_consumer_lag{domain="ipam"} 3`,
+		`goddi_facts_consumer_gap{domain="ipam"} 1`,
+		`goddi_facts_consumer_readiness{domain="ipam"} 0`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSampleProvidersPublishesFactsConsumerStatusIgnoresEmptyDomain(t *testing.T) {
+	withProviders(t)
+	FactsConsumerPending.DeleteLabelValues("ipam")
+	factsConsumerStatsFn = func() []FactsConsumerSample {
+		return []FactsConsumerSample{{Pending: 9, Readiness: "ok"}}
+	}
+	sampleProviders()
+	if got := samples(expose(t, FactsConsumerPending), "goddi_facts_consumer_pending"); len(got) != 0 {
+		t.Fatalf("empty domain published facts metric: %v", got)
+	}
 }
 
 func TestSampleProvidersPublishesStartupRecoveryState(t *testing.T) {
@@ -99,11 +143,11 @@ func TestSampleProvidersPublishesStartupRecoveryState(t *testing.T) {
 
 func TestSampleProvidersPublishesDHCPPoolUtilisation(t *testing.T) {
 	withProviders(t)
-	dhcpScopeStatsFn = func() []DHCPScopeSample {
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) {
 		return []DHCPScopeSample{
 			{Scope: "scope-a", Held: 3, Ratio: 0.3},
 			{Scope: "scope-b", Held: 9, Ratio: 0.9},
-		}
+		}, true
 	}
 
 	sampleProviders()
@@ -116,6 +160,136 @@ func TestSampleProvidersPublishesDHCPPoolUtilisation(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("exposition does not contain %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestSampleProvidersRemovesDisappearedDHCPScope(t *testing.T) {
+	withProviders(t)
+	current := []DHCPScopeSample{{Scope: "scope-a", Held: 3, Ratio: 0.3}, {Scope: "scope-b", Held: 9, Ratio: 0.9}}
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) { return current, true }
+
+	sampleProviders()
+	current = []DHCPScopeSample{{Scope: "scope-a", Held: 1, Ratio: 0.1}}
+	sampleProviders()
+
+	text := expose(t, DHCPLeasesActive, DHCPScopeUsageRatio)
+	if strings.Contains(text, `scope="scope-b"`) {
+		t.Fatalf("disappeared DHCP scope left stale series:\n%s", text)
+	}
+	if !strings.Contains(text, `goddi_dhcp_leases_active{scope="scope-a"} 1`) {
+		t.Fatalf("remaining DHCP scope was not updated:\n%s", text)
+	}
+}
+
+func TestSampleProvidersKeepsDHCPScopeSeriesAfterFailedSample(t *testing.T) {
+	withProviders(t)
+	ok := true
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) {
+		if ok {
+			return []DHCPScopeSample{{Scope: "scope-a", Held: 3, Ratio: 0.3}}, true
+		}
+		return nil, false
+	}
+
+	sampleProviders()
+	ok = false
+	sampleProviders()
+
+	text := expose(t, DHCPLeasesActive, DHCPScopeUsageRatio)
+	if !strings.Contains(text, `goddi_dhcp_leases_active{scope="scope-a"} 3`) {
+		t.Fatalf("failed DHCP sample removed the last good series:\n%s", text)
+	}
+}
+
+func TestSampleProvidersPublishesDHCPUtilizationHealthAfterFailure(t *testing.T) {
+	withProviders(t)
+	ok := false
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) {
+		if !ok {
+			return nil, false
+		}
+		return []DHCPScopeSample{{Scope: "scope-a", Held: 2, Ratio: 0.2}}, true
+	}
+	secondaryZoneStatsFn = func() []SecondaryZoneSample {
+		return []SecondaryZoneSample{{Zone: "zone.example.test", Failures: 2}}
+	}
+
+	sampleProviders()
+	text := expose(t, DHCPScopeUtilizationScrapeError, DHCPScopeUtilizationLastSuccessTimestampSeconds, SecondaryZoneSyncFailures)
+	if !strings.Contains(text, "goddi_dhcp_scope_utilization_scrape_error 1") {
+		t.Fatalf("failed DHCP sample did not publish scrape error:\n%s", text)
+	}
+	if got := samples(text, "goddi_dhcp_scope_utilization_last_success_timestamp_seconds"); len(got) != 0 {
+		t.Fatalf("first failed DHCP sample published a success timestamp: %v", got)
+	}
+	if !strings.Contains(text, `goddi_dns_secondary_zone_sync_failures{zone="zone.example.test"} 2`) {
+		t.Fatalf("DHCP provider failure blocked another provider:\n%s", text)
+	}
+}
+
+func TestSampleProvidersDHCPUtilizationHealthRecoversAndKeepsLastGoodValues(t *testing.T) {
+	withProviders(t)
+	ok := true
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) {
+		if ok {
+			return []DHCPScopeSample{{Scope: "scope-a", Held: 3, Ratio: 0.3}}, true
+		}
+		return nil, false
+	}
+
+	sampleProviders()
+	first := expose(t, DHCPScopeUtilizationLastSuccessTimestampSeconds)
+	firstTimestamp := samples(first, "goddi_dhcp_scope_utilization_last_success_timestamp_seconds")
+	if len(firstTimestamp) != 1 {
+		t.Fatalf("successful DHCP sample did not publish one timestamp: %v", firstTimestamp)
+	}
+
+	ok = false
+	sampleProviders()
+	failed := expose(t, DHCPLeasesActive, DHCPScopeUtilizationScrapeError, DHCPScopeUtilizationLastSuccessTimestampSeconds)
+	if !strings.Contains(failed, `goddi_dhcp_leases_active{scope="scope-a"} 3`) {
+		t.Fatalf("failed DHCP sample erased the last good utilization value:\n%s", failed)
+	}
+	if !strings.Contains(failed, "goddi_dhcp_scope_utilization_scrape_error 1") {
+		t.Fatalf("failed DHCP sample did not set scrape error:\n%s", failed)
+	}
+
+	ok = true
+	sampleProviders()
+	recovered := expose(t, DHCPScopeUtilizationScrapeError, DHCPScopeUtilizationLastSuccessTimestampSeconds)
+	if !strings.Contains(recovered, "goddi_dhcp_scope_utilization_scrape_error 0") {
+		t.Fatalf("successful recovery did not clear scrape error:\n%s", recovered)
+	}
+	if got := samples(recovered, "goddi_dhcp_scope_utilization_last_success_timestamp_seconds"); len(got) != 1 {
+		t.Fatalf("successful recovery lost success timestamp: %v", got)
+	}
+}
+
+func TestSampleProvidersRemovesAllDHCPScopeSeriesAfterSuccessfulEmptySample(t *testing.T) {
+	withProviders(t)
+	current := []DHCPScopeSample{{Scope: "scope-a", Held: 3, Ratio: 0.3}}
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) { return current, true }
+
+	sampleProviders()
+	current = nil
+	sampleProviders()
+
+	text := expose(t, DHCPLeasesActive, DHCPScopeUsageRatio)
+	if got := samples(text, "goddi_dhcp_leases_active"); len(got) != 0 {
+		t.Fatalf("successful empty DHCP sample left series: %v", got)
+	}
+}
+
+func TestSampleProvidersSkipsEmptyDHCPScopeLabel(t *testing.T) {
+	withProviders(t)
+	dhcpScopeStatsFn = func() ([]DHCPScopeSample, bool) {
+		return []DHCPScopeSample{{Scope: "", Held: 99, Ratio: 0.99}}, true
+	}
+
+	sampleProviders()
+	text := expose(t, DHCPLeasesActive, DHCPScopeUsageRatio)
+	if got := samples(text, "goddi_dhcp_leases_active"); len(got) != 0 {
+		t.Fatalf("empty DHCP scope label published a series: %v", got)
 	}
 }
 

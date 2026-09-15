@@ -114,6 +114,80 @@ func TestTheConsoleReleasesALeaseItOwns(t *testing.T) {
 	}
 }
 
+func TestDeleteDHCPLeaseRejectsUninitializedService(t *testing.T) {
+	withDHCPServices(t, nil)
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest("l1"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("deleting with uninitialized DHCP service = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestTheReplicaGuardRunsBeforeLeaseIDValidation(t *testing.T) {
+	db := newLeaseReplicaTestDB(t)
+	withDHCPServices(t, &DHCPServiceContainer{
+		LeaseMgr:         lease.NewManager(db),
+		LeasesAreReplica: true,
+	})
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest(""))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("replica delete without an ID = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	if got := leaseStatusIn(t, db, "l1"); got != string(lease.LeaseStatusActive) {
+		t.Fatalf("lease status after replica missing-ID request = %q, want %q", got, lease.LeaseStatusActive)
+	}
+}
+
+func TestDeleteDHCPLeaseRejectsMissingIDInAuthoritativeMode(t *testing.T) {
+	db := newLeaseReplicaTestDB(t)
+	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest(""))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("deleting without an ID = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if got := leaseStatusIn(t, db, "l1"); got != string(lease.LeaseStatusActive) {
+		t.Fatalf("lease status after missing-ID request = %q, want %q", got, lease.LeaseStatusActive)
+	}
+}
+
+func TestTheConsoleKeepsLegacyReleaseIdempotentForUnknownLease(t *testing.T) {
+	db := newLeaseReplicaTestDB(t)
+	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest("missing"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("releasing an unknown legacy lease = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestTheConsoleKeepsLegacyReleaseIdempotentForReleasedLease(t *testing.T) {
+	db := newLeaseReplicaTestDB(t)
+	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+	if _, err := db.Exec(`UPDATE dhcp_leases SET status = 'released' WHERE id = 'l1'`); err != nil {
+		t.Fatalf("marking lease released: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest("l1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("releasing an already released legacy lease = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := leaseStatusIn(t, db, "l1"); got != string(lease.LeaseStatusReleased) {
+		t.Fatalf("lease status after idempotent release = %q, want %q", got, lease.LeaseStatusReleased)
+	}
+}
+
 // TestListDHCPLeasesStillReadsAReplica guards the other half of the decision:
 // reads are not refused. A console that cannot even show the leases it is not
 // allowed to change would be unusable.

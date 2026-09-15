@@ -8,11 +8,12 @@ import (
 
 // ScopeUsage is one DHCP scope's address utilisation.
 //
-// Held is what the pool cannot hand out: active bindings, outstanding offers
-// and conflict quarantines. It is counted through heldStatuses so this number
-// and the allocator cannot disagree about what "in use" means -- an address
-// that the allocator refuses but this figure ignores would be a pool that
-// reports capacity it does not have.
+// Held is the number of distinct addresses the pool cannot hand out: active
+// bindings, outstanding offers, conflict quarantines and enabled reservations.
+// The lease status list comes from heldStatuses, while the reservation clause
+// mirrors FindAvailableIP. Counting distinct IPs keeps a historical conflict
+// row from inflating capacity when another held row already occupies the same
+// address.
 type ScopeUsage struct {
 	// Scope is the scope identifier. It is the metric label because names are
 	// neither unique nor stable, and a renamed scope must not become a second
@@ -40,8 +41,15 @@ func (m *Manager) ScopeUtilization() ([]ScopeUsage, error) {
 
 	query := `
 		SELECT s.id, s.start_ip, s.end_ip,
-		       (SELECT COUNT(*) FROM dhcp_leases l
-		         WHERE l.scope_id = s.id AND l.status IN (` + placeholders + `)) AS held
+		       (SELECT COUNT(DISTINCT ip_address) FROM (
+					SELECT l.ip_address
+					FROM dhcp_leases l
+					WHERE l.scope_id = s.id AND l.status IN (` + placeholders + `)
+					UNION
+					SELECT r.ip_address
+					FROM dhcp_reservations r
+					WHERE r.scope_id = s.id AND r.enabled = 1
+				)) AS held
 		FROM dhcp_scopes s
 		WHERE s.enabled = 1
 		ORDER BY s.id`

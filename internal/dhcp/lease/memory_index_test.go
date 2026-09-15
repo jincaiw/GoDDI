@@ -6,6 +6,36 @@ import (
 	"testing"
 )
 
+func TestMemoryIndexQueriesRejectEmptyKeysAndNilReceiver(t *testing.T) {
+	index := NewMemoryIndex()
+	index.Replace([]Lease{{ID: "lease-1", ScopeID: "scope", IPAddress: "192.0.2.10", MACAddress: "aa", Status: LeaseStatusActive}}, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
+	if _, ok := index.Get(""); ok {
+		t.Fatal("empty lease ID lookup succeeded")
+	}
+	if _, ok := index.ByMAC(""); ok {
+		t.Fatal("empty MAC lookup succeeded")
+	}
+	if _, ok := index.HeldByIP(""); ok {
+		t.Fatal("empty IP lookup succeeded")
+	}
+	if _, err := index.FindAvailableIP(""); err == nil {
+		t.Fatal("empty scope lookup succeeded")
+	}
+	var nilIndex *MemoryIndex
+	if _, ok := nilIndex.Get("lease-1"); ok {
+		t.Fatal("nil receiver Get succeeded")
+	}
+	if _, ok := nilIndex.ByMAC("aa"); ok {
+		t.Fatal("nil receiver ByMAC succeeded")
+	}
+	if _, ok := nilIndex.HeldByIP("192.0.2.10"); ok {
+		t.Fatal("nil receiver HeldByIP succeeded")
+	}
+	if _, err := nilIndex.FindAvailableIP("scope"); err == nil {
+		t.Fatal("nil receiver FindAvailableIP succeeded")
+	}
+}
+
 func TestMemoryIndexReplaceAndReadIndexes(t *testing.T) {
 	index := NewMemoryIndex()
 	index.Replace([]Lease{
@@ -41,6 +71,36 @@ func TestMemoryIndexReservationsAndConflictAreHeld(t *testing.T) {
 	}
 }
 
+func TestMemoryIndexRemoveCheckedRejectsEmptyIDWithoutChangingIndex(t *testing.T) {
+	index := NewMemoryIndex()
+	index.Replace([]Lease{{ID: "keep", ScopeID: "scope", IPAddress: "192.0.2.10", Status: LeaseStatusActive}}, nil)
+	if err := index.RemoveChecked(""); err == nil {
+		t.Fatal("empty lease ID was accepted")
+	}
+	if value, ok := index.Get("keep"); !ok || value.IPAddress != "192.0.2.10" {
+		t.Fatalf("index changed after rejected remove: %#v, %v", value, ok)
+	}
+	index.Remove("")
+	if _, ok := index.Get("keep"); !ok {
+		t.Fatal("compatibility Remove deleted a lease after invalid input")
+	}
+}
+
+func TestMemoryIndexUpsertCheckedRejectsInvalidLeaseWithoutChangingIndex(t *testing.T) {
+	index := NewMemoryIndex()
+	index.Replace([]Lease{{ID: "keep", ScopeID: "scope", IPAddress: "192.0.2.10", Status: LeaseStatusActive}}, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
+	if err := index.UpsertChecked(Lease{ID: "keep", ScopeID: "scope", IPAddress: "bad", Status: LeaseStatusActive}); err == nil {
+		t.Fatal("invalid lease was accepted")
+	}
+	if value, ok := index.Get("keep"); !ok || value.IPAddress != "192.0.2.10" {
+		t.Fatalf("index changed after rejected upsert: %#v, %v", value, ok)
+	}
+	index.Upsert(Lease{ID: "new", ScopeID: "scope", IPAddress: "bad", Status: LeaseStatusActive})
+	if _, ok := index.Get("new"); ok {
+		t.Fatal("compatibility Upsert published invalid lease")
+	}
+}
+
 func TestMemoryIndexUpsertAndRemoveRebuildIndexes(t *testing.T) {
 	index := NewMemoryIndex()
 	index.Replace(nil, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
@@ -54,21 +114,19 @@ func TestMemoryIndexUpsertAndRemoveRebuildIndexes(t *testing.T) {
 	}
 }
 
-func TestMemoryIndexReplaceDuplicateIDDoesNotLeaveStaleIndexes(t *testing.T) {
+func TestMemoryIndexReplaceRejectsDuplicateIDWithoutChangingIndex(t *testing.T) {
 	index := NewMemoryIndex()
+	index.Replace([]Lease{{ID: "keep", ScopeID: "scope", IPAddress: "192.0.2.12", MACAddress: "keep", Status: LeaseStatusActive}}, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.12"}})
 	index.Replace([]Lease{
 		{ID: "same", ScopeID: "scope", IPAddress: "192.0.2.10", MACAddress: "aa", LeaseEnd: "2026-01-01T00:00:00Z", Status: LeaseStatusActive},
 		{ID: "same", ScopeID: "scope", IPAddress: "192.0.2.11", MACAddress: "bb", LeaseEnd: "2026-01-02T00:00:00Z", Status: LeaseStatusActive},
 	}, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.12"}})
-	index.Remove("same")
+	if value, ok := index.Get("keep"); !ok || value.IPAddress != "192.0.2.12" {
+		t.Fatalf("compatibility Replace changed index after rejected snapshot: %#v, %v", value, ok)
+	}
 	for _, ip := range []string{"192.0.2.10", "192.0.2.11"} {
 		if _, ok := index.HeldByIP(ip); ok {
-			t.Fatalf("stale IP index survived duplicate-ID removal: %s", ip)
-		}
-	}
-	for _, mac := range []string{"aa", "bb"} {
-		if _, ok := index.ByMAC(mac); ok {
-			t.Fatalf("stale MAC index survived duplicate-ID removal: %s", mac)
+			t.Fatalf("invalid duplicate-ID snapshot was published at IP %s", ip)
 		}
 	}
 }
@@ -244,6 +302,52 @@ func TestMemoryIndexClaimAvailableRequiresID(t *testing.T) {
 	}
 }
 
+func TestMemoryIndexClaimAvailableRequiresScope(t *testing.T) {
+	index := NewMemoryIndex()
+	index.Replace(nil, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.10"}})
+	if _, err := index.ClaimAvailable("", Lease{ID: "lease-1"}); err == nil {
+		t.Fatal("claim without scope ID was accepted")
+	}
+}
+
+func TestMemoryIndexClaimAvailableRequiresOfferGenerationZero(t *testing.T) {
+	index := NewMemoryIndex()
+	index.Replace(nil, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.10"}})
+
+	for _, generation := range []int64{-1, 1, 2} {
+		if _, err := index.ClaimAvailable("scope", Lease{ID: "lease-invalid", Generation: generation}); err == nil {
+			t.Fatalf("claim with generation %d was accepted", generation)
+		}
+		if _, ok := index.Get("lease-invalid"); ok {
+			t.Fatalf("rejected claim with generation %d was published", generation)
+		}
+	}
+
+	claimed, err := index.ClaimAvailable("scope", Lease{ID: "lease-1", Generation: 0})
+	if err != nil {
+		t.Fatalf("generation-zero claim: %v", err)
+	}
+	if claimed.Generation != 0 || claimed.Status != LeaseStatusOffered {
+		t.Fatalf("claim = %+v, want offered generation 0", claimed)
+	}
+
+	// The subsequent REQUEST projection can promote the same row to the
+	// first binding generation without leaving the address available.
+	if err := index.UpsertChecked(Lease{
+		ID: claimed.ID, ScopeID: claimed.ScopeID, IPAddress: claimed.IPAddress,
+		Status: LeaseStatusActive, Generation: 1,
+	}); err != nil {
+		t.Fatalf("activate projection: %v", err)
+	}
+	active, ok := index.Get(claimed.ID)
+	if !ok || active.Status != LeaseStatusActive || active.Generation != 1 {
+		t.Fatalf("activated projection = %#v, %v", active, ok)
+	}
+	if _, err := index.FindAvailableIP("scope"); !errors.Is(err, ErrNoAvailableAddress) {
+		t.Fatalf("promoted lease became available: %v", err)
+	}
+}
+
 func TestMemoryIndexPoolEndingAtMaxIPv4Terminates(t *testing.T) {
 	index := NewMemoryIndex()
 	index.Replace([]Lease{{ID: "held", ScopeID: "scope", IPAddress: "255.255.255.254", Status: LeaseStatusActive}}, []AddressPool{{ScopeID: "scope", StartIP: "255.255.255.254", EndIP: "255.255.255.255"}})
@@ -264,6 +368,17 @@ func TestMemoryIndexRejectsBadPools(t *testing.T) {
 	}
 }
 
+func TestMemoryIndexSetPoolsCheckedRejectsInvalidSnapshotWithoutChangingPools(t *testing.T) {
+	index := NewMemoryIndex()
+	index.SetPools([]AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
+	if err := index.SetPoolsChecked([]AddressPool{{ScopeID: "scope", StartIP: "bad", EndIP: "192.0.2.11"}}); err == nil {
+		t.Fatal("invalid pool snapshot was accepted")
+	}
+	if ip, err := index.FindAvailableIP("scope"); err != nil || ip != "192.0.2.10" {
+		t.Fatalf("pool changed after rejected snapshot: %q, %v", ip, err)
+	}
+}
+
 func TestMemoryIndexReplaceCheckedRejectsDuplicateIDsWithoutChangingIndex(t *testing.T) {
 	index := NewMemoryIndex()
 	index.Replace([]Lease{{ID: "keep", ScopeID: "scope", IPAddress: "192.0.2.10", Status: LeaseStatusActive}}, []AddressPool{{ScopeID: "scope", StartIP: "192.0.2.10", EndIP: "192.0.2.11"}})
@@ -273,6 +388,18 @@ func TestMemoryIndexReplaceCheckedRejectsDuplicateIDsWithoutChangingIndex(t *tes
 	}
 	if got, ok := index.Get("keep"); !ok || got.IPAddress != "192.0.2.10" {
 		t.Fatalf("index changed after rejected snapshot: %#v, %v", got, ok)
+	}
+}
+
+func TestMemoryIndexReplaceCheckedRejectsUnknownStatusAndNegativeGeneration(t *testing.T) {
+	index := NewMemoryIndex()
+	for _, value := range []Lease{
+		{ID: "unknown", Status: LeaseStatus("unknown")},
+		{ID: "negative", Status: LeaseStatusActive, Generation: -1},
+	} {
+		if err := index.ReplaceChecked([]Lease{value}, nil); err == nil {
+			t.Fatalf("invalid lease snapshot was accepted: %+v", value)
+		}
 	}
 }
 

@@ -96,13 +96,23 @@ func (w *FactsMutationWriter) ActivateLeaseTx(ctx context.Context, tx *sql.Tx, e
 	if !found || before.Status != LeaseStatusOffered {
 		return nil, nil, fmt.Errorf("%w: activate requires offered lease %s", ErrInvalidMutationState, id)
 	}
+	if before.Generation == maxLeaseGeneration {
+		return nil, nil, fmt.Errorf("%w: activate generation would overflow at %d", ErrInvalidMutationState, before.Generation)
+	}
 	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, `UPDATE dhcp_leases
+	res, err := tx.ExecContext(ctx, `UPDATE dhcp_leases
 		SET lease_start=?, lease_end=?, status=?, last_seen=datetime('now'), generation=generation+1
-		WHERE id=? AND status=?`,
+		WHERE id=? AND status=? AND generation < ?`,
 		now.Format("2006-01-02T15:04:05Z"), now.Add(duration).Format("2006-01-02T15:04:05Z"),
-		string(LeaseStatusActive), id, string(LeaseStatusOffered)); err != nil {
+		string(LeaseStatusActive), id, string(LeaseStatusOffered), maxLeaseGeneration)
+	if err != nil {
 		return nil, nil, fmt.Errorf("lease facts mutation: update activate %s: %w", id, err)
+	}
+	if rows, err := res.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return nil, nil, fmt.Errorf("lease facts mutation: verify activate %s: %w", id, err)
+		}
+		return nil, nil, fmt.Errorf("%w: activate affected %d rows for lease %s", ErrInvalidMutationState, rows, id)
 	}
 	after, found, err := w.manager.findLeaseTx(ctx, tx, id)
 	if err != nil || !found {
@@ -154,12 +164,15 @@ func (w *FactsMutationWriter) RenewLeaseTx(ctx context.Context, tx *sql.Tx, even
 	if !found || before.Status != LeaseStatusActive {
 		return nil, nil, fmt.Errorf("%w: renew requires active lease %s", ErrInvalidMutationState, id)
 	}
+	if before.Generation == maxLeaseGeneration {
+		return nil, nil, fmt.Errorf("%w: renew generation would overflow at %d", ErrInvalidMutationState, before.Generation)
+	}
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `UPDATE dhcp_leases
 		SET lease_start=?, lease_end=?, status=?, last_seen=datetime('now'), generation=generation+1
-		WHERE id=? AND status=?`,
+		WHERE id=? AND status=? AND generation < ?`,
 		now.Format("2006-01-02T15:04:05Z"), now.Add(duration).Format("2006-01-02T15:04:05Z"),
-		string(LeaseStatusActive), id, string(LeaseStatusActive)); err != nil {
+		string(LeaseStatusActive), id, string(LeaseStatusActive), maxLeaseGeneration); err != nil {
 		return nil, nil, fmt.Errorf("lease facts mutation: update renew %s: %w", id, err)
 	}
 	after, found, err := w.manager.findLeaseTx(ctx, tx, id)
@@ -218,10 +231,17 @@ func (w *FactsMutationWriter) DeclineLeaseTx(ctx context.Context, tx *sql.Tx, ev
 	if !found || (before.Status != LeaseStatusActive && before.Status != LeaseStatusOffered) {
 		return nil, nil, fmt.Errorf("%w: decline requires active or offered lease %s", ErrInvalidMutationState, id)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?, lease_end=?, last_seen=datetime('now')
+	result, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?, lease_end=?, last_seen=datetime('now')
 		WHERE id=? AND status IN (?, ?)`, string(LeaseStatusConflict), time.Now().UTC().Add(quarantine).Format("2006-01-02T15:04:05Z"), id,
-		string(LeaseStatusActive), string(LeaseStatusOffered)); err != nil {
+		string(LeaseStatusActive), string(LeaseStatusOffered))
+	if err != nil {
 		return nil, nil, fmt.Errorf("lease facts mutation: update decline %s: %w", id, err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return nil, nil, fmt.Errorf("lease facts mutation: verify decline %s: %w", id, err)
+		}
+		return nil, nil, fmt.Errorf("%w: decline affected %d rows for lease %s", ErrInvalidMutationState, rows, id)
 	}
 	after, found, err := w.manager.findLeaseTx(ctx, tx, id)
 	if err != nil || !found {
@@ -338,8 +358,17 @@ func (w *FactsMutationWriter) ReleaseLeaseTx(ctx context.Context, tx *sql.Tx, ev
 	if !found || (before.Status != LeaseStatusActive && before.Status != LeaseStatusOffered) {
 		return nil, nil, fmt.Errorf("%w: release requires active or offered lease %s", ErrInvalidMutationState, id)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?, last_seen=datetime('now') WHERE id=?`, string(LeaseStatusReleased), id); err != nil {
+	result, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?, last_seen=datetime('now')
+		WHERE id=? AND status IN (?, ?)`, string(LeaseStatusReleased), id,
+		string(LeaseStatusActive), string(LeaseStatusOffered))
+	if err != nil {
 		return nil, nil, fmt.Errorf("lease facts mutation: update release %s: %w", id, err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return nil, nil, fmt.Errorf("lease facts mutation: verify release %s: %w", id, err)
+		}
+		return nil, nil, fmt.Errorf("%w: release affected %d rows for lease %s", ErrInvalidMutationState, rows, id)
 	}
 	after, found, err := w.manager.findLeaseTx(ctx, tx, id)
 	if err != nil || !found {

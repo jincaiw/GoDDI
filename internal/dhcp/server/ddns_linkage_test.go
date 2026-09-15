@@ -325,6 +325,48 @@ func TestLinkage_ExpiredLeaseWithdrawsTheName(t *testing.T) {
 // fire-and-forget goroutine could not provide: the update is owed by the
 // database, not by an in-flight goroutine, so a process that dies before doing
 // the work still does it after coming back.
+// TestLinkage_ExpiredLeaseWithdrawsHistoricalNameWhenDnsUpdatesDisabled pins
+// the lifecycle rule: disabling future DHCP DNS publication does not preserve
+// a record that was already owned by an expired binding.
+func TestLinkage_ExpiredLeaseWithdrawsHistoricalNameWhenDnsUpdatesDisabled(t *testing.T) {
+	s, db, store := newLinkageServer(t)
+	mac := testMAC(9)
+
+	if _, err := s.HandleDiscover(discoverWithHostname(t, mac, "host9"), "eth0", net.ParseIP(testServerIP)); err != nil {
+		t.Fatalf("HandleDiscover: %v", err)
+	}
+	if _, err := s.HandleRequest(requestWithHostname(t, mac, linkagePoolIP, "host9"), "eth0", net.ParseIP(testServerIP)); err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	drain(t, db, store)
+	if got := resolve(t, store, "host9."+linkageDomain); len(got) != 1 {
+		t.Fatalf("host9 did not resolve after the ACK: %v", got)
+	}
+
+	// The scope flag controls future publication, not cleanup of historical
+	// DHCP-owned records.
+	mustExec(t, db, `UPDATE dhcp_scopes SET dns_updates = 0 WHERE id = 'scope-1'`)
+	mustExec(t, db, `UPDATE dhcp_leases SET lease_end = datetime('now', '-1 hour') WHERE mac_address = ?`, mac.String())
+
+	s.sweepExpiredLeases("test-dns-updates-disabled")
+	events := pendingEvents(t, db)
+	if len(events) != 1 || events[0].Action != dhcpinternal.DNSEventDelete {
+		t.Fatalf("queued events = %+v, want one delete", events)
+	}
+	drain(t, db, store)
+
+	if got := resolve(t, store, "host9."+linkageDomain); len(got) != 0 {
+		t.Fatalf("historical name still resolves after expiry: %v", got)
+	}
+	var status lease.LeaseStatus
+	if err := db.QueryRow(`SELECT status FROM dhcp_leases WHERE mac_address = ?`, mac.String()).Scan(&status); err != nil {
+		t.Fatalf("read expired lease status: %v", err)
+	}
+	if status != lease.LeaseStatusExpired {
+		t.Fatalf("lease status = %q, want expired", status)
+	}
+}
+
 func TestLinkage_QueuedUpdateSurvivesRestart(t *testing.T) {
 	s, db, store := newLinkageServer(t)
 	mac := testMAC(5)

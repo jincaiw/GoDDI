@@ -49,29 +49,11 @@ func NewMemoryIndex() *MemoryIndex {
 // Replace atomically rebuilds all indexes from a durable snapshot.
 //
 // It is retained as a compatibility API for callers that cannot yet surface
-// snapshot validation errors. New recovery/startup paths must use
-// ReplaceChecked, which leaves the current index untouched on invalid input.
+// snapshot validation errors. Invalid input is rejected without publishing a
+// partial or invalid snapshot; callers that need to observe the error must use
+// ReplaceChecked directly. New recovery/startup paths must use ReplaceChecked.
 func (i *MemoryIndex) Replace(leases []Lease, pools []AddressPool) {
-	byID := make(map[string]Lease, len(leases))
-	byIP := make(map[string]Lease, len(leases))
-	byScopeIP := make(map[scopedIP]Lease, len(leases))
-	byMAC := make(map[string]Lease, len(leases))
-	poolMap := make(map[string]AddressPool, len(pools))
-	for _, pool := range pools {
-		poolMap[pool.ScopeID] = clonePool(pool)
-	}
-	// Resolve duplicate IDs before deriving secondary indexes. This keeps the
-	// indexes consistent with the last snapshot value instead of leaving stale
-	// IP/MAC entries for an earlier value with the same ID.
-	for _, value := range leases {
-		byID[value.ID] = value
-	}
-	for _, value := range byID {
-		putLease(byID, byIP, byScopeIP, byMAC, value)
-	}
-	i.mu.Lock()
-	i.byID, i.byIP, i.byScopeIP, i.byMAC, i.pools = byID, byIP, byScopeIP, byMAC, poolMap
-	i.mu.Unlock()
+	_ = i.ReplaceChecked(leases, pools)
 }
 
 // ReplaceChecked validates and atomically publishes a complete snapshot. On
@@ -87,8 +69,8 @@ func (i *MemoryIndex) ReplaceChecked(leases []Lease, pools []AddressPool) error 
 	}
 	byID := make(map[string]Lease, len(leases))
 	for _, value := range leases {
-		if value.ID == "" {
-			return errors.New("memory index snapshot lease ID is empty")
+		if err := validateMemoryLease(value); err != nil {
+			return err
 		}
 		if _, exists := byID[value.ID]; exists {
 			return fmt.Errorf("memory index snapshot contains duplicate lease ID %q", value.ID)
@@ -123,6 +105,19 @@ func (i *MemoryIndex) ReplaceChecked(leases []Lease, pools []AddressPool) error 
 	return nil
 }
 
+func validateMemoryLease(value Lease) error {
+	if value.ID == "" {
+		return errors.New("memory index lease ID is empty")
+	}
+	if value.Status != LeaseStatusActive && value.Status != LeaseStatusExpired && value.Status != LeaseStatusOffered && value.Status != LeaseStatusReleased && value.Status != LeaseStatusConflict {
+		return fmt.Errorf("memory index lease %q has unknown status %q", value.ID, value.Status)
+	}
+	if value.Generation < 0 {
+		return fmt.Errorf("memory index lease %q has negative generation", value.ID)
+	}
+	return nil
+}
+
 func validatePools(pools []AddressPool) (map[string]AddressPool, error) {
 	poolMap := make(map[string]AddressPool, len(pools))
 	for _, pool := range pools {
@@ -154,19 +149,62 @@ func validatePools(pools []AddressPool) (map[string]AddressPool, error) {
 	return poolMap, nil
 }
 
-// Upsert applies the post-commit lease state to the index.
+// Upsert applies the post-commit lease state to the index for compatibility
+// callers. Invalid input is rejected without publishing; callers that need the
+// error should use UpsertChecked.
 func (i *MemoryIndex) Upsert(value Lease) {
+	_ = i.UpsertChecked(value)
+}
+
+// UpsertChecked validates and atomically applies one post-commit lease state.
+// The current index remains unchanged when validation fails.
+func (i *MemoryIndex) UpsertChecked(value Lease) error {
+	if i == nil {
+		return errors.New("memory index is nil")
+	}
+	if err := validateMemoryLease(value); err != nil {
+		return err
+	}
+	if value.IPAddress != "" && net.ParseIP(value.IPAddress).To4() == nil {
+		return fmt.Errorf("memory index lease %q has invalid IPv4 address %q", value.ID, value.IPAddress)
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if pool, ok := i.pools[value.ScopeID]; ok && value.IPAddress != "" {
+		start, end, err := ipv4Range(pool.StartIP, pool.EndIP)
+		if err != nil {
+			return err
+		}
+		ip := net.ParseIP(value.IPAddress).To4()
+		valueN := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+		if valueN < start || valueN > end {
+			return fmt.Errorf("memory index lease %q IP %q is outside scope %q pool", value.ID, value.IPAddress, value.ScopeID)
+		}
+	}
 	if old, ok := i.byID[value.ID]; ok {
 		removeLease(i.byID, i.byIP, i.byScopeIP, i.byMAC, old)
 		rebuildIPIndex(i.byID, i.byIP, i.byScopeIP, old.IPAddress)
 		rebuildMACIndex(i.byID, i.byMAC, old.MACAddress)
 	}
 	putLease(i.byID, i.byIP, i.byScopeIP, i.byMAC, value)
+	return nil
 }
 
+// Remove deletes a lease from the index for compatibility callers. Invalid
+// identifiers are ignored; callers that need the error should use RemoveChecked.
 func (i *MemoryIndex) Remove(id string) {
+	_ = i.RemoveChecked(id)
+}
+
+// RemoveChecked deletes one lease and reports invalid input. Removing a
+// missing but valid identifier is idempotent.
+func (i *MemoryIndex) RemoveChecked(id string) error {
+	if i == nil {
+		return errors.New("memory index is nil")
+	}
+	if id == "" {
+		return errors.New("memory index lease ID is empty")
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if old, ok := i.byID[id]; ok {
@@ -174,19 +212,36 @@ func (i *MemoryIndex) Remove(id string) {
 		rebuildIPIndex(i.byID, i.byIP, i.byScopeIP, old.IPAddress)
 		rebuildMACIndex(i.byID, i.byMAC, old.MACAddress)
 	}
+	return nil
 }
 
+// SetPools replaces the in-memory pool snapshot for compatibility callers.
+// Invalid input is rejected without publishing a partial pool map; callers that
+// need the validation error should use SetPoolsChecked.
 func (i *MemoryIndex) SetPools(pools []AddressPool) {
-	copyPools := make(map[string]AddressPool, len(pools))
-	for _, pool := range pools {
-		copyPools[pool.ScopeID] = clonePool(pool)
+	_ = i.SetPoolsChecked(pools)
+}
+
+// SetPoolsChecked validates and atomically publishes the in-memory pool
+// snapshot. The existing pools remain active when validation fails.
+func (i *MemoryIndex) SetPoolsChecked(pools []AddressPool) error {
+	if i == nil {
+		return errors.New("memory index is nil")
+	}
+	poolMap, err := validatePools(pools)
+	if err != nil {
+		return err
 	}
 	i.mu.Lock()
-	i.pools = copyPools
+	i.pools = poolMap
 	i.mu.Unlock()
+	return nil
 }
 
 func (i *MemoryIndex) Get(id string) (*Lease, bool) {
+	if i == nil || id == "" {
+		return nil, false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	value, ok := i.byID[id]
@@ -194,6 +249,9 @@ func (i *MemoryIndex) Get(id string) (*Lease, bool) {
 }
 
 func (i *MemoryIndex) ByMAC(mac string) (*Lease, bool) {
+	if i == nil || mac == "" {
+		return nil, false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	value, ok := i.byMAC[mac]
@@ -201,6 +259,9 @@ func (i *MemoryIndex) ByMAC(mac string) (*Lease, bool) {
 }
 
 func (i *MemoryIndex) HeldByIP(ip string) (*Lease, bool) {
+	if i == nil || ip == "" {
+		return nil, false
+	}
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	value, ok := i.byIP[ip]
@@ -212,6 +273,12 @@ func (i *MemoryIndex) HeldByIP(ip string) (*Lease, bool) {
 // manager's deterministic first-gap semantics. The lookup is not a claim: a
 // caller that needs an atomic in-memory reservation must use ClaimAvailable.
 func (i *MemoryIndex) FindAvailableIP(scopeID string) (string, error) {
+	if i == nil {
+		return "", errors.New("memory index is nil")
+	}
+	if scopeID == "" {
+		return "", errors.New("memory index requires a scope ID")
+	}
 	i.mu.RLock()
 	pool, ok := i.pools[scopeID]
 	held := make(map[string]struct{}, len(i.byIP))
@@ -233,15 +300,29 @@ func (i *MemoryIndex) FindAvailableIP(scopeID string) (string, error) {
 // guarantee, and must not be treated as a replacement for the SQLite primary
 // write until the full WAL-backed LeaseStore is production-wired.
 func (i *MemoryIndex) ClaimAvailable(scopeID string, value Lease) (Lease, error) {
+	if i == nil {
+		return Lease{}, errors.New("memory index is nil")
+	}
+	if scopeID == "" {
+		return Lease{}, errors.New("memory index claim requires a scope ID")
+	}
+	if value.ID == "" {
+		return Lease{}, errors.New("memory index claim requires a lease ID")
+	}
+	// DISCOVER creates an offer, and offers are deliberately generation 0.
+	// Generation 1 is assigned only when REQUEST promotes the offer to an
+	// active binding. Rejecting any other value keeps this opt-in allocator
+	// aligned with MutationOffer/MutationActivate and prevents a caller from
+	// publishing a fact identity for a binding that never existed.
+	if value.Generation != 0 {
+		return Lease{}, errors.New("memory index claim requires generation 0 for an offered lease")
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
 	pool, ok := i.pools[scopeID]
 	if !ok {
 		return Lease{}, fmt.Errorf("scope %s not found in memory index", scopeID)
-	}
-	if value.ID == "" {
-		return Lease{}, errors.New("memory index claim requires a lease ID")
 	}
 	if _, exists := i.byID[value.ID]; exists {
 		return Lease{}, fmt.Errorf("lease %s already exists in memory index", value.ID)

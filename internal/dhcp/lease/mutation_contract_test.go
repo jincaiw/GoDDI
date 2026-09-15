@@ -156,6 +156,16 @@ func TestMutationCommandEnforcesLeaseIdentityAndGeneration(t *testing.T) {
 	}
 }
 
+func TestValidateGenerationRejectsIncrementOverflow(t *testing.T) {
+	t.Parallel()
+
+	before := &Lease{ID: "l1", Status: LeaseStatusActive, Generation: maxLeaseGeneration}
+	after := &Lease{ID: "l1", Status: LeaseStatusActive, Generation: maxLeaseGeneration}
+	if err := validateGeneration(GenerationIncrement, before, after); !errors.Is(err, ErrInvalidMutationState) {
+		t.Fatalf("validateGeneration() error = %v, want overflow rejection", err)
+	}
+}
+
 func TestMutationCommandAcceptsGenerationRules(t *testing.T) {
 	t.Parallel()
 

@@ -60,7 +60,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.8.4"
+	Version   = "0.8.5"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -1459,11 +1459,11 @@ func runServer(configPath string) error {
 	// the range the last successful look measured.
 	if dhcpStore != nil {
 		dhcpLeaseMgr := lease.NewManager(dhcpStore.DB)
-		metrics.RegisterDHCPScopeStatsProvider(func() []metrics.DHCPScopeSample {
+		metrics.RegisterDHCPScopeStatsProvider(func() ([]metrics.DHCPScopeSample, bool) {
 			usage, err := dhcpLeaseMgr.ScopeUtilization()
 			if err != nil {
 				slog.Warn("metrics: could not read DHCP scope utilisation", "error", err)
-				return nil
+				return nil, false
 			}
 			out := make([]metrics.DHCPScopeSample, 0, len(usage))
 			for _, u := range usage {
@@ -1473,7 +1473,7 @@ func runServer(configPath string) error {
 					Ratio: u.Ratio,
 				})
 			}
-			return out
+			return out, true
 		})
 	}
 

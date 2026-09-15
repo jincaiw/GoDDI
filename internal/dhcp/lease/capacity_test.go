@@ -172,8 +172,10 @@ func TestTheCostOfAllocatingAtTheDocumentedLeaseCeiling(t *testing.T) {
 //
 // The states that must not block are included on purpose: an expired binding
 // and a released one are not held, and a disabled reservation is not a
-// reservation. A walk that treated "there is a row" as "the address is taken"
-// would pass a simpler test and fail this one.
+// reservation. Enabled reservations are added to the held set because they
+// block allocation just like active/offered/conflict leases. A walk that
+// treated "there is a row" as "the address is taken" would pass a simpler test
+// and fail this one.
 func TestTheFirstFreeAddressIsTheOneBruteForceWouldFind(t *testing.T) {
 	const (
 		poolFrom = "192.0.2.1"

@@ -228,11 +228,11 @@ func (m *Manager) ActivateLease(id string, duration time.Duration) (*Lease, erro
 	res, err := m.db.Exec(`
 		UPDATE dhcp_leases SET lease_start=?, lease_end=?, status=?, last_seen=datetime('now'),
 			generation = generation + 1
-		WHERE id=? AND status IN (?, ?)`,
+		WHERE id=? AND status IN (?, ?) AND generation=? AND generation < ?`,
 		now.Format("2006-01-02T15:04:05Z"),
 		now.Add(duration).Format("2006-01-02T15:04:05Z"),
 		string(LeaseStatusActive), id,
-		string(LeaseStatusOffered), string(LeaseStatusActive))
+		string(LeaseStatusOffered), string(LeaseStatusActive), previous.Generation, maxLeaseGeneration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to activate lease: %w", err)
 	}
@@ -487,6 +487,17 @@ func (m *Manager) UpdateLease(id string, opts LeaseOptions) (*Lease, error) {
 
 // RenewLease renews a lease by extending its end time.
 func (m *Manager) RenewLease(id string, duration time.Duration) (*Lease, error) {
+	current, found, err := m.findLease(id)
+	if err != nil {
+		return nil, fmt.Errorf("reading lease %s: %w", id, err)
+	}
+	if !found || current.Status != LeaseStatusActive {
+		return nil, fmt.Errorf("lease %s not found or not active", id)
+	}
+	if current.Generation == maxLeaseGeneration {
+		return nil, fmt.Errorf("%w: renew generation would overflow at %d", ErrInvalidMutationState, current.Generation)
+	}
+
 	now := time.Now().UTC()
 	leaseEnd := now.Add(duration)
 
@@ -522,14 +533,22 @@ func (m *Manager) ReleaseLease(id string) error {
 
 	res, err := m.db.Exec(`
 		UPDATE dhcp_leases SET status=?, last_seen=datetime('now')
-		WHERE id=?`, string(LeaseStatusReleased), id)
+		WHERE id=? AND status IN (?, ?) AND generation=?`, string(LeaseStatusReleased), id,
+		string(LeaseStatusActive), string(LeaseStatusOffered), before.Generation)
 	if err != nil {
 		return fmt.Errorf("failed to release lease: %w", err)
 	}
 	// Only report a transition that happened. A release that matched no row --
 	// the lease disappeared between the read and the write -- is not one.
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify release lease %s: %w", id, err)
+	}
+	if rows == 0 {
 		return nil
+	}
+	if rows != 1 {
+		return fmt.Errorf("failed to release lease %s: updated %d rows", id, rows)
 	}
 
 	released, err := m.GetLease(id)
@@ -558,15 +577,22 @@ func (m *Manager) MarkLeaseConflict(id string) error {
 
 	res, err := m.db.Exec(`
 		UPDATE dhcp_leases SET status=?, lease_end=?, last_seen=datetime('now')
-		WHERE id=?`,
+		WHERE id=? AND status IN (?, ?) AND generation=?`,
 		string(LeaseStatusConflict),
 		now.Add(declineQuarantine).Format("2006-01-02T15:04:05Z"),
-		id)
+		id, string(LeaseStatusActive), string(LeaseStatusOffered), before.Generation)
 	if err != nil {
 		return fmt.Errorf("failed to mark lease as conflict: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify conflict lease %s: %w", id, err)
+	}
+	if rows == 0 {
 		return nil
+	}
+	if rows != 1 {
+		return fmt.Errorf("failed to mark lease as conflict %s: updated %d rows", id, rows)
 	}
 
 	conflicted, err := m.GetLease(id)
@@ -596,8 +622,8 @@ func (m *Manager) QuarantineIP(scopeID, ip, mac string) (*Lease, error) {
 	var id string
 	err := m.db.QueryRow(`
 		SELECT id FROM dhcp_leases
-		WHERE ip_address = ? AND status IN (?, ?, ?)
-		ORDER BY lease_end DESC LIMIT 1`, ip,
+		WHERE scope_id = ? AND ip_address = ? AND status IN (?, ?, ?)
+		ORDER BY lease_end DESC LIMIT 1`, scopeID, ip,
 		string(LeaseStatusActive), string(LeaseStatusOffered), string(LeaseStatusConflict),
 	).Scan(&id)
 	switch {

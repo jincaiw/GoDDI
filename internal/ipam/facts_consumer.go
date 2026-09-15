@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam/address"
@@ -22,13 +23,14 @@ var (
 // facts.Envelope. SpaceID is resolved by the authoritative producer; keeping it
 // in the payload lets the consumer project without querying DHCP tables.
 type LeaseObservationFact struct {
-	Action   string `json:"action"`
-	LeaseID  string `json:"lease_id"`
-	ScopeID  string `json:"scope_id"`
-	SpaceID  string `json:"space_id"`
-	IP       string `json:"ip"`
-	MAC      string `json:"mac"`
-	Hostname string `json:"hostname"`
+	Action    string `json:"action"`
+	LeaseID   string `json:"lease_id"`
+	ScopeID   string `json:"scope_id"`
+	SpaceID   string `json:"space_id"`
+	IP        string `json:"ip"`
+	MAC       string `json:"mac"`
+	Hostname  string `json:"hostname"`
+	Tombstone bool   `json:"tombstone,omitempty"`
 }
 
 // FactsConsumer is an opt-in, restartable IPAM projection consumer. It does
@@ -37,9 +39,26 @@ type FactsConsumer struct {
 	linkage   *Linkage
 	outbox    *facts.ObservationOutbox
 	watermark *facts.WatermarkStore
+
+	lifecycleOnce sync.Once
+	lifecycleMu   sync.Mutex
+	wake          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	started       bool
+	state         FactsConsumerState
+	lifecycleErr  error
+	options       FactsConsumerOptions
 }
 
 func NewFactsConsumer(linkage *Linkage, outbox *facts.ObservationOutbox) (*FactsConsumer, error) {
+	return NewFactsConsumerWithOptions(linkage, outbox, FactsConsumerOptions{})
+}
+
+// NewFactsConsumerWithOptions constructs an opt-in consumer with an explicit
+// polling and batch policy. It does not start a goroutine.
+func NewFactsConsumerWithOptions(linkage *Linkage, outbox *facts.ObservationOutbox, options FactsConsumerOptions) (*FactsConsumer, error) {
 	if linkage == nil || linkage.db == nil || outbox == nil {
 		return nil, errors.New("ipam facts consumer: invalid dependencies")
 	}
@@ -47,7 +66,7 @@ func NewFactsConsumer(linkage *Linkage, outbox *facts.ObservationOutbox) (*Facts
 	if err != nil {
 		return nil, err
 	}
-	return &FactsConsumer{linkage: linkage, outbox: outbox, watermark: wm}, nil
+	return &FactsConsumer{linkage: linkage, outbox: outbox, watermark: wm, options: options}, nil
 }
 
 // ProcessOne applies the oldest due event in one transaction. Projection,

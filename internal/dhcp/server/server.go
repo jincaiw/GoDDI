@@ -742,6 +742,11 @@ func (s *Server) leaseExpiryLoop() {
 // failure and survives a restart, exactly like the updates driven by REQUEST.
 // Only confirmed bindings are queued: an expired offer or quarantine never
 // published a name, so it owns no record to withdraw.
+//
+// DNSUpdates is intentionally not re-checked here. It controls whether DHCP
+// creates or re-publishes a name; expiry cleanup revokes a historical
+// DHCP-owned record and is an idempotent delete. Re-reading the flag would
+// leave stale ownership behind when a scope disables updates after publishing.
 func (s *Server) sweepExpiredLeases(reason string) {
 	swept, err := s.leaseMgr.ExpireLeases()
 	if err != nil {

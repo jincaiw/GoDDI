@@ -63,6 +63,9 @@ func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
 			},
 			forbid: []string{
 				"MutationCommand{",
+				"FactsMutationWriter",
+				"ObservationOutbox",
+				"dhcp_ipam_observation_events",
 			},
 		},
 		{
@@ -72,10 +75,15 @@ func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
 			forbid: []string{"MutationCommand{"},
 		},
 		{
-			name:   "management delete",
-			path:   filepath.Join(root, "internal", "api", "handler", "dhcp_lease.go"),
-			must:   []string{"DHCPServices.LeaseMgr.ReleaseLease(id)"},
-			forbid: []string{"MutationCommand{"},
+			name: "management delete",
+			path: filepath.Join(root, "internal", "api", "handler", "dhcp_lease.go"),
+			must: []string{"DHCPServices.LeaseMgr.ReleaseLease(id)"},
+			forbid: []string{
+				"MutationCommand{",
+				"enqueueDNSEvent",
+				"ObserveLease",
+				"replicateLeaseState",
+			},
 		},
 	}
 	for _, tc := range cases {
