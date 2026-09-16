@@ -132,7 +132,8 @@ func TestWALLifecycleRejectsNilDependenciesAndContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lifecycle.Close(nil); err == nil {
+	var nilContext context.Context
+	if err := lifecycle.Close(nilContext); err == nil {
 		t.Fatal("nil close context unexpectedly accepted")
 	}
 }

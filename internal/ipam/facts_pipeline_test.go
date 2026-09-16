@@ -138,13 +138,14 @@ func TestFactsPipelineRejectsNilLifecycleContextsBeforeCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pipeline.Start(nil); err == nil {
+	var nilContext context.Context
+	if err := pipeline.Start(nilContext); err == nil {
 		t.Fatal("nil Start context unexpectedly accepted")
 	}
 	if beforeStartCalls != 0 {
 		t.Fatalf("BeforeStart calls = %d, want 0", beforeStartCalls)
 	}
-	if err := pipeline.Stop(nil); err == nil {
+	if err := pipeline.Stop(nilContext); err == nil {
 		t.Fatal("nil Stop context unexpectedly accepted")
 	}
 	status, err := pipeline.Status(context.Background())
