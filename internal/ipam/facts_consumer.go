@@ -59,8 +59,11 @@ func NewFactsConsumer(linkage *Linkage, outbox *facts.ObservationOutbox) (*Facts
 // NewFactsConsumerWithOptions constructs an opt-in consumer with an explicit
 // polling and batch policy. It does not start a goroutine.
 func NewFactsConsumerWithOptions(linkage *Linkage, outbox *facts.ObservationOutbox, options FactsConsumerOptions) (*FactsConsumer, error) {
-	if linkage == nil || linkage.db == nil || outbox == nil {
+	if linkage == nil || linkage.db == nil || outbox == nil || outbox.Database() == nil {
 		return nil, errors.New("ipam facts consumer: invalid dependencies")
+	}
+	if linkage.db != outbox.Database() {
+		return nil, errors.New("ipam facts consumer: producer outbox and control projection must share a database until split transport is implemented")
 	}
 	wm, err := facts.NewWatermarkStore(linkage.db)
 	if err != nil {

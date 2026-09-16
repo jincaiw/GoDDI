@@ -70,6 +70,16 @@ func (a *SequenceAllocator) NextTx(ctx context.Context, tx *sql.Tx) (int64, erro
 	return next, nil
 }
 
+// Database returns the database that owns the allocator row. It is exposed
+// only for migration-stage wiring checks; it does not provide cross-database
+// transaction semantics.
+func (a *SequenceAllocator) Database() *sql.DB {
+	if a == nil {
+		return nil
+	}
+	return a.db
+}
+
 func (a *SequenceAllocator) Current(ctx context.Context) (int64, error) {
 	if a == nil || a.db == nil {
 		return 0, ErrOutboxClosed

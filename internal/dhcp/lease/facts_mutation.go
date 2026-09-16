@@ -28,10 +28,11 @@ type DNSMutationSink interface {
 }
 
 type FactsMutationWriter struct {
-	manager   *Manager
-	allocator *facts.SequenceAllocator
-	outbox    *facts.ObservationOutbox
-	dns       DNSMutationSink
+	manager    *Manager
+	allocator  *facts.SequenceAllocator
+	outbox     *facts.ObservationOutbox
+	dns        DNSMutationSink
+	postCommit func()
 }
 
 func NewFactsMutationWriter(manager *Manager, allocator *facts.SequenceAllocator, outbox *facts.ObservationOutbox) (*FactsMutationWriter, error) {
@@ -41,8 +42,14 @@ func NewFactsMutationWriter(manager *Manager, allocator *facts.SequenceAllocator
 	if allocator == nil {
 		return nil, errors.New("lease facts mutation: nil sequence allocator")
 	}
-	if outbox == nil {
+	if outbox == nil || outbox.Database() == nil {
 		return nil, errors.New("lease facts mutation: nil observation outbox")
+	}
+	if allocator.Database() != manager.db {
+		return nil, errors.New("lease facts mutation: sequence allocator and lease manager must share a database")
+	}
+	if outbox.Database() != manager.db {
+		return nil, errors.New("lease facts mutation: observation outbox and lease manager must share a database")
 	}
 	return &FactsMutationWriter{manager: manager, allocator: allocator, outbox: outbox}, nil
 }
@@ -54,6 +61,22 @@ func (w *FactsMutationWriter) WithDNSSink(sink DNSMutationSink) *FactsMutationWr
 		w.dns = sink
 	}
 	return w
+}
+
+// WithPostCommitWake installs an optional non-blocking notification invoked
+// only after an opt-in mutation transaction commits successfully. The callback
+// must not perform the mutation itself or assume a transaction is still open.
+func (w *FactsMutationWriter) WithPostCommitWake(wake func()) *FactsMutationWriter {
+	if w != nil {
+		w.postCommit = wake
+	}
+	return w
+}
+
+func (w *FactsMutationWriter) notifyPostCommit() {
+	if w != nil && w.postCommit != nil {
+		w.postCommit()
+	}
 }
 
 // ActivateLease performs the offered -> active transition and commits its fact
@@ -76,6 +99,7 @@ func (w *FactsMutationWriter) ActivateLease(ctx context.Context, eventID, source
 		return nil, fmt.Errorf("lease facts mutation: commit activate: %w", err)
 	}
 	w.manager.auditBind(before, after)
+	w.notifyPostCommit()
 	return after, nil
 }
 
@@ -146,6 +170,7 @@ func (w *FactsMutationWriter) RenewLease(ctx context.Context, eventID, source, s
 		return nil, fmt.Errorf("lease facts mutation: commit renew: %w", err)
 	}
 	w.manager.auditBind(before, after)
+	w.notifyPostCommit()
 	return after, nil
 }
 
@@ -208,6 +233,7 @@ func (w *FactsMutationWriter) DeclineLease(ctx context.Context, eventID, source,
 		return nil, fmt.Errorf("lease facts mutation: commit decline: %w", err)
 	}
 	w.manager.auditDecline(before, after)
+	w.notifyPostCommit()
 	return after, nil
 }
 
@@ -277,6 +303,7 @@ func (w *FactsMutationWriter) ExpireLease(ctx context.Context, eventID, source, 
 		return nil, fmt.Errorf("lease facts mutation: commit expire: %w", err)
 	}
 	w.manager.auditExpire(before, after)
+	w.notifyPostCommit()
 	return after, nil
 }
 
@@ -340,6 +367,7 @@ func (w *FactsMutationWriter) ReleaseLease(ctx context.Context, eventID, source,
 		return nil, fmt.Errorf("lease facts mutation: commit release: %w", err)
 	}
 	w.manager.auditRelease(before, after)
+	w.notifyPostCommit()
 	return after, nil
 }
 

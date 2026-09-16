@@ -222,17 +222,17 @@ func TestTheKeySignalsAreAlertedOn(t *testing.T) {
 	})
 
 	for _, name := range []string{
-		"goddi_dataplane_ready",                       // the graded readiness level
-		"goddi_dataplane_pending_changes",             // a backlog nobody could otherwise see
-		"goddi_dhcp_scope_usage_ratio",                // pool exhaustion
-		"goddi_dhcp_scope_utilization_scrape_error",   // failed utilization read
+		"goddi_dataplane_ready",                                       // the graded readiness level
+		"goddi_dataplane_pending_changes",                             // a backlog nobody could otherwise see
+		"goddi_dhcp_scope_usage_ratio",                                // pool exhaustion
+		"goddi_dhcp_scope_utilization_scrape_error",                   // failed utilization read
 		"goddi_dhcp_scope_utilization_last_success_timestamp_seconds", // stale utilization
-		"goddi_dhcp_ha_redundant",                     // a pair that quietly stopped being a pair
-		"goddi_dhcp_ha_promising",                     // a node that stopped handing out addresses
-		"goddi_db_errors_total",                       // the counter that had no producer
-		"goddi_dns_secondary_zone_sync_failures",      // secondary refresh health
-		"goddi_backup_last_success_timestamp_seconds", // backup age
-		"goddi_dns_servfail_total",                    // resolution quality
+		"goddi_dhcp_ha_redundant",                                     // a pair that quietly stopped being a pair
+		"goddi_dhcp_ha_promising",                                     // a node that stopped handing out addresses
+		"goddi_db_errors_total",                                       // the counter that had no producer
+		"goddi_dns_secondary_zone_sync_failures",                      // secondary refresh health
+		"goddi_backup_last_success_timestamp_seconds",                 // backup age
+		"goddi_dns_servfail_total",                                    // resolution quality
 	} {
 		if !alerted[name] {
 			t.Errorf("no rule references %s", name)

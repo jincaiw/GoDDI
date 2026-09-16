@@ -104,6 +104,12 @@ func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
 	source := string(data)
 
 	for _, forbidden := range []string{
+		"ipam.NewFactsPipeline(",
+		"FactsPipelineOptions{Enabled: true",
+		"factsPipeline.Start(",
+		"factsPipeline.Wake(",
+		"factsPipeline.Stop(",
+		"FactsPipelineLifecycle",
 		"ipam.NewFactsConsumer(",
 		"ipam.NewFactsConsumerWithOptions(",
 		"factsConsumer.Start(",

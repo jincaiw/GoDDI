@@ -40,6 +40,16 @@ func NewObservationOutbox(db *sql.DB) (*ObservationOutbox, error) {
 	return &ObservationOutbox{db: db}, nil
 }
 
+// Database returns the database that owns the durable outbox. Consumers use
+// this only to validate an explicit migration-stage wiring contract; it does
+// not grant cross-database transaction semantics.
+func (o *ObservationOutbox) Database() *sql.DB {
+	if o == nil {
+		return nil
+	}
+	return o.db
+}
+
 // Enqueue records one validated envelope. The caller may use EnqueueTx to put
 // this insert beside the authoritative lease mutation in one transaction.
 func (o *ObservationOutbox) Enqueue(ctx context.Context, event Envelope) error {

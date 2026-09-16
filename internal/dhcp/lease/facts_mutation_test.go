@@ -30,6 +30,33 @@ func newFactsMutationWriter(t *testing.T) (*FactsMutationWriter, *sql.DB, *Manag
 	return writer, db, manager
 }
 
+func TestNewFactsMutationWriterRejectsSplitDatabases(t *testing.T) {
+	managerDB := newTestDB(t)
+	t.Cleanup(func() { _ = managerDB.Close() })
+	allocatorDB := newTestDB(t)
+	t.Cleanup(func() { _ = allocatorDB.Close() })
+	outboxDB := newTestDB(t)
+	t.Cleanup(func() { _ = outboxDB.Close() })
+	allocator, err := facts.NewSequenceAllocator(allocatorDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(outboxDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFactsMutationWriter(NewManager(managerDB), allocator, outbox); err == nil {
+		t.Fatal("split manager/allocator/outbox databases unexpectedly accepted")
+	}
+	allocator, err = facts.NewSequenceAllocator(managerDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFactsMutationWriter(NewManager(managerDB), allocator, outbox); err == nil {
+		t.Fatal("split manager/outbox databases unexpectedly accepted")
+	}
+}
+
 func seedOfferedLease(t *testing.T, db *sql.DB, manager *Manager) *Lease {
 	t.Helper()
 	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
@@ -67,6 +94,31 @@ func (p *dnsSinkProbe) EnqueueTx(tx *sql.Tx, l *Lease, action DNSMutationAction)
 		p.calls++
 	}
 	return err
+}
+
+func TestFactsMutationWriterPostCommitWakeRunsOnlyAfterCommit(t *testing.T) {
+	writer, db, manager := newFactsMutationWriter(t)
+	offered := seedOfferedLease(t, db, manager)
+	wakeCalls := 0
+	writer.WithPostCommitWake(func() { wakeCalls++ })
+	if _, err := writer.ActivateLease(context.Background(), "event-wake", "dhcp-node-a", "space-1", offered.ID, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if wakeCalls != 1 {
+		t.Fatalf("wake calls after commit = %d, want 1", wakeCalls)
+	}
+	writer.WithDNSSink(&dnsSinkProbe{fail: true})
+	seedScope(t, db, "scope-2", "lan-2", "192.0.2.0/24", "192.0.2.30", "192.0.2.39")
+	offered, err := manager.ReserveAddress("scope-2", "192.0.2.30", "aa:bb:cc:dd:ee:30", "host-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.ActivateLease(context.Background(), "event-wake-fail", "dhcp-node-a", "space-1", offered.ID, time.Hour); err == nil {
+		t.Fatal("failed mutation unexpectedly succeeded")
+	}
+	if wakeCalls != 1 {
+		t.Fatalf("wake calls after rollback = %d, want 1", wakeCalls)
+	}
 }
 
 func TestFactsMutationWriterDerivesEventIDWhenOmitted(t *testing.T) {
