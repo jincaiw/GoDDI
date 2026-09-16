@@ -58,14 +58,17 @@ func (m *ProtocolModel) Publish(req PublishRequest) (PublishRecord, error) {
 	if req.PublishID == "" {
 		return PublishRecord{}, fmt.Errorf("cluster protocol: publish_id is required")
 	}
-	if existing, ok := m.publishes[req.PublishID]; ok {
-		return existing, nil
-	}
 	if req.Epoch != m.epoch {
 		return PublishRecord{}, fmt.Errorf("cluster protocol: stale epoch")
 	}
 	if req.Leader != m.leader {
 		return PublishRecord{}, fmt.Errorf("cluster protocol: leader is not authorized")
+	}
+	if m.fenced[req.Leader] {
+		return PublishRecord{}, fmt.Errorf("cluster protocol: leader is fenced")
+	}
+	if existing, ok := m.publishes[req.PublishID]; ok {
+		return existing, nil
 	}
 	if m.votes < m.quorum {
 		return PublishRecord{}, fmt.Errorf("cluster protocol: quorum is not available")
@@ -99,6 +102,12 @@ func (m *ProtocolModel) Query(publishID string) (PublishRecord, bool) {
 }
 
 func (m *ProtocolModel) Apply(node string, seq int64) error {
+	if node == "" {
+		return fmt.Errorf("cluster protocol: node is required")
+	}
+	if seq < 1 {
+		return fmt.Errorf("cluster protocol: sequence must be positive")
+	}
 	applied := m.watermarks[node]
 	switch {
 	case seq <= applied:

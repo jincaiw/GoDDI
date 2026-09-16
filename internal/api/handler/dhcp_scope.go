@@ -13,10 +13,10 @@ import (
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/configver"
 	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
 	"github.com/jasonwa/goddi/internal/dhcp/option"
 	"github.com/jasonwa/goddi/internal/dhcp/reservation"
 	"github.com/jasonwa/goddi/internal/dhcp/scope"
+	dhcpserver "github.com/jasonwa/goddi/internal/dhcp/server"
 	"github.com/jasonwa/goddi/internal/ipam"
 )
 
@@ -28,12 +28,13 @@ var dhcpInitOnce sync.Once
 
 // DHCPServiceContainer holds references to all DHCP service components.
 type DHCPServiceContainer struct {
-	DB          *sql.DB
-	ScopeMgr    *scope.Manager
-	LeaseMgr    *lease.Manager
-	ReservMgr   *reservation.Manager
-	OptionMgr   *option.Manager
-	EventLogger *dhcpinternal.EventLogger
+	DB            *sql.DB
+	ScopeMgr      *scope.Manager
+	LeaseMgr      dhcpserver.LeaseReader
+	MutationOwner dhcpserver.LeaseMutationOwner
+	ReservMgr     *reservation.Manager
+	OptionMgr     *option.Manager
+	EventLogger   *dhcpinternal.EventLogger
 
 	// LeasesAreReplica marks the lease view as a copy.
 	//

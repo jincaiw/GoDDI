@@ -12,6 +12,7 @@ import (
 type leaseStoreProbe struct {
 	manager       *lease.Manager
 	getLeaseCalls int
+	expireCalls   int
 }
 
 func (p *leaseStoreProbe) CreateLease(scopeID, ip, mac, hostname string, duration time.Duration) (*lease.Lease, error) {
@@ -53,7 +54,22 @@ func (p *leaseStoreProbe) QuarantineIP(scopeID, ip, mac string) (*lease.Lease, e
 	return p.manager.QuarantineIP(scopeID, ip, mac)
 }
 
-func (p *leaseStoreProbe) ExpireLeases() ([]*lease.Lease, error) { return p.manager.ExpireLeases() }
+func (p *leaseStoreProbe) ExpireLeases() ([]*lease.Lease, error) {
+	p.expireCalls++
+	return p.manager.ExpireLeases()
+}
+
+func TestLeaseMutationOwnerRoutesExpiryToPacketPathStore(t *testing.T) {
+	store := newLeaseStore(t)
+	probe := &leaseStoreProbe{manager: lease.NewManager(store.DB)}
+	s := NewWithLeaseStore(probe, store.DB, []string{"eth0"}, nil)
+	if _, err := s.ExpireLeasesFromDataPlane(); err != nil {
+		t.Fatalf("ExpireLeasesFromDataPlane: %v", err)
+	}
+	if probe.expireCalls != 1 {
+		t.Fatalf("ExpireLeases calls = %d, want 1", probe.expireCalls)
+	}
+}
 
 func TestNewWithLeaseStoreInjectsPacketPathStore(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")

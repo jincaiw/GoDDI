@@ -1,11 +1,15 @@
 package server
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
+	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
 	"github.com/jasonwa/goddi/internal/ipam/address"
 	"github.com/jasonwa/goddi/internal/ipam/space"
@@ -45,9 +49,51 @@ func newIPAMLinkedServer(t *testing.T) (*Server, *sql.DB, *ipam.Linkage, string)
 		t.Fatalf("create subnet: %v", err)
 	}
 
+	ensureReleaseFactsSchema(t, db)
+
 	link := ipam.NewLinkage(db)
 	s.SetLeaseObserver(link)
 	return s, db, link, sp.ID
+}
+
+// ensureReleaseFactsSchema installs the migration-stage facts tables in this
+// combined control/lease fixture. Production keeps these tables in the lease
+// data-plane migration set; this fixture intentionally shares one in-memory
+// database because the server's IPAM linkage tests exercise both sides through
+// one SQL handle.
+func ensureReleaseFactsSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	mustExec(t, db, `
+		CREATE TABLE IF NOT EXISTS dhcp_ipam_observation_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			version INTEGER NOT NULL CHECK (version > 0),
+			entity TEXT NOT NULL,
+			action TEXT NOT NULL,
+			generation INTEGER NOT NULL CHECK (generation >= 0),
+			sequence INTEGER NOT NULL UNIQUE CHECK (sequence > 0),
+			source TEXT NOT NULL,
+			occurred_at DATETIME NOT NULL,
+			payload_version INTEGER NOT NULL CHECK (payload_version > 0),
+			payload TEXT NOT NULL CHECK (json_valid(payload)),
+			attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+			next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			last_error TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending'
+				CHECK (status IN ('pending', 'done', 'failed')),
+			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`)
+	mustExec(t, db, `
+		CREATE TABLE IF NOT EXISTS facts_projection_watermark (
+			domain TEXT PRIMARY KEY,
+			applied_seq INTEGER NOT NULL DEFAULT 0 CHECK (applied_seq >= 0)
+		)`)
+	mustExec(t, db, `
+		CREATE TABLE IF NOT EXISTS facts_sequence_allocator (
+			domain TEXT PRIMARY KEY,
+			last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0)
+		)`)
 }
 
 // ipamAddress reads the address row the operator would see.
@@ -108,6 +154,253 @@ func sendRelease(t *testing.T, s *Server, mac net.HardwareAddr) {
 	}
 	if err := s.HandleRelease(msg); err != nil {
 		t.Fatalf("HandleRelease: %v", err)
+	}
+}
+
+type releaseFactsCallerProbe struct {
+	writer    *lease.FactsMutationWriter
+	calls     int
+	eventIDs  []string
+	wakeCalls int
+}
+
+func (p *releaseFactsCallerProbe) ReleaseLease(ctx context.Context, eventID, source, spaceID, id string) (*lease.Lease, error) {
+	p.calls++
+	p.eventIDs = append(p.eventIDs, eventID)
+	return p.writer.ReleaseLease(ctx, eventID, source, spaceID, id)
+}
+
+type releaseFactsDNSSinkFailure struct{}
+
+func (releaseFactsDNSSinkFailure) EnqueueTx(*sql.Tx, *lease.Lease, lease.DNSMutationAction) error {
+	return errors.New("legacy DNS sink unavailable")
+}
+
+type releaseFactsObserverProbe struct {
+	db        *sql.DB
+	calls     int
+	status    string
+	factCount int
+}
+
+func (p *releaseFactsObserverProbe) ObserveLease(string, string, string, string, string, string) error {
+	p.calls++
+	_ = p.db.QueryRow(`SELECT status FROM dhcp_leases WHERE id = (SELECT id FROM dhcp_leases LIMIT 1)`).Scan(&p.status)
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&p.factCount)
+	return nil
+}
+
+type releaseFactsReplicatorProbe struct {
+	db        *sql.DB
+	calls     int
+	status    string
+	factCount int
+}
+
+func (p *releaseFactsReplicatorProbe) MayBind() bool { return true }
+
+func (p *releaseFactsReplicatorProbe) Confirm(context.Context, *lease.Lease) error { return nil }
+
+func (p *releaseFactsReplicatorProbe) Replicate(l *lease.Lease) {
+	p.calls++
+	if l != nil {
+		p.status = string(l.Status)
+	}
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&p.factCount)
+}
+
+func newReleaseFactsServer(t *testing.T) (*Server, *sql.DB, *releaseFactsCallerProbe, *ipam.ScopeIdentityResolver, string) {
+	t.Helper()
+	s, db, _, spaceID := newIPAMLinkedServer(t)
+	allocator, err := facts.NewSequenceAllocator(db)
+	if err != nil {
+		t.Fatalf("create facts sequence allocator: %v", err)
+	}
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatalf("create facts outbox: %v", err)
+	}
+	writer, err := lease.NewFactsMutationWriter(lease.NewManager(db), allocator, outbox)
+	if err != nil {
+		t.Fatalf("create facts mutation writer: %v", err)
+	}
+	resolver, err := ipam.NewScopeIdentityResolver(db)
+	if err != nil {
+		t.Fatalf("create scope identity resolver: %v", err)
+	}
+	probe := &releaseFactsCallerProbe{writer: writer}
+	writer.WithPostCommitWake(func() { probe.wakeCalls++ })
+	s.SetReleaseFactsMutation(&ReleaseFactsMutationConfig{
+		Caller: probe,
+		Source: "dhcp-node-a",
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+	return s, db, probe, resolver, spaceID
+}
+
+func TestHandleReleaseFactsOptInCommitsLeaseAndFactBeforePostCommitSideEffects(t *testing.T) {
+	s, db, caller, _, _ := newReleaseFactsServer(t)
+	mac := testMAC(20)
+	dhcpExchange(t, s, mac, "host20")
+
+	observer := &releaseFactsObserverProbe{db: db}
+	replicator := &releaseFactsReplicatorProbe{db: db}
+	s.SetLeaseObserver(observer)
+	s.SetLeaseReplicator(replicator)
+
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP(ipamLinkageIP)),
+	)
+	if err != nil {
+		t.Fatalf("build RELEASE: %v", err)
+	}
+	if err := s.HandleRelease(msg); err != nil {
+		t.Fatalf("HandleRelease: %v", err)
+	}
+
+	if caller.calls != 1 {
+		t.Fatalf("facts caller calls = %d, want 1", caller.calls)
+	}
+	if len(caller.eventIDs) != 1 || caller.eventIDs[0] != "" {
+		t.Fatalf("caller event IDs = %#v, want one omitted event ID", caller.eventIDs)
+	}
+	if got := leaseStatusFor(t, db, ipamLinkageIP); got != string(lease.LeaseStatusReleased) {
+		t.Fatalf("lease status = %q, want released", got)
+	}
+	var action string
+	if err := db.QueryRow(`SELECT action FROM dhcp_ipam_observation_events`).Scan(&action); err != nil {
+		t.Fatalf("read release fact: %v", err)
+	}
+	if action != string(lease.MutationRelease) {
+		t.Fatalf("fact action = %q, want %q", action, lease.MutationRelease)
+	}
+	if caller.wakeCalls != 1 {
+		t.Fatalf("post-commit wake calls = %d, want 1", caller.wakeCalls)
+	}
+	if observer.calls != 1 || observer.status != string(lease.LeaseStatusReleased) || observer.factCount != 1 {
+		t.Fatalf("observer calls=%d status=%q facts=%d, want committed release and one fact", observer.calls, observer.status, observer.factCount)
+	}
+	if replicator.calls != 1 || replicator.status != string(lease.LeaseStatusReleased) || replicator.factCount != 1 {
+		t.Fatalf("replicator calls=%d status=%q facts=%d, want committed release and one fact", replicator.calls, replicator.status, replicator.factCount)
+	}
+}
+
+func TestHandleReleaseFactsFailureDoesNotFallbackOrTriggerPostCommitSideEffects(t *testing.T) {
+	s, db, caller, _, _ := newReleaseFactsServer(t)
+	caller.writer.WithDNSSink(releaseFactsDNSSinkFailure{})
+	mac := testMAC(21)
+	dhcpExchange(t, s, mac, "host21")
+
+	observer := &releaseFactsObserverProbe{db: db}
+	replicator := &releaseFactsReplicatorProbe{db: db}
+	s.SetLeaseObserver(observer)
+	s.SetLeaseReplicator(replicator)
+
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP(ipamLinkageIP)),
+	)
+	if err != nil {
+		t.Fatalf("build RELEASE: %v", err)
+	}
+	if err := s.HandleRelease(msg); err == nil {
+		t.Fatal("facts failure unexpectedly succeeded")
+	}
+
+	if caller.calls != 1 {
+		t.Fatalf("facts caller calls = %d, want 1", caller.calls)
+	}
+	if got := leaseStatusFor(t, db, ipamLinkageIP); got != string(lease.LeaseStatusActive) {
+		t.Fatalf("lease status after facts failure = %q, want active; legacy fallback or partial commit occurred", got)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&count); err != nil {
+		t.Fatalf("count facts after failure: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("facts after failed release = %d, want 0", count)
+	}
+	if caller.wakeCalls != 0 {
+		t.Fatalf("post-commit wake calls after failed release = %d, want 0", caller.wakeCalls)
+	}
+	if observer.calls != 0 {
+		t.Fatalf("observer calls after failed release = %d, want 0", observer.calls)
+	}
+	if replicator.calls != 0 {
+		t.Fatalf("replicator calls after failed release = %d, want 0", replicator.calls)
+	}
+}
+
+func TestHandleReleaseFactsIdentityMissingFailsClosed(t *testing.T) {
+	s, db, caller, resolver, _ := newReleaseFactsServer(t)
+	mac := testMAC(22)
+	dhcpExchange(t, s, mac, "host22")
+	s.SetReleaseFactsMutation(&ReleaseFactsMutationConfig{
+		Caller: caller,
+		Source: "",
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP(ipamLinkageIP)),
+	)
+	if err != nil {
+		t.Fatalf("build RELEASE: %v", err)
+	}
+	if err := s.HandleRelease(msg); err == nil {
+		t.Fatal("missing facts identity unexpectedly succeeded")
+	}
+	if caller.calls != 0 {
+		t.Fatalf("facts caller calls after missing identity = %d, want 0", caller.calls)
+	}
+	if got := leaseStatusFor(t, db, ipamLinkageIP); got != string(lease.LeaseStatusActive) {
+		t.Fatalf("lease status after missing identity = %q, want active", got)
+	}
+}
+
+func TestHandleReleaseDefaultsToLegacySQLiteMutation(t *testing.T) {
+	s, db := newDHCPTestServer(t)
+	if s.releaseFacts != nil {
+		t.Fatal("default server unexpectedly enabled RELEASE facts mutation")
+	}
+	mac := testMAC(23)
+	if _, err := s.HandleDiscover(discoverMsg(t, mac), "eth0", net.ParseIP(testServerIP)); err != nil {
+		t.Fatalf("HandleDiscover: %v", err)
+	}
+	if _, err := s.HandleRequest(selectingRequest(t, mac, "192.0.2.100"), "eth0", net.ParseIP(testServerIP)); err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	msg, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP("192.0.2.100")),
+	)
+	if err != nil {
+		t.Fatalf("build RELEASE: %v", err)
+	}
+	if err := s.HandleRelease(msg); err != nil {
+		t.Fatalf("legacy HandleRelease: %v", err)
+	}
+	if got := leaseStatusFor(t, db, "192.0.2.100"); got != string(lease.LeaseStatusReleased) {
+		t.Fatalf("legacy lease status = %q, want released", got)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&count); err != nil {
+		t.Fatalf("count default facts: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("default legacy release wrote %d facts", count)
 	}
 }
 

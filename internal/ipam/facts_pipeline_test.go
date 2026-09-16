@@ -513,6 +513,56 @@ func TestFactsPipelineWakeDrainsFactsMutationAfterCommit(t *testing.T) {
 	t.Fatal("pipeline did not drain facts mutation after commit wake")
 }
 
+func TestFactsPipelineRestartsAfterConsumerFailure(t *testing.T) {
+	db := newConsumerDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline, err := NewFactsPipeline(NewLinkage(db), outbox, FactsPipelineOptions{
+		Enabled:         true,
+		ConsumerOptions: FactsConsumerOptions{PollInterval: time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedObservationEvent(t, outbox, 2, LeaseActionBind)
+	if err := pipeline.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		status, statusErr := pipeline.Status(context.Background())
+		if statusErr != nil {
+			t.Fatal(statusErr)
+		}
+		if status.Consumer.State == FactsConsumerFailed {
+			if err := pipeline.Stop(context.Background()); !errors.Is(err, ErrFactsConsumerFailed) {
+				t.Fatalf("Stop after failed consumer = %v", err)
+			}
+			seedObservationEventWithID(t, outbox, "event-bind-repaired", 1, LeaseActionBind)
+			if err := pipeline.Start(context.Background()); err != nil {
+				t.Fatalf("restart after repair: %v", err)
+			}
+			defer func() { _ = pipeline.Stop(context.Background()) }()
+			for time.Now().Before(deadline.Add(time.Second)) {
+				status, statusErr = pipeline.Status(context.Background())
+				if statusErr != nil {
+					t.Fatal(statusErr)
+				}
+				if status.Consumer.LastApplied == 2 && status.Consumer.Pending == 0 && status.Consumer.Failed == 0 {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatalf("restarted pipeline did not drain repaired backlog: %+v", status)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("pipeline did not fail closed on a sequence gap")
+}
+
 func TestFactsPipelineRejectsEnabledSplitStorageBeforeStart(t *testing.T) {
 	producer := newConsumerDB(t)
 	t.Cleanup(func() { _ = producer.Close() })

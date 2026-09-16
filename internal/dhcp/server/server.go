@@ -80,6 +80,11 @@ type Server struct {
 	// unset means the entry waits for the poll, which is correct and slower.
 	outboxWake func()
 
+	// releaseFacts is nil by default. When configured, RELEASE is routed
+	// exclusively through the facts caller; a facts failure never falls back to
+	// the legacy lease mutation.
+	releaseFacts *ReleaseFactsMutationConfig
+
 	quit chan struct{}
 	wg   sync.WaitGroup
 
@@ -107,8 +112,49 @@ type LeaseObserver interface {
 	ObserveLease(action, leaseID, scopeID, ip, mac, hostname string) error
 }
 
+// ReleaseFactsMutationCaller is the explicit opt-in caller seam for a RELEASE
+// mutation that writes the lease and unified facts in one transaction. The
+// default DHCP path leaves this unset and continues to use LeaseStore.
+type ReleaseFactsMutationCaller interface {
+	ReleaseLease(ctx context.Context, eventID, source, spaceID, id string) (*lease.Lease, error)
+}
+
+// ReleaseFactsMutationConfig supplies the producer-owned identity inputs. The
+// resolver must read the control/IPAM side before the lease transaction starts;
+// a missing source, resolver, or space ID fails closed and never falls back to
+// the legacy mutation.
+type ReleaseFactsMutationConfig struct {
+	Caller         ReleaseFactsMutationCaller
+	Source         string
+	ResolveSpaceID func(scopeID, ip string) (string, error)
+}
+
 // SetLeaseObserver installs the observer. It is called once during wiring.
 func (s *Server) SetLeaseObserver(o LeaseObserver) { s.leaseObserver = o }
+
+// ReleaseLeaseFromManagement routes a management release through the same
+// packet-path lease owner. It is intentionally separate from HandleRelease:
+// management callers do not have a DHCP packet, but they must not receive a
+// different mutation owner.
+func (s *Server) ReleaseLeaseFromManagement(id string) error {
+	if s == nil || s.leaseMgr == nil {
+		return errors.New("dhcp server: lease mutation owner is unavailable")
+	}
+	return s.leaseMgr.ReleaseLease(id)
+}
+
+// ExpireLeasesFromDataPlane routes maintenance expiry through the packet-path
+// lease owner. A control process may observe a lease replica, but it cannot
+// perform expiry by calling the read-only view.
+func (s *Server) ExpireLeasesFromDataPlane() ([]*lease.Lease, error) {
+	if s == nil || s.leaseMgr == nil {
+		return nil, errors.New("dhcp server: lease mutation owner is unavailable")
+	}
+	return s.leaseMgr.ExpireLeases()
+}
+
+var _ LeaseMutationOwner = (*Server)(nil)
+var _ LeaseReader = (*lease.Manager)(nil)
 
 // LeaseReplicator is the second copy a binding has to reach before the client
 // is told it holds an address.
@@ -748,7 +794,7 @@ func (s *Server) leaseExpiryLoop() {
 // DHCP-owned record and is an idempotent delete. Re-reading the flag would
 // leave stale ownership behind when a scope disables updates after publishing.
 func (s *Server) sweepExpiredLeases(reason string) {
-	swept, err := s.leaseMgr.ExpireLeases()
+	swept, err := s.ExpireLeasesFromDataPlane()
 	if err != nil {
 		slog.Error("DHCP server: failed to expire leases", "reason", reason, "error", err)
 		return
@@ -836,6 +882,12 @@ func (s *Server) enqueueDNSEvent(l *lease.Lease, action dhcpinternal.DNSEventAct
 // DHCP server, and the data plane must not have to know which loop it is
 // feeding.
 func (s *Server) SetOutboxWake(fn func()) { s.outboxWake = fn }
+
+// SetReleaseFactsMutation enables the explicit RELEASE facts seam. Passing nil
+// disables it. No default constructor calls this method.
+func (s *Server) SetReleaseFactsMutation(cfg *ReleaseFactsMutationConfig) {
+	s.releaseFacts = cfg
+}
 
 // SetRequestAdmission configures the bounded request queue and worker count.
 // It must be called before Start; non-positive values restore safe defaults.

@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -285,6 +286,83 @@ func TestFactsMutationWriterDeclineCommitsConflictFact(t *testing.T) {
 	}
 	if action != string(MutationDecline) {
 		t.Fatalf("fact action = %s", action)
+	}
+}
+
+func TestFactsMutationWriterDeclineTombstoneCommitsLeaseAndFactTogether(t *testing.T) {
+	writer, db, _ := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	tombstone, err := writer.DeclineTombstone(context.Background(), "event-tombstone-1", "dhcp-node-a", "space-1", "tomb-1", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", time.Hour)
+	if err != nil {
+		t.Fatalf("DeclineTombstone: %v", err)
+	}
+	if tombstone.ID != "tomb-1" || tombstone.Status != LeaseStatusConflict || tombstone.Generation != 0 {
+		t.Fatalf("tombstone = %+v", tombstone)
+	}
+	var storedStatus string
+	if err := db.QueryRow(`SELECT status FROM dhcp_leases WHERE id=?`, tombstone.ID).Scan(&storedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if storedStatus != string(LeaseStatusConflict) {
+		t.Fatalf("stored tombstone status = %s", storedStatus)
+	}
+	var payload string
+	if err := db.QueryRow(`SELECT payload FROM dhcp_ipam_observation_events WHERE event_id=?`, "event-tombstone-1").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var fact DeclineTombstoneFact
+	if err := json.Unmarshal([]byte(payload), &fact); err != nil {
+		t.Fatalf("decode tombstone fact: %v", err)
+	}
+	if fact.LeaseID != tombstone.ID || fact.ScopeID != tombstone.ScopeID || fact.SpaceID != "space-1" || !fact.Tombstone {
+		t.Fatalf("tombstone fact = %+v", fact)
+	}
+}
+
+func TestFactsMutationWriterDeclineTombstoneRollbackRemovesLeaseAndFact(t *testing.T) {
+	writer, db, _ := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.DeclineTombstoneTx(context.Background(), tx, "event-tombstone-rollback", "dhcp-node-a", "space-1", "tomb-rollback", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_leases WHERE id=?`, "tomb-rollback").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("tombstone rows after rollback = %d", count)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id=?`, "event-tombstone-rollback").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("tombstone facts after rollback = %d", count)
+	}
+}
+
+func TestFactsMutationWriterDeclineTombstoneDerivesStableEventID(t *testing.T) {
+	writer, db, _ := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	if _, err := writer.DeclineTombstone(context.Background(), "", "dhcp-node-a", "space-1", "tomb-stable", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", time.Hour); err != nil {
+		t.Fatalf("DeclineTombstone: %v", err)
+	}
+	identity, err := NewMutationFactIdentity("dhcp-node-a", "space-1", MutationDecline, "tomb-stable", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := db.QueryRow(`SELECT event_id FROM dhcp_ipam_observation_events`).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if eventID != identity.EventID {
+		t.Fatalf("event ID = %q, want %q", eventID, identity.EventID)
 	}
 }
 

@@ -70,6 +70,12 @@ func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source strin
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("lease facts expiry: commit: %w", err)
 	}
+	for _, before := range candidates {
+		after := *before
+		after.Status = LeaseStatusExpired
+		w.manager.auditExpire(before, &after)
+	}
+	w.notifyPostCommit()
 	return candidates, nil
 }
 

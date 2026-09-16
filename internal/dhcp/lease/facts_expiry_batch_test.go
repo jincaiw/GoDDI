@@ -88,6 +88,43 @@ func TestFactsMutationWriterExpireFactsBatchRollsBackAllRowsAndFacts(t *testing.
 	}
 }
 
+func TestFactsMutationWriterExpireFactsBatchRunsAuditAndWakeAfterCommit(t *testing.T) {
+	writer, db, manager := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	lease, err := manager.CreateLease("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", "host-10", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE dhcp_leases SET lease_end=datetime('now', '-1 minute') WHERE id=?`, lease.ID); err != nil {
+		t.Fatal(err)
+	}
+	wakeCalls := 0
+	writer.WithPostCommitWake(func() { wakeCalls++ })
+	if _, err := writer.ExpireFactsBatch(context.Background(), "dhcp-node-a", func(*Lease) (string, error) { return "space-1", nil }); err != nil {
+		t.Fatalf("ExpireFactsBatch: %v", err)
+	}
+	if wakeCalls != 1 {
+		t.Fatalf("wake calls = %d, want 1", wakeCalls)
+	}
+	rows := auditRows(t, db)
+	if len(rows) != 2 || rows[1].Action != "dhcp_lease_expire" || rows[1].ResourceID != lease.ID {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+func TestFactsMutationWriterExpireFactsBatchDoesNotWakeEmptyBatch(t *testing.T) {
+	writer, _, _ := newFactsMutationWriter(t)
+	wakeCalls := 0
+	writer.WithPostCommitWake(func() { wakeCalls++ })
+	got, err := writer.ExpireFactsBatch(context.Background(), "dhcp-node-a", func(*Lease) (string, error) { return "space-1", nil })
+	if err != nil {
+		t.Fatalf("ExpireFactsBatch: %v", err)
+	}
+	if got != nil || wakeCalls != 0 {
+		t.Fatalf("empty batch result=%v wake calls=%d", got, wakeCalls)
+	}
+}
+
 func TestFactsMutationWriterExpireFactsBatchRequiresResolverAndSource(t *testing.T) {
 	writer, _, _ := newFactsMutationWriter(t)
 	if _, err := writer.ExpireFactsBatch(context.Background(), "", func(*Lease) (string, error) { return "space", nil }); err == nil {

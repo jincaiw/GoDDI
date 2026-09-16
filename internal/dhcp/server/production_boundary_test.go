@@ -69,21 +69,53 @@ func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
 			},
 		},
 		{
-			name:   "dhcp expiry",
-			path:   filepath.Join(root, "internal", "dhcp", "server", "server.go"),
-			must:   []string{"s.leaseMgr.ExpireLeases()"},
-			forbid: []string{"MutationCommand{"},
+			name: "dhcp expiry",
+			path: filepath.Join(root, "internal", "dhcp", "server", "server.go"),
+			must: []string{"s.ExpireLeasesFromDataPlane()"},
+			forbid: []string{
+				"MutationCommand{",
+				"FactsMutationWriter",
+				"ObservationOutbox",
+				"dhcp_ipam_observation_events",
+			},
 		},
 		{
 			name: "management delete",
 			path: filepath.Join(root, "internal", "api", "handler", "dhcp_lease.go"),
-			must: []string{"DHCPServices.LeaseMgr.ReleaseLease(id)"},
+			must: []string{"DHCPServices.MutationOwner.ReleaseLeaseFromManagement(id)"},
 			forbid: []string{
+				"DHCPServices.LeaseMgr.ReleaseLease(id)",
 				"MutationCommand{",
 				"enqueueDNSEvent",
 				"ObserveLease",
 				"replicateLeaseState",
 			},
+		},
+		{
+			name: "management owner wiring",
+			path: filepath.Join(root, "cmd", "goddi", "main.go"),
+			must: []string{"MutationOwner:    dhcpSrv"},
+			forbid: []string{
+				"MutationOwner:    lease.NewManager(leaseMgrDB)",
+			},
+		},
+		{
+			name: "management owner seam",
+			path: filepath.Join(root, "internal", "dhcp", "server", "server.go"),
+			must: []string{
+				"return s.leaseMgr.ReleaseLease(id)",
+				"return s.leaseMgr.ExpireLeases()",
+			},
+			forbid: []string{
+				"FactsMutationWriter",
+				"ObservationOutbox",
+			},
+		},
+		{
+			name:   "management lease view",
+			path:   filepath.Join(root, "internal", "api", "handler", "dhcp_scope.go"),
+			must:   []string{"LeaseMgr      dhcpserver.LeaseReader"},
+			forbid: []string{"LeaseMgr      *lease.Manager"},
 		},
 	}
 	for _, tc := range cases {
@@ -105,4 +137,42 @@ func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("management handlers do not bypass the lease owner", func(t *testing.T) {
+		handlerDir := filepath.Join(root, "internal", "api", "handler")
+		entries, err := os.ReadDir(handlerDir)
+		if err != nil {
+			t.Fatalf("read %s: %v", handlerDir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(handlerDir, entry.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			text := string(data)
+			for _, pattern := range []string{
+				"lease.NewManager(",
+				".CreateLease(",
+				".ReserveAddress(",
+				".ActivateLease(",
+				".RenewLease(",
+				".ReleaseLease(",
+				".DeclineLease(",
+				".ExpireLeases(",
+				".QuarantineIP(",
+				"INSERT INTO dhcp_leases",
+				"UPDATE dhcp_leases",
+				"DELETE FROM dhcp_leases",
+				"REPLACE INTO dhcp_leases",
+			} {
+				if strings.Contains(text, pattern) {
+					t.Fatalf("%s unexpectedly bypasses the packet-path lease owner with %q", path, pattern)
+				}
+			}
+		}
+	})
 }

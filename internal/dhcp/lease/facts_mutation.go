@@ -214,8 +214,8 @@ func (w *FactsMutationWriter) RenewLeaseTx(ctx context.Context, tx *sql.Tx, even
 }
 
 // DeclineLease performs one active/offered -> conflict transition and commits
-// its fact in one transaction. Unknown-address DECLINE tombstones remain on the
-// legacy QuarantineIP path because they have no prior lease snapshot.
+// its fact in one transaction. Unknown-address DECLINE tombstones use the
+// explicit DeclineTombstone seam below because they have no prior lease snapshot.
 func (w *FactsMutationWriter) DeclineLease(ctx context.Context, eventID, source, spaceID, id string, quarantine time.Duration) (*Lease, error) {
 	if err := validateFactIdentity(eventID, source, spaceID); err != nil {
 		return nil, err
@@ -280,6 +280,111 @@ func (w *FactsMutationWriter) DeclineLeaseTx(ctx context.Context, tx *sql.Tx, ev
 		return nil, nil, err
 	}
 	return before, after, nil
+}
+
+// DeclineTombstone creates an unknown-address conflict tombstone and commits its
+// DECLINE fact atomically. The caller owns tombstoneID so retries can reuse the
+// same durable lease identity; an empty eventID derives the same retry-stable
+// event identity from that ID. This is opt-in and does not alter Manager.QuarantineIP.
+func (w *FactsMutationWriter) DeclineTombstone(ctx context.Context, eventID, source, spaceID, tombstoneID, scopeID, ip, mac string, quarantine time.Duration) (*Lease, error) {
+	if err := validateFactIdentity(eventID, source, spaceID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(tombstoneID) == "" || strings.TrimSpace(scopeID) == "" || strings.TrimSpace(ip) == "" || strings.TrimSpace(mac) == "" {
+		return nil, errors.New("lease facts mutation: tombstone ID, scope, IP, and MAC are required")
+	}
+	if quarantine <= 0 {
+		return nil, errors.New("lease facts mutation: quarantine duration must be positive")
+	}
+	if strings.TrimSpace(eventID) == "" {
+		identity, err := w.Identity(source, spaceID, MutationDecline, &Lease{ID: tombstoneID, Generation: 0})
+		if err != nil {
+			return nil, fmt.Errorf("lease facts mutation: derive tombstone event identity: %w", err)
+		}
+		eventID = identity.EventID
+	}
+	tx, err := w.manager.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("lease facts mutation: begin decline tombstone: %w", err)
+	}
+	tombstone, err := w.DeclineTombstoneTx(ctx, tx, eventID, source, spaceID, tombstoneID, scopeID, ip, mac, quarantine)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("lease facts mutation: commit decline tombstone: %w", err)
+	}
+	w.manager.auditDecline(nil, tombstone)
+	w.notifyPostCommit()
+	return tombstone, nil
+}
+
+// DeclineTombstoneTx creates or reuses one unknown-address conflict tombstone
+// and enqueues its fact without committing. The caller owns the transaction.
+func (w *FactsMutationWriter) DeclineTombstoneTx(ctx context.Context, tx *sql.Tx, eventID, source, spaceID, tombstoneID, scopeID, ip, mac string, quarantine time.Duration) (*Lease, error) {
+	if err := validateFactIdentity(eventID, source, spaceID); err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, errors.New("lease facts mutation: nil transaction")
+	}
+	if strings.TrimSpace(tombstoneID) == "" || strings.TrimSpace(scopeID) == "" || strings.TrimSpace(ip) == "" || strings.TrimSpace(mac) == "" {
+		return nil, errors.New("lease facts mutation: tombstone ID, scope, IP, and MAC are required")
+	}
+	if quarantine <= 0 {
+		return nil, errors.New("lease facts mutation: quarantine duration must be positive")
+	}
+	existing, found, err := w.manager.findLeaseTx(ctx, tx, tombstoneID)
+	if err != nil {
+		return nil, fmt.Errorf("lease facts mutation: read decline tombstone %s: %w", tombstoneID, err)
+	}
+	if found {
+		if existing.ScopeID != scopeID || existing.IPAddress != ip || existing.MACAddress != mac ||
+			existing.Status != LeaseStatusConflict || existing.Generation != 0 {
+			return nil, fmt.Errorf("%w: tombstone ID %s already belongs to a different lease", ErrInvalidMutationState, tombstoneID)
+		}
+		var factCount int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id=?`, eventID).Scan(&factCount); err != nil {
+			return nil, fmt.Errorf("lease facts mutation: check decline tombstone fact %s: %w", tombstoneID, err)
+		}
+		if factCount > 0 {
+			return existing, nil
+		}
+	} else {
+		var heldID string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM dhcp_leases
+			WHERE scope_id=? AND ip_address=? AND status IN (?, ?, ?) LIMIT 1`,
+			scopeID, ip, string(LeaseStatusActive), string(LeaseStatusOffered), string(LeaseStatusConflict)).Scan(&heldID)
+		if err == nil {
+			return nil, fmt.Errorf("%w: decline tombstone address %s is already held by lease %s", ErrInvalidMutationState, ip, heldID)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("lease facts mutation: check decline tombstone address %s: %w", ip, err)
+		}
+		now := time.Now().UTC()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dhcp_leases
+			(id, scope_id, ip_address, mac_address, hostname, client_id,
+			 lease_start, lease_end, status, last_seen, generation)
+			VALUES (?, ?, ?, ?, '', '', ?, ?, ?, ?, 0)`,
+			tombstoneID, scopeID, ip, mac,
+			now.Format("2006-01-02T15:04:05Z"),
+			now.Add(quarantine).Format("2006-01-02T15:04:05Z"),
+			string(LeaseStatusConflict), now.Format("2006-01-02T15:04:05Z")); err != nil {
+			return nil, fmt.Errorf("lease facts mutation: insert decline tombstone %s: %w", tombstoneID, err)
+		}
+		existing, found, err = w.manager.findLeaseTx(ctx, tx, tombstoneID)
+		if err != nil || !found {
+			if err == nil {
+				err = errors.New("tombstone disappeared after insert")
+			}
+			return nil, fmt.Errorf("lease facts mutation: read inserted decline tombstone %s: %w", tombstoneID, err)
+		}
+	}
+	if err := w.enqueueMutationFact(ctx, tx, MutationCommand{Kind: MutationDecline, After: existing}, eventID, source, spaceID); err != nil {
+		return nil, err
+	}
+	return existing, nil
 }
 
 // ExpireLease performs one held -> expired transition and commits its fact in

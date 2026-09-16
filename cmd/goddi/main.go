@@ -60,7 +60,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "0.9.0"
+	Version   = "0.10.0"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -1016,6 +1016,7 @@ func runServer(configPath string) error {
 			DB:               db.DB,
 			ScopeMgr:         scope.NewManager(db.DB),
 			LeaseMgr:         lease.NewManager(leaseMgrDB),
+			MutationOwner:    dhcpSrv,
 			ReservMgr:        reservation.NewManager(db.DB),
 			OptionMgr:        option.NewManager(db.DB),
 			EventLogger:      dhcpEventLogger,

@@ -13,6 +13,22 @@ import (
 // The current production implementation is still lease.Manager (SQLite-backed).
 // This interface is an injection boundary for the staged LeaseStore migration;
 // it does not, by itself, imply memory durability or WAL-backed ACK semantics.
+// LeaseReader is the read-only lease view used by the management API. Keeping
+// mutations out of this interface makes the control plane unable to write a
+// lease through its normal service container.
+type LeaseReader interface {
+	ListLeases(filter lease.LeaseFilter) ([]lease.Lease, int64, error)
+	GetLease(id string) (*lease.Lease, error)
+}
+
+// LeaseMutationOwner is the explicit owner seam for management-plane and
+// maintenance lease mutations. A control process may read a lease replica, but
+// it must not write one unless the packet-path owner is installed here.
+type LeaseMutationOwner interface {
+	ReleaseLeaseFromManagement(id string) error
+	ExpireLeasesFromDataPlane() ([]*lease.Lease, error)
+}
+
 type LeaseStore interface {
 	CreateLease(scopeID, ip, mac, hostname string, duration time.Duration) (*lease.Lease, error)
 	ReserveAddress(scopeID, ip, mac, hostname string) (*lease.Lease, error)

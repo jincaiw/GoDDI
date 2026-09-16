@@ -39,6 +39,9 @@ func (g *WALDurableGate) DurableEvent(ctx context.Context, event WALEvent) (WALE
 	if g == nil || g.wal == nil {
 		return event, ErrWALGateClosed
 	}
+	if ctx == nil {
+		return event, errors.New("lease wal gate: context is nil")
+	}
 	select {
 	case <-ctx.Done():
 		return event, ctx.Err()

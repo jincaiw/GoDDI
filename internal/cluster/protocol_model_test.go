@@ -58,6 +58,55 @@ func TestProtocolModelFencedNodeNeedsCleanupBeforeRejoin(t *testing.T) {
 	}
 }
 
+func TestProtocolModelFencedLeaderCannotPublish(t *testing.T) {
+	model := NewProtocolModel(1, "node-a", 1)
+	model.SetVotes(1)
+	model.FenceNode("node-a")
+	if _, err := model.Publish(PublishRequest{PublishID: "p-fenced", Epoch: 1, Leader: "node-a"}); err == nil {
+		t.Fatal("fenced leader committed a publish")
+	}
+	if _, ok := model.Query("p-fenced"); ok {
+		t.Fatal("fenced publish left a durable record")
+	}
+}
+
+func TestProtocolModelIdempotentRetryCannotBypassFencing(t *testing.T) {
+	model := NewProtocolModel(1, "node-a", 1)
+	model.SetVotes(1)
+	request := PublishRequest{PublishID: "p-retry", Epoch: 1, Leader: "node-a"}
+	first, err := model.Publish(request)
+	if err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	model.FenceNode("node-a")
+	if _, err := model.Publish(request); err == nil {
+		t.Fatal("idempotent retry bypassed leader fencing")
+	}
+	queried, ok := model.Query(request.PublishID)
+	if !ok || queried != first {
+		t.Fatalf("stored record = %+v, found=%v; want original record", queried, ok)
+	}
+}
+
+func TestProtocolModelRejectsInvalidWatermarkInput(t *testing.T) {
+	model := NewProtocolModel(1, "node-a", 1)
+	for _, tc := range []struct {
+		name string
+		node string
+		seq  int64
+	}{
+		{name: "missing node", node: "", seq: 1},
+		{name: "zero sequence", node: "node-b", seq: 0},
+		{name: "negative sequence", node: "node-b", seq: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := model.Apply(tc.node, tc.seq); err == nil {
+				t.Fatal("invalid watermark input was accepted")
+			}
+		})
+	}
+}
+
 func TestProtocolModelUnknownResultCanBeQueriedWithoutRepublish(t *testing.T) {
 	model := NewProtocolModel(2, "node-a", 1)
 	model.SetVotes(1)

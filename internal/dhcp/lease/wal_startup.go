@@ -17,6 +17,9 @@ var ErrStartupNotReady = errors.New("lease startup: projection is not ready")
 // watermark commit together. The WAL file remains the durable source; this
 // function does not truncate or rewrite it.
 func RecoverSQLiteProjection(ctx context.Context, wal *WALFile, db *sql.DB) (int64, error) {
+	if ctx == nil {
+		return 0, fmt.Errorf("%w: context is nil", ErrStartupNotReady)
+	}
 	if wal == nil {
 		return 0, fmt.Errorf("%w: WAL is nil", ErrStartupNotReady)
 	}

@@ -16,12 +16,16 @@ import (
 )
 
 func seedObservationEvent(t *testing.T, outbox *facts.ObservationOutbox, sequence int64, action string) {
+	seedObservationEventWithID(t, outbox, "event-"+action, sequence, action)
+}
+
+func seedObservationEventWithID(t *testing.T, outbox *facts.ObservationOutbox, eventID string, sequence int64, action string) {
 	t.Helper()
 	payload, err := json.Marshal(LeaseObservationFact{Action: action, LeaseID: "lease-1", ScopeID: "scope-1", SpaceID: "sp1", IP: "192.0.2.10", MAC: "aa:bb", Hostname: "host"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := facts.Envelope{EventID: "event-" + action, Version: facts.CurrentEnvelopeVersion, Entity: "dhcp_lease", Action: action, Generation: 1, Sequence: sequence, Source: "dhcp", OccurredAt: time.Now().UTC(), PayloadVersion: 1, Payload: payload}
+	event := facts.Envelope{EventID: eventID, Version: facts.CurrentEnvelopeVersion, Entity: "dhcp_lease", Action: action, Generation: 1, Sequence: sequence, Source: "dhcp", OccurredAt: time.Now().UTC(), PayloadVersion: 1, Payload: payload}
 	if err := outbox.Enqueue(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}

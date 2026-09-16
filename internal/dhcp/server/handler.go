@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
@@ -610,15 +611,45 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 		return fmt.Errorf("scope not found for lease: %w", err)
 	}
 
-	// Release the lease.
-	if err := s.leaseMgr.ReleaseLease(l.ID); err != nil {
-		return err
+	// The facts caller is an explicit opt-in branch. Once configured, every
+	// RELEASE must use it; identity or facts failure is returned directly and
+	// never falls back to the legacy mutation.
+	var released *lease.Lease
+	if cfg := s.releaseFacts; cfg != nil {
+		if cfg.Caller == nil || cfg.ResolveSpaceID == nil || strings.TrimSpace(cfg.Source) == "" {
+			return errors.New("dhcp release facts mutation: caller, source, and space resolver are required")
+		}
+		spaceID, err := cfg.ResolveSpaceID(l.ScopeID, l.IPAddress)
+		if err != nil {
+			return fmt.Errorf("dhcp release facts mutation: resolve space identity: %w", err)
+		}
+		if strings.TrimSpace(spaceID) == "" {
+			return errors.New("dhcp release facts mutation: resolved space ID is required")
+		}
+		released, err = cfg.Caller.ReleaseLease(context.Background(), "", cfg.Source, spaceID, l.ID)
+		if err != nil {
+			return fmt.Errorf("dhcp release facts mutation: %w", err)
+		}
+		if released == nil {
+			return errors.New("dhcp release facts mutation: caller returned no released lease")
+		}
+	} else {
+		// Default path: preserve the shipped SQLite Manager mutation exactly.
+		if err := s.leaseMgr.ReleaseLease(l.ID); err != nil {
+			return err
+		}
 	}
+
 	// The row now says "released", and the mirror has to say the same. It is
 	// the state the client has just told us it no longer wants; leaving the
 	// mirror holding a live binding would keep the address out of the pool on
-	// the other node forever.
-	s.replicateLeaseStateAfterRelease(l.ID)
+	// the other node forever. The opt-in caller returns its committed snapshot;
+	// the legacy path keeps its existing post-mutation reread.
+	if released != nil {
+		s.replicateLeaseState(released)
+	} else {
+		s.replicateLeaseStateAfterRelease(l.ID)
+	}
 
 	// Queue DNS cleanup - only if scope has DNSUpdates enabled. The event
 	// carries the generation read before the release, which is the generation
@@ -634,8 +665,13 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 	// A RELEASE is the client saying it no longer holds the address, so the
 	// IPAM view must stop reporting it as in use. This is independent of the
 	// scope's DNSUpdates flag: that flag governs whether a DNS name exists,
-	// not whether the address is in use.
-	s.observeLease(LeaseObservedRelease, l)
+	// not whether the address is in use. Both legacy and opt-in observers run
+	// only after their authoritative mutation has committed.
+	if released != nil {
+		s.observeLease(LeaseObservedRelease, released)
+	} else {
+		s.observeLease(LeaseObservedRelease, l)
+	}
 
 	// Log event.
 	if s.eventLogger != nil {

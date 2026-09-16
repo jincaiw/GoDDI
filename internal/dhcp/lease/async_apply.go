@@ -43,6 +43,9 @@ type AsyncApplier struct {
 // NewAsyncApplier starts one ordered worker. applied is the last SQLite
 // projection watermark; the first accepted event must be applied+1.
 func NewAsyncApplier(parent context.Context, capacity int, applied int64, apply ApplyFunc) (*AsyncApplier, error) {
+	if parent == nil {
+		return nil, errors.New("lease applier: parent context is nil")
+	}
 	if capacity <= 0 {
 		return nil, fmt.Errorf("lease applier: capacity must be positive")
 	}
@@ -80,6 +83,10 @@ func (a *AsyncApplier) run() {
 		}
 		select {
 		case <-a.ctx.Done():
+			a.mu.Lock()
+			a.closed = true
+			a.mu.Unlock()
+			a.signal()
 			return
 		case event, ok := <-a.queue:
 			if !ok {

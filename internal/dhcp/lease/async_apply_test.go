@@ -239,6 +239,13 @@ func TestAsyncApplierDrainAndCloseHonorsContext(t *testing.T) {
 	}
 }
 
+func TestAsyncApplierRejectsNilParentContext(t *testing.T) {
+	var nilContext context.Context
+	if _, err := NewAsyncApplier(nilContext, 1, 0, func(context.Context, WALEvent) error { return nil }); err == nil {
+		t.Fatal("nil parent context unexpectedly accepted")
+	}
+}
+
 func TestAsyncApplierRejectsInvalidConfigurationAndClosedSubmit(t *testing.T) {
 	if _, err := NewAsyncApplier(context.Background(), 0, 0, func(context.Context, WALEvent) error { return nil }); err == nil {
 		t.Fatal("capacity zero unexpectedly accepted")

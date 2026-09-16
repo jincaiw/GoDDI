@@ -64,6 +64,8 @@ cluster_epoch
 
 跨节点确认不能只表示“报文已收到”，必须表示对端已持久化并应用到声明的 watermark。超时则返回未完成/未知结果，客户端可用同一 `publish_id` 查询，不得盲目生成第二个 revision。
 
+`publish_id` 幂等重试仍必须先通过当前 epoch、leader 身份和 fencing 校验；它只能复用已授权请求的结果，不能成为绕过旧令牌或已 fence leader 的查询/写入通道。
+
 ### 6. split-brain 拒绝语义
 
 发生以下任一情况时，写发布必须 fail-closed：

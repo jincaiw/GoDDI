@@ -25,11 +25,15 @@ type FactsPipelineOptions struct {
 // this object owns only the control-side consumer lifecycle and its rollback
 // boundary. It is intentionally not used by the default GoDDI process.
 type FactsPipeline struct {
-	enabled     bool
-	consumer    *FactsConsumer
-	beforeStart func(context.Context) error
-	startMu     sync.Mutex
-	started     bool
+	enabled         bool
+	linkage         *Linkage
+	outbox          *facts.ObservationOutbox
+	consumerOptions FactsConsumerOptions
+	consumer        *FactsConsumer
+	consumerUsed    bool
+	beforeStart     func(context.Context) error
+	startMu         sync.Mutex
+	started         bool
 }
 
 // FactsPipelineStatus reports whether the migration pipeline is enabled and,
@@ -43,7 +47,13 @@ type FactsPipelineStatus struct {
 // a deliberate no-op and does not validate or touch consumer dependencies;
 // callers can keep the legacy path assembled without unified-facts tables.
 func NewFactsPipeline(linkage *Linkage, outbox *facts.ObservationOutbox, options FactsPipelineOptions) (*FactsPipeline, error) {
-	pipeline := &FactsPipeline{enabled: options.Enabled, beforeStart: options.BeforeStart}
+	pipeline := &FactsPipeline{
+		enabled:         options.Enabled,
+		linkage:         linkage,
+		outbox:          outbox,
+		consumerOptions: options.ConsumerOptions,
+		beforeStart:     options.BeforeStart,
+	}
 	if !options.Enabled {
 		return pipeline, nil
 	}
@@ -82,9 +92,17 @@ func (p *FactsPipeline) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if p.consumerUsed {
+		consumer, err := NewFactsConsumerWithOptions(p.linkage, p.outbox, p.consumerOptions)
+		if err != nil {
+			return err
+		}
+		p.consumer = consumer
+	}
 	if err := p.consumer.Start(ctx); err != nil {
 		return err
 	}
+	p.consumerUsed = true
 	p.started = true
 	return nil
 }
@@ -108,7 +126,14 @@ func (p *FactsPipeline) Stop(ctx context.Context) error {
 	if !p.started {
 		return nil
 	}
-	if err := p.consumer.Stop(ctx); err != nil {
+	err := p.consumer.Stop(ctx)
+	if errors.Is(err, ErrFactsConsumerFailed) {
+		// The failed runner has already exited. Clear only the wrapper state so
+		// the next Start can rebuild a fresh consumer after the durable fault is
+		// repaired; a timeout/cancellation keeps the active runner owned here.
+		p.started = false
+	}
+	if err != nil {
 		return err
 	}
 	p.started = false

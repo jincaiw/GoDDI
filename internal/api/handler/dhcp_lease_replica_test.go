@@ -30,6 +30,18 @@ import (
 // one, so this test fails for the reason under test and not because a column
 // was mistyped here.
 
+type managementLeaseOwner struct {
+	manager *lease.Manager
+}
+
+func (o managementLeaseOwner) ReleaseLeaseFromManagement(id string) error {
+	return o.manager.ReleaseLease(id)
+}
+
+func (o managementLeaseOwner) ExpireLeasesFromDataPlane() ([]*lease.Lease, error) {
+	return o.manager.ExpireLeases()
+}
+
 // newLeaseReplicaTestDB opens a real lease-plane store and inserts one active
 // lease, so a release has something to act on.
 func newLeaseReplicaTestDB(t *testing.T) *sql.DB {
@@ -101,7 +113,11 @@ func TestTheConsoleRefusesToReleaseALeaseItOnlyHasACopyOf(t *testing.T) {
 
 func TestTheConsoleReleasesALeaseItOwns(t *testing.T) {
 	db := newLeaseReplicaTestDB(t)
-	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+	manager := lease.NewManager(db)
+	withDHCPServices(t, &DHCPServiceContainer{
+		LeaseMgr:      manager,
+		MutationOwner: managementLeaseOwner{manager: manager},
+	})
 
 	rec := httptest.NewRecorder()
 	DeleteDHCPLease(rec, deleteLeaseRequest("l1"))
@@ -145,7 +161,11 @@ func TestTheReplicaGuardRunsBeforeLeaseIDValidation(t *testing.T) {
 
 func TestDeleteDHCPLeaseRejectsMissingIDInAuthoritativeMode(t *testing.T) {
 	db := newLeaseReplicaTestDB(t)
-	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+	manager := lease.NewManager(db)
+	withDHCPServices(t, &DHCPServiceContainer{
+		LeaseMgr:      manager,
+		MutationOwner: managementLeaseOwner{manager: manager},
+	})
 
 	rec := httptest.NewRecorder()
 	DeleteDHCPLease(rec, deleteLeaseRequest(""))
@@ -160,7 +180,11 @@ func TestDeleteDHCPLeaseRejectsMissingIDInAuthoritativeMode(t *testing.T) {
 
 func TestTheConsoleKeepsLegacyReleaseIdempotentForUnknownLease(t *testing.T) {
 	db := newLeaseReplicaTestDB(t)
-	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+	manager := lease.NewManager(db)
+	withDHCPServices(t, &DHCPServiceContainer{
+		LeaseMgr:      manager,
+		MutationOwner: managementLeaseOwner{manager: manager},
+	})
 
 	rec := httptest.NewRecorder()
 	DeleteDHCPLease(rec, deleteLeaseRequest("missing"))
@@ -172,7 +196,11 @@ func TestTheConsoleKeepsLegacyReleaseIdempotentForUnknownLease(t *testing.T) {
 
 func TestTheConsoleKeepsLegacyReleaseIdempotentForReleasedLease(t *testing.T) {
 	db := newLeaseReplicaTestDB(t)
-	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+	manager := lease.NewManager(db)
+	withDHCPServices(t, &DHCPServiceContainer{
+		LeaseMgr:      manager,
+		MutationOwner: managementLeaseOwner{manager: manager},
+	})
 	if _, err := db.Exec(`UPDATE dhcp_leases SET status = 'released' WHERE id = 'l1'`); err != nil {
 		t.Fatalf("marking lease released: %v", err)
 	}
@@ -191,6 +219,21 @@ func TestTheConsoleKeepsLegacyReleaseIdempotentForReleasedLease(t *testing.T) {
 // TestListDHCPLeasesStillReadsAReplica guards the other half of the decision:
 // reads are not refused. A console that cannot even show the leases it is not
 // allowed to change would be unusable.
+func TestDeleteDHCPLeaseRejectsMissingMutationOwner(t *testing.T) {
+	db := newLeaseReplicaTestDB(t)
+	withDHCPServices(t, &DHCPServiceContainer{LeaseMgr: lease.NewManager(db)})
+
+	rec := httptest.NewRecorder()
+	DeleteDHCPLease(rec, deleteLeaseRequest("l1"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("delete without a mutation owner = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got := leaseStatusIn(t, db, "l1"); got != string(lease.LeaseStatusActive) {
+		t.Fatalf("lease status after missing-owner refusal = %q, want %q", got, lease.LeaseStatusActive)
+	}
+}
+
 func TestListDHCPLeasesStillReadsAReplica(t *testing.T) {
 	db := newLeaseReplicaTestDB(t)
 	withDHCPServices(t, &DHCPServiceContainer{

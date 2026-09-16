@@ -80,14 +80,17 @@ func DeleteDHCPLease(w http.ResponseWriter, r *http.Request) {
 				"否则下一次同步会覆盖此处所做的修改")
 		return
 	}
-
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		response.BadRequest(w, "缺少租约ID")
 		return
 	}
+	if DHCPServices.MutationOwner == nil {
+		response.ServiceUnavailable(w, "DHCP租约变更所有者未就绪", nil)
+		return
+	}
 
-	if err := DHCPServices.LeaseMgr.ReleaseLease(id); err != nil {
+	if err := DHCPServices.MutationOwner.ReleaseLeaseFromManagement(id); err != nil {
 		response.InternalErrorWithLog(w, "释放租约失败", err)
 		return
 	}
