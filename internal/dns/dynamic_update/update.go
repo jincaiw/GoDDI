@@ -476,19 +476,14 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 			}
 
 		case opAdd:
-			added, rc, err := addRecord(tx, zoneID, op)
+			changed, rc, err := addRecord(tx, zoneID, op)
 			if err != nil {
 				return nil, 0, err
 			}
 			if rc != dns.RcodeSuccess {
 				return nil, rc, nil
 			}
-			if added {
-				changes = append(changes, change{
-					changeType: "add", name: op.name,
-					rtype: op.rtype, value: op.value, ttl: op.ttl,
-				})
-			}
+			changes = append(changes, changed...)
 		}
 	}
 
@@ -528,30 +523,39 @@ func matchingRecords(tx *sql.Tx, zoneID, name, rtype string) ([]change, error) {
 	return out, nil
 }
 
-// addRecord inserts one RR from an update operation. It reports added=false
-// when the exact RR already exists (an RRset is a set, so the add is a no-op)
-// and returns YXRRSET when the name would end up with both a CNAME and another
+// addRecord applies one RR from an update operation. A matching RDATA with
+// the same TTL is a no-op; a different TTL replaces the TTL across its RRset.
+// It returns YXRRSET when the name would end up with both a CNAME and another
 // RRset, which DNS forbids (RFC 1034 §3.6.2, enforced by RFC 2136 §3.4.2.2).
-func addRecord(tx *sql.Tx, zoneID string, op updateOp) (bool, int, error) {
-	exists, err := rdataExists(tx, zoneID, op.name, op.rtype, op.value)
+func addRecord(tx *sql.Tx, zoneID string, op updateOp) ([]change, int, error) {
+	rrset, err := matchingRecords(tx, zoneID, op.name, op.rtype)
 	if err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
-	if exists {
-		return false, dns.RcodeSuccess, nil
+	var changes []change
+	for _, member := range rrset {
+		if member.value == op.value {
+			if err := replaceRRsetTTL(tx, zoneID, op.name, op.rtype, rrset, op.ttl, &changes); err != nil {
+				return nil, 0, err
+			}
+			return changes, dns.RcodeSuccess, nil
+		}
 	}
 
 	otherTypes, cnameCount, err := recordKindsAtName(tx, zoneID, op.name)
 	if err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
 	if op.rtype == "CNAME" {
 		// At most one CNAME per name, and nothing else alongside it.
 		if cnameCount > 0 || otherTypes > 0 {
-			return false, dns.RcodeYXRrset, nil
+			return nil, dns.RcodeYXRrset, nil
 		}
 	} else if cnameCount > 0 {
-		return false, dns.RcodeYXRrset, nil
+		return nil, dns.RcodeYXRrset, nil
+	}
+	if err := replaceRRsetTTL(tx, zoneID, op.name, op.rtype, rrset, op.ttl, &changes); err != nil {
+		return nil, 0, err
 	}
 
 	// authored_locally marks the row as this plane's, which is what the
@@ -562,9 +566,43 @@ func addRecord(tx *sql.Tx, zoneID string, op updateOp) (bool, int, error) {
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, authored_locally)
 		VALUES (?, ?, ?, ?, ?, ?, 1, 1)
 	`, uuid.New().String(), zoneID, op.name, op.rtype, op.value, op.ttl); err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
-	return true, dns.RcodeSuccess, nil
+	changes = append(changes, change{
+		changeType: "add", name: op.name,
+		rtype: op.rtype, value: op.value, ttl: op.ttl,
+	})
+	return changes, dns.RcodeSuccess, nil
+}
+
+// replaceRRsetTTL applies the TTL from an RFC 2136 addition to the entire
+// RRset. RFC 2181 requires one TTL per RRset; recording each old and new row
+// keeps the change journal aligned with the transaction's actual changes.
+func replaceRRsetTTL(tx *sql.Tx, zoneID, name, rtype string, rrset []change, ttl int, changes *[]change) error {
+	needsUpdate := false
+	for _, member := range rrset {
+		if member.ttl != ttl {
+			needsUpdate = true
+			break
+		}
+	}
+	if !needsUpdate {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE dns_records SET ttl = ?
+		WHERE zone_id = ? AND name = ? AND type = ?`, ttl, zoneID, name, rtype); err != nil {
+		return fmt.Errorf("updating %s RRset TTL: %w", rtype, err)
+	}
+	for _, member := range rrset {
+		deleted := member
+		deleted.changeType = "delete"
+		*changes = append(*changes, deleted)
+		added := member
+		added.changeType = "add"
+		added.ttl = ttl
+		*changes = append(*changes, added)
+	}
+	return nil
 }
 
 // recordKindsAtName reports how many records at a name are non-CNAME and how

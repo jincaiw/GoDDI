@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -672,6 +673,85 @@ func TestHandleUpdateFrom_DuplicateAddIsNoOp(t *testing.T) {
 	}
 	if got := zoneSerial(t, db); got != serialAfterFirst {
 		t.Errorf("serial advanced on a no-op add: %d -> %d", serialAfterFirst, got)
+	}
+}
+
+func TestHandleUpdateFrom_UsesOneTTLForTheEntireRRset(t *testing.T) {
+	h, db := newUpdateHandler(t)
+	seed := func(m *dns.Msg) {
+		m.Insert([]dns.RR{
+			aRR("ttl.example.com.", "192.0.2.71", 300),
+			aRR("ttl.example.com.", "192.0.2.72", 300),
+		})
+	}
+	if resp, err := h.HandleUpdateFrom(signedUpdate(t, seed), "192.0.2.1"); err != nil || resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("seed update: rcode=%v err=%v", resp, err)
+	}
+
+	addWithNewTTL := func(m *dns.Msg) {
+		m.Insert([]dns.RR{aRR("ttl.example.com.", "192.0.2.73", 600)})
+	}
+	resp, err := h.HandleUpdateFrom(signedUpdate(t, addWithNewTTL), "192.0.2.1")
+	if err != nil || resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("addition with a new TTL: rcode=%v err=%v", resp, err)
+	}
+	assertRRsetTTL(t, db, "ttl.example.com.", "A", 600, 3)
+	assertJournalEntries(t, db, zoneSerial(t, db), map[string]int{
+		"delete/300": 2,
+		"add/600":    3,
+	})
+
+	// RFC 2136 treats TTL as outside RR identity; re-adding an existing RDATA
+	// replaces that RR. Keep the rest of the RRset at the replacement TTL too.
+	duplicateWithNewTTL := func(m *dns.Msg) {
+		m.Insert([]dns.RR{aRR("ttl.example.com.", "192.0.2.71", 900)})
+	}
+	resp, err = h.HandleUpdateFrom(signedUpdate(t, duplicateWithNewTTL), "192.0.2.1")
+	if err != nil || resp.Rcode != dns.RcodeSuccess {
+		t.Fatalf("duplicate replacement with a new TTL: rcode=%v err=%v", resp, err)
+	}
+	assertRRsetTTL(t, db, "ttl.example.com.", "A", 900, 3)
+	assertJournalEntries(t, db, zoneSerial(t, db), map[string]int{
+		"delete/600": 3,
+		"add/900":    3,
+	})
+}
+
+func assertRRsetTTL(t *testing.T, db *sql.DB, name, rtype string, ttl, count int) {
+	t.Helper()
+	var minTTL, maxTTL, actualCount int
+	if err := db.QueryRow(`SELECT MIN(ttl), MAX(ttl), COUNT(*) FROM dns_records
+		WHERE zone_id = 'zone-1' AND name = ? AND type = ?`, name, rtype).
+		Scan(&minTTL, &maxTTL, &actualCount); err != nil {
+		t.Fatal(err)
+	}
+	if minTTL != ttl || maxTTL != ttl || actualCount != count {
+		t.Fatalf("RRset TTL range/count = %d/%d/%d, want %d/%d/%d", minTTL, maxTTL, actualCount, ttl, ttl, count)
+	}
+}
+
+func assertJournalEntries(t *testing.T, db *sql.DB, serial uint32, want map[string]int) {
+	t.Helper()
+	rows, err := db.Query(`SELECT change_type, ttl, COUNT(*) FROM dns_zone_changes
+		WHERE zone_id = 'zone-1' AND serial = ? GROUP BY change_type, ttl`, serial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make(map[string]int)
+	for rows.Next() {
+		var changeType string
+		var ttl, count int
+		if err := rows.Scan(&changeType, &ttl, &count); err != nil {
+			t.Fatal(err)
+		}
+		got[fmt.Sprintf("%s/%d", changeType, ttl)] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("journal entries for serial %d = %v, want %v", serial, got, want)
 	}
 }
 
