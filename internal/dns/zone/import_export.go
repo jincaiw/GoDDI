@@ -51,6 +51,9 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		if hdr.Rrtype == dns.TypeSOA {
 			continue
 		}
+		if !recordNameInZone(hdr.Name, zone.Name) {
+			return fmt.Errorf("zone-file record owner %q is outside zone %q", hdr.Name, zone.Name)
+		}
 
 		name := hdr.Name
 		// Strip trailing dot for storage.
@@ -62,12 +65,6 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		rtype := dns.TypeToString[hdr.Rrtype]
 		if rtype == "" {
 			return fmt.Errorf("zone-file import contains an unsupported RR type %d", hdr.Rrtype)
-		}
-		// NAPTR RDATA contains flags, service, and regexp fields that the
-		// current record schema cannot preserve. Reject it instead of
-		// importing only the replacement name and returning a partial success.
-		if rtype == "NAPTR" {
-			return fmt.Errorf("zone-file import cannot preserve NAPTR RDATA yet")
 		}
 		value := rrToString(rr)
 		if value == "" && rtype != "TXT" {
@@ -212,7 +209,7 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	}
 
 	// Verify zone exists.
-	_, err := m.zoneMgr.GetZone(zoneID)
+	zone, err := m.zoneMgr.GetZone(zoneID)
 	if err != nil {
 		return err
 	}
@@ -255,9 +252,15 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			return fmt.Errorf("CSV record has %d columns; at most 9 are supported", len(record))
 		}
 
-		name := record[0]
+		name := normalizeRecordName(record[0], zone.Name)
+		if !recordNameInZone(name, zone.Name) {
+			return fmt.Errorf("CSV record owner %q is outside zone %q", record[0], zone.Name)
+		}
 		rtype := strings.ToUpper(record[1])
 		value := record[2]
+		if rtype == "NAPTR" {
+			value = normalizeNAPTRValue(value)
+		}
 		ttl := 3600
 		priority := 0
 		weight := 0
@@ -308,6 +311,11 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			tag = record[8]
 			if err := validateRecordValue("CAA", value, nil, nil, nil, tag, &flag); err != nil {
 				return fmt.Errorf("invalid CSV CAA record: %w", err)
+			}
+		}
+		if rtype == "NAPTR" {
+			if err := validateRecordValue(rtype, value, &priority, &weight, nil, "", nil); err != nil {
+				return fmt.Errorf("invalid CSV NAPTR record: %w", err)
 			}
 		}
 
@@ -385,6 +393,10 @@ func (m *RecordManager) ExportRecordsCSV(zoneID string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	zone, err := m.zoneMgr.GetZone(zoneID)
+	if err != nil {
+		return nil, err
+	}
 
 	var sb strings.Builder
 	w := csv.NewWriter(&sb)
@@ -393,7 +405,11 @@ func (m *RecordManager) ExportRecordsCSV(zoneID string) ([]byte, error) {
 	}
 
 	for _, r := range records {
-		if err := w.Write([]string{r.Name, r.Type, r.Value, strconv.Itoa(r.TTL), strconv.Itoa(r.Priority),
+		name, ok := zoneRelativeRecordName(r.Name, zone.Name)
+		if !ok {
+			return nil, fmt.Errorf("record owner %q is outside zone %q", r.Name, zone.Name)
+		}
+		if err := w.Write([]string{name, r.Type, r.Value, strconv.Itoa(r.TTL), strconv.Itoa(r.Priority),
 			strconv.Itoa(r.Weight), strconv.Itoa(r.Port), strconv.Itoa(r.Flag), r.Tag}); err != nil {
 			return nil, err
 		}
@@ -404,6 +420,25 @@ func (m *RecordManager) ExportRecordsCSV(zoneID string) ([]byte, error) {
 	}
 
 	return []byte(sb.String()), nil
+}
+
+func zoneRelativeRecordName(name, zoneName string) (string, bool) {
+	name = dns.Fqdn(strings.ToLower(name))
+	zoneName = dns.Fqdn(strings.ToLower(zoneName))
+	if name == zoneName {
+		return "@", true
+	}
+	if !recordNameInZone(name, zoneName) {
+		return "", false
+	}
+	relative := strings.TrimSuffix(name, "."+strings.TrimSuffix(zoneName, "."))
+	return strings.TrimSuffix(relative, "."), true
+}
+
+func recordNameInZone(name, zoneName string) bool {
+	name = dns.Fqdn(strings.ToLower(name))
+	zoneName = dns.Fqdn(strings.ToLower(zoneName))
+	return name == zoneName || strings.HasSuffix(name, "."+zoneName)
 }
 
 // rrToString converts a dns.RR to a string value suitable for database storage.
@@ -430,7 +465,10 @@ func rrToString(rr dns.RR) string {
 	case *dns.CAA:
 		return v.Value
 	case *dns.NAPTR:
-		return v.Replacement
+		return strings.Join([]string{
+			quoteDNSCharacterString(v.Flags), quoteDNSCharacterString(v.Service),
+			quoteDNSCharacterString(v.Regexp), v.Replacement,
+		}, " ")
 	case *dns.URI:
 		return v.Target
 	case *dns.SSHFP:
@@ -446,6 +484,26 @@ func rrToString(rr dns.RR) string {
 	}
 }
 
+func quoteDNSCharacterString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 0x20 || c >= 0x7f:
+			fmt.Fprintf(&b, "\\%03d", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // extractRRMeta extracts priority, weight, port from a dns.RR.
 func extractRRMeta(rr dns.RR) (priority, weight, port int) {
 	switch v := rr.(type) {
@@ -455,6 +513,9 @@ func extractRRMeta(rr dns.RR) (priority, weight, port int) {
 		priority = int(v.Priority)
 		weight = int(v.Weight)
 		port = int(v.Port)
+	case *dns.NAPTR:
+		priority = int(v.Order)
+		weight = int(v.Preference)
 	case *dns.URI:
 		priority = int(v.Priority)
 		weight = int(v.Weight)

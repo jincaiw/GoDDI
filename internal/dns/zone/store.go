@@ -391,7 +391,6 @@ func (s *Store) loadFromDB() (map[string]*zoneData, time.Time) {
 				slog.Error("zone_store: invalid record prevents atomic snapshot reload", "zone", zoneName, "name", r.Name, "type", r.Type)
 				return nil, time.Time{}
 			}
-
 			name := dns.Fqdn(strings.ToLower(r.Name))
 			zd.records[name] = append(zd.records[name], rr)
 
@@ -890,15 +889,20 @@ func buildRR(r ZoneRecord, zoneName string) dns.RR {
 		}
 
 	case "NAPTR":
-		return &dns.NAPTR{
-			Hdr:         hdr,
-			Order:       uint16(r.Priority),
-			Preference:  uint16(r.Weight),
-			Flags:       "",
-			Service:     "",
-			Regexp:      "",
-			Replacement: dns.Fqdn(r.Value),
+		// Value holds the complete NAPTR RDATA after order and preference.
+		// Parsing presentation form preserves its quoted character strings and
+		// replacement name without adding schema columns for the RDATA fields.
+		rr, err := dns.NewRR(name + " " + strconv.FormatUint(uint64(ttl), 10) + " IN NAPTR " +
+			strconv.Itoa(r.Priority) + " " + strconv.Itoa(r.Weight) + " " + normalizeNAPTRValue(r.Value))
+		if err != nil {
+			return nil
 		}
+		naptr, ok := rr.(*dns.NAPTR)
+		if !ok {
+			return nil
+		}
+		naptr.Hdr = hdr
+		return naptr
 
 	case "SSHFP":
 		parts := strings.Fields(r.Value)

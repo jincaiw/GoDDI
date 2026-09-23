@@ -3,6 +3,7 @@ package zone
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jasonwa/goddi/internal/config"
@@ -119,7 +120,7 @@ func TestCAARecordMetadataPersistsAcrossCreateUpdateAndJournal(t *testing.T) {
 	}
 }
 
-func TestImportsFailClosedOnMalformedOrLossyRecords(t *testing.T) {
+func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -159,21 +160,88 @@ func TestImportsFailClosedOnMalformedOrLossyRecords(t *testing.T) {
 		}
 	})
 
-	t.Run("zone file lossy NAPTR is rejected", func(t *testing.T) {
-		z, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr-fail.test", Type: string(ZoneTypePrimary)})
+	t.Run("zone-file out-of-zone owner is rejected", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "owner-boundary.test", Type: string(ZoneTypePrimary)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		zoneFile := `@ 300 IN NAPTR 100 10 "s" "SIP+D2U" "" _sip._udp.naptr-fail.test.`
-		if err := manager.ImportZoneFile(z.ID, zoneFile); err == nil {
-			t.Fatal("lossy NAPTR import unexpectedly succeeded")
+		if err := manager.ImportZoneFile(z.ID, `outside.other.test. 300 IN A 192.0.2.9`); err == nil {
+			t.Fatal("out-of-zone owner unexpectedly imported")
 		}
 		var count int
 		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count != 0 {
-			t.Fatalf("failed zone-file import left %d records", count)
+			t.Fatalf("rejected zone-file import left %d records", count)
+		}
+	})
+
+	t.Run("NAPTR metadata round trips through API and imports", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		priority, weight := 100, 10
+		value := `"s" "SIP+D2U" "" _sip._udp.naptr.test.`
+		if _, err := manager.CreateRecord(z.ID, RecordOptions{
+			Name: "@", Type: "NAPTR", Value: value, Priority: &priority, Weight: &weight,
+		}); err != nil {
+			t.Fatalf("create NAPTR record: %v", err)
+		}
+		assertNAPTRRecord(t, zoneStore, z.Name, "_sip._udp.naptr.test.")
+
+		csvData, err := manager.ExportRecordsCSV(z.ID)
+		if err != nil {
+			t.Fatalf("export NAPTR CSV: %v", err)
+		}
+		csvZone, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr-csv.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.ImportRecordsCSV(csvZone.ID, csvData); err != nil {
+			t.Fatalf("import NAPTR CSV: %v", err)
+		}
+		assertNAPTRRecord(t, zoneStore, csvZone.Name, "_sip._udp.naptr.test.")
+
+		zoneFile, err := manager.ExportZoneFile(z.ID)
+		if err != nil {
+			t.Fatalf("export NAPTR zone file: %v", err)
+		}
+		zoneFileZone, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr-zonefile.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		zoneFile = strings.Replace(zoneFile, "$ORIGIN "+z.Name, "$ORIGIN "+zoneFileZone.Name, 1)
+		if err := manager.ImportZoneFile(zoneFileZone.ID, zoneFile); err != nil {
+			t.Fatalf("import NAPTR zone file: %v", err)
+		}
+		assertNAPTRRecord(t, zoneStore, zoneFileZone.Name, "_sip._udp.naptr.test.")
+
+		legacyZone, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr-legacy.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Exec(`INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, enabled)
+			VALUES ('legacy-naptr', ?, ?, 'NAPTR', ?, 300, 100, 10, 1)`,
+			legacyZone.ID, legacyZone.Name, "_legacy._tcp.naptr-legacy.test."); err != nil {
+			t.Fatalf("insert legacy NAPTR fixture: %v", err)
+		}
+		legacyRecords, _, err := manager.ListRecords(RecordFilter{ZoneID: legacyZone.ID, PageSize: 10})
+		if err != nil {
+			t.Fatalf("list legacy NAPTR record: %v", err)
+		}
+		if len(legacyRecords) != 1 || legacyRecords[0].Value != `"" "" "" _legacy._tcp.naptr-legacy.test.` {
+			t.Fatalf("legacy NAPTR record representation = %+v", legacyRecords)
+		}
+		zoneStore.ReloadNow()
+		_, answer, ok := zoneStore.Lookup(legacyZone.Name, dns.TypeNAPTR)
+		if !ok || len(answer) != 1 {
+			t.Fatalf("legacy authoritative NAPTR answer = (%v, %v), want one record", ok, answer)
+		}
+		legacy, ok := answer[0].(*dns.NAPTR)
+		if !ok || legacy.Flags != "" || legacy.Service != "" || legacy.Regexp != "" || legacy.Replacement != "_legacy._tcp.naptr-legacy.test." {
+			t.Fatalf("legacy authoritative NAPTR answer = %#v", answer[0])
 		}
 	})
 }
@@ -195,5 +263,18 @@ func assertImportedCAA(t *testing.T, db *sql.DB, zoneID string) {
 	}
 	if flag != 128 || tag != "issue" {
 		t.Fatalf("imported CAA metadata = flag %d, tag %q", flag, tag)
+	}
+}
+
+func assertNAPTRRecord(t *testing.T, store *Store, zoneName, replacement string) {
+	t.Helper()
+	store.ReloadNow()
+	_, answer, ok := store.Lookup(dns.Fqdn(zoneName), dns.TypeNAPTR)
+	if !ok || len(answer) != 1 {
+		t.Fatalf("authoritative NAPTR answer = (%v, %v), want one record", ok, answer)
+	}
+	rec, ok := answer[0].(*dns.NAPTR)
+	if !ok || rec.Order != 100 || rec.Preference != 10 || rec.Flags != "s" || rec.Service != "SIP+D2U" || rec.Regexp != "" || rec.Replacement != replacement {
+		t.Fatalf("authoritative NAPTR answer = %#v", answer[0])
 	}
 }

@@ -164,6 +164,13 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 回归覆盖 CSV 混合有效/无效行整体拒绝、CSV 语法错误和 NAPTR zonefile 拒绝，确认失败后记录数为零。全量 Go 测试、关键 DNS/dataplane 竞态检查、`go vet` 与构建通过。
 - W06 的 dry-run、导入预检及更多 RR 类型的无损表示仍未完成；本修复只消除静默部分成功，不代表导入能力验收完成。
 
+### v0.14.0 后续修复（2026-09-23）
+
+- 将 NAPTR 的 `flags/service/regexp/replacement` 完整保存在 value presentation 中，order/preference 使用已有 priority/weight 字段；创建、读取、权威应答、zonefile 和 CSV 均沿用这套表示。
+- CSV 导出 owner 改为相对区域名，导入按目标区域解析，支持跨区域迁移并避免 owner 留在源区域。CSV 和 zonefile 导入都拒绝越界 owner，校验完成后才开启事务。
+- 添加 NAPTR API/权威响应/CSV/zonefile 全字段往返，以及越界 owner 拒绝和失败无部分写入回归。
+- W06 的 dry-run 和完整预检流程仍未实现；其他未具备无损表示的记录类型继续逐项核实，IXFR 继续回退 AXFR。
+
 ## 范围与限制
 
 本计划按用户授权直接选择工程默认值，已记录在 ADR-0008；DHCP HA 默认沿用已接受的 ADR-0003。`impl-v0.6.0` 中未提交内容仍属于进行中的工作，复核时只读参考；实施分支从其最新发布提交创建，未将那些未提交修改复制或改写。目标客户的容量和真实拓扑仍需在发布验证中固定，未有证据前不作数值承诺。

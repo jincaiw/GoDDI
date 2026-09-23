@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/miekg/dns"
 )
 
 // Supported record types.
@@ -325,6 +327,9 @@ func (m *RecordManager) GetRecord(id string) (*Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying record: %w", err)
 	}
+	if r.Type == "NAPTR" {
+		r.Value = normalizeNAPTRValue(r.Value)
+	}
 
 	if priority.Valid {
 		r.Priority = int(priority.Int64)
@@ -374,6 +379,9 @@ func getRecordTx(tx *sql.Tx, id string) (*Record, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying record: %w", err)
+	}
+	if r.Type == "NAPTR" {
+		r.Value = normalizeNAPTRValue(r.Value)
 	}
 	if priority.Valid {
 		r.Priority = int(priority.Int64)
@@ -480,6 +488,9 @@ func (m *RecordManager) ListRecords(filter RecordFilter) ([]Record, int64, error
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			continue
+		}
+		if r.Type == "NAPTR" {
+			r.Value = normalizeNAPTRValue(r.Value)
 		}
 		if priority.Valid {
 			r.Priority = int(priority.Int64)
@@ -1367,6 +1378,16 @@ func validateRecordValue(rtype, value string, priority, weight, port *int, tag s
 		if tag != "issue" && tag != "issuewild" && tag != "iodef" {
 			return fmt.Errorf("CAA tag must be issue, issuewild, or iodef")
 		}
+	case "NAPTR":
+		if priority == nil || *priority < 0 || *priority > 65535 {
+			return fmt.Errorf("NAPTR record requires a valid order (0-65535)")
+		}
+		if weight == nil || *weight < 0 || *weight > 65535 {
+			return fmt.Errorf("NAPTR record requires a valid preference (0-65535)")
+		}
+		if _, err := dns.NewRR("naptr.invalid. 0 IN NAPTR " + strconv.Itoa(*priority) + " " + strconv.Itoa(*weight) + " " + value); err != nil {
+			return fmt.Errorf("invalid NAPTR RDATA: %w", err)
+		}
 	case "CNAME":
 		if value == "" {
 			return fmt.Errorf("CNAME target cannot be empty")
@@ -1381,6 +1402,17 @@ func validateRecordValue(rtype, value string, priority, weight, port *int, tag s
 		}
 	}
 	return nil
+}
+
+func normalizeNAPTRValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, `"`) {
+		return value
+	}
+	// Older releases stored only the replacement name. Their other RDATA
+	// strings were already emitted as empty, so make that legacy wire form
+	// explicit while preserving the behavior of existing zones.
+	return `"" "" "" ` + value
 }
 
 // nullInt returns a nullable int value.
