@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dataplane"
@@ -409,6 +410,97 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 			t.Fatalf("legacy authoritative NAPTR answer = %#v", answer[0])
 		}
 	})
+}
+
+func TestRRsetTTLConsistencyIncludesAutoPTRAndIgnoresExpiredRecords(t *testing.T) {
+	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	zoneStore := NewStore(store.DB)
+	defer zoneStore.Close()
+	zoneManager := NewZoneManager(store.DB, zoneStore)
+	manager := NewRecordManager(store.DB, zoneStore, zoneManager)
+
+	forward, err := zoneManager.CreateZone(ZoneOptions{Name: "ptr-ttl.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverse, err := zoneManager.CreateZone(ZoneOptions{Name: "2.0.192.in-addr.arpa", Type: string(ZoneTypeReverse)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ptrTTL := 600
+	existingPTR, err := manager.CreateRecord(reverse.ID, RecordOptions{
+		Name: "50", Type: "PTR", Value: "manual.ptr-ttl.test.", TTL: &ptrTTL,
+	})
+	if err != nil {
+		t.Fatalf("create existing PTR: %v", err)
+	}
+	ptrZone, ptrOwner, err := manager.findReverseZone("A", "192.0.2.50")
+	if err != nil || ptrZone == nil {
+		t.Fatalf("resolve reverse zone for auto PTR test: zone=%+v owner=%q err=%v", ptrZone, ptrOwner, err)
+	}
+	if ptrOwner != "50." {
+		t.Fatalf("relative PTR owner = %q, want 50.", ptrOwner)
+	}
+	forwardTTL := 300
+	if _, err := manager.CreateRecord(forward.ID, RecordOptions{
+		Name: "host", Type: "A", Value: "192.0.2.50", TTL: &forwardTTL, CreatePTR: true,
+	}); err == nil {
+		t.Fatal("automatic PTR with inconsistent TTL unexpectedly succeeded")
+	}
+	var count int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND type = 'A'`, forward.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed automatic PTR conflict left %d forward records", count)
+	}
+	if err := manager.DeleteRecord(existingPTR.ID); err != nil {
+		t.Fatalf("delete conflicting PTR: %v", err)
+	}
+	if _, err := manager.CreateRecord(forward.ID, RecordOptions{
+		Name: "host", Type: "A", Value: "192.0.2.50", TTL: &forwardTTL, CreatePTR: true,
+	}); err != nil {
+		t.Fatalf("create A and matching automatic PTR: %v", err)
+	}
+	var automaticOwner string
+	if err := store.QueryRow(`SELECT name FROM dns_records WHERE zone_id = ? AND type = 'PTR' AND value = ?`,
+		reverse.ID, "host.ptr-ttl.test.").Scan(&automaticOwner); err != nil {
+		t.Fatalf("read automatic PTR owner: %v", err)
+	}
+	if automaticOwner != "50.2.0.192.in-addr.arpa." {
+		t.Fatalf("automatic PTR owner = %q, want fully qualified reverse owner", automaticOwner)
+	}
+
+	expiryZone, err := zoneManager.CreateZone(ZoneOptions{Name: "expiry-ttl.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Minute)
+	expiredTTL := 300
+	if _, err := manager.CreateRecord(expiryZone.ID, RecordOptions{
+		Name: "old", Type: "A", Value: "192.0.2.60", TTL: &expiredTTL, ExpiresAt: &past,
+	}); err != nil {
+		t.Fatalf("create expired RR: %v", err)
+	}
+	newTTL := 600
+	if _, err := manager.CreateRecord(expiryZone.ID, RecordOptions{
+		Name: "old", Type: "A", Value: "192.0.2.61", TTL: &newTTL,
+	}); err != nil {
+		t.Fatalf("expired RR blocked a new TTL: %v", err)
+	}
+	preview, err := manager.PreviewRecordsCSV(expiryZone.ID, []byte(
+		"name,type,value,ttl,priority,weight,port,flag,tag\ncsv-old,A,192.0.2.62,600,,,,,\n"))
+	if err != nil {
+		t.Fatalf("expired RR blocked CSV preview: %v", err)
+	}
+	if preview.Creates != 1 || preview.Unchanged != 0 {
+		t.Fatalf("CSV preview with expired RR = %+v, want one new record", preview)
+	}
 }
 
 func TestCAAFlagMustFitWireOctet(t *testing.T) {

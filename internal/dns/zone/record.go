@@ -253,7 +253,7 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		}
 	}
 	if enabled && !opts.Overwrite {
-		if err := validateRRsetTTLTx(tx, zoneID, name, opts.Type, ttl, ""); err != nil {
+		if err := ValidateRRsetTTLTx(tx, zoneID, name, opts.Type, ttl, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -725,7 +725,7 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 	}
 	if updatedEnabled && (updatedEnabled != existing.Enabled || !strings.EqualFold(updatedName, existing.Name) ||
 		!strings.EqualFold(updatedType, existing.Type) || updatedTTL != existing.TTL) {
-		if err := validateRRsetTTLTx(tx, existing.ZoneID, updatedName, updatedType, updatedTTL, id); err != nil {
+		if err := ValidateRRsetTTLTx(tx, existing.ZoneID, updatedName, updatedType, updatedTTL, id); err != nil {
 			return nil, err
 		}
 	}
@@ -1064,7 +1064,7 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 		enabled = *opts.Enabled
 	}
 	if enabled {
-		if err := validateRRsetTTLTx(tx, zone.ID, name, opts.Type, ttl, ""); err != nil {
+		if err := ValidateRRsetTTLTx(tx, zone.ID, name, opts.Type, ttl, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -1099,9 +1099,12 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 	}, nil
 }
 
-func validateRRsetTTLTx(tx *sql.Tx, zoneID, name, rtype string, ttl int, excludeID string) error {
+// ValidateRRsetTTLTx rejects a write that would give a live, enabled RRset
+// more than one TTL. Call it in the same transaction as the record mutation.
+func ValidateRRsetTTLTx(tx *sql.Tx, zoneID, name, rtype string, ttl int, excludeID string) error {
 	query := `SELECT MIN(ttl) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND UPPER(type) = UPPER(?) AND enabled = 1 AND ttl != ?`
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND UPPER(type) = UPPER(?) AND enabled = 1
+		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND ttl != ?`
 	args := []any{zoneID, name, rtype, ttl}
 	if excludeID != "" {
 		query += " AND id != ?"
@@ -1299,6 +1302,10 @@ func (m *RecordManager) findReverseZone(recordType, value string) (*Zone, string
 // createPTRTx inserts a PTR and journals its serial in the caller's
 // transaction. It reports whether a new PTR was created.
 func (m *RecordManager) createPTRTx(tx *sql.Tx, reverseZone *Zone, owner, target string, ttl int) (bool, error) {
+	owner = normalizeRecordName(strings.TrimSuffix(owner, "."), reverseZone.Name)
+	if err := ValidateRRsetTTLTx(tx, reverseZone.ID, owner, "PTR", ttl, ""); err != nil {
+		return false, err
+	}
 	res, err := tx.Exec(`
 		INSERT OR IGNORE INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
 		VALUES (?, ?, ?, 'PTR', ?, ?, 1)

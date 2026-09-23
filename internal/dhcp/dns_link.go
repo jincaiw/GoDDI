@@ -303,6 +303,9 @@ func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) erro
 		zoneID, fqdn, e.LeaseID); err != nil {
 		return fmt.Errorf("dhcp_dns_link: releasing name %s from previous lease: %w", fqdn, err)
 	}
+	if err := zone.ValidateRRsetTTLTx(tx, zoneID, fqdn, "A", 300, ""); err != nil {
+		return fmt.Errorf("dhcp_dns_link: A RRset at %s has an incompatible TTL: %w", fqdn, err)
+	}
 
 	if _, err := tx.Exec(`
 		INSERT INTO dns_records
@@ -379,6 +382,9 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 		  AND (owner_ref IS NULL OR owner_ref <> ?)`,
 		zoneID, owner, e.LeaseID); err != nil {
 		return fmt.Errorf("dhcp_dns_link: releasing PTR %s from previous lease: %w", owner, err)
+	}
+	if err := zone.ValidateRRsetTTLTx(tx, zoneID, owner, "PTR", 300, ""); err != nil {
+		return fmt.Errorf("dhcp_dns_link: PTR RRset at %s has an incompatible TTL: %w", owner, err)
 	}
 
 	if _, err := tx.Exec(`

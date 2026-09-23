@@ -236,6 +236,32 @@ func TestApplyCreate_PublishesForwardAndReverse(t *testing.T) {
 	}
 }
 
+func TestApplyCreate_RejectsConflictingTTLInForwardRRset(t *testing.T) {
+	db := newLinkageDB(t)
+	seedLinkage(t, db)
+	seedLease(t, db, "lease-ttl", "scope-1", "192.0.2.70", "aa:bb:cc:dd:ee:70",
+		"host-ttl", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	if _, err := db.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, owner)
+		VALUES ('manual-ttl', 'zone-forward', 'host-ttl.example.test.', 'A', '192.0.2.99', 600, 1, 'api')`); err != nil {
+		t.Fatalf("seed conflicting manual record: %v", err)
+	}
+
+	link := NewDNSLink(Same(db), nil)
+	err := link.ApplyEvent(DNSEvent{
+		LeaseID: "lease-ttl", Generation: 1, Action: DNSEventCreate,
+		ScopeID: "scope-1", IPAddress: "192.0.2.70",
+		MACAddress: "aa:bb:cc:dd:ee:70", Hostname: "host-ttl",
+	})
+	if err == nil {
+		t.Fatal("DHCP projection with conflicting A RRset TTL unexpectedly succeeded")
+	}
+	rows := recordsFor(t, db, "zone-forward", "host-ttl.example.test.", "A")
+	if len(rows) != 1 || rows[0].ID != "manual-ttl" {
+		t.Fatalf("forward RRset after rejected projection = %+v, want original row only", rows)
+	}
+}
+
 func TestApplyCreate_IsIdempotent(t *testing.T) {
 	db := newLinkageDB(t)
 	seedLinkage(t, db)

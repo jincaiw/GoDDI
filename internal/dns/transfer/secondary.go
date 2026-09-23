@@ -681,6 +681,7 @@ func validateTransferredAXFR(zoneName string, records []dns.RR) error {
 	if len(records) < 2 {
 		return fmt.Errorf("transfer must contain opening and closing SOA records")
 	}
+	rrsetTTLs := make(map[string]uint32)
 	firstSOA, firstIsSOA := records[0].(*dns.SOA)
 	lastSOA, lastIsSOA := records[len(records)-1].(*dns.SOA)
 	if !firstIsSOA || !lastIsSOA {
@@ -693,6 +694,12 @@ func validateTransferredAXFR(zoneName string, records []dns.RR) error {
 			return fmt.Errorf("transfer contains a nil resource record")
 		}
 		hdr := rr.Header()
+		rrsetKey := strings.ToLower(dns.Fqdn(hdr.Name)) + "\x00" + fmt.Sprint(hdr.Rrtype)
+		if priorTTL, exists := rrsetTTLs[rrsetKey]; exists && priorTTL != hdr.Ttl {
+			return fmt.Errorf("RRset %s %s has inconsistent TTLs %d and %d",
+				hdr.Name, dns.TypeToString[hdr.Rrtype], priorTTL, hdr.Ttl)
+		}
+		rrsetTTLs[rrsetKey] = hdr.Ttl
 		if hdr.Class != dns.ClassINET {
 			return fmt.Errorf("record %s has unsupported class %s", hdr.Name, dns.ClassToString[hdr.Class])
 		}

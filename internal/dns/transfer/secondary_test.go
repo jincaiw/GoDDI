@@ -3,7 +3,28 @@ package transfer
 import (
 	"strings"
 	"testing"
+
+	"github.com/miekg/dns"
 )
+
+func TestValidateTransferredAXFRRejectsInconsistentRRsetTTLs(t *testing.T) {
+	soa := func() *dns.SOA {
+		return &dns.SOA{
+			Hdr: dns.RR_Header{Name: "example.test.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 3600},
+			Ns:  "ns.example.test.", Mbox: "hostmaster.example.test.", Serial: 7,
+			Refresh: 3600, Retry: 600, Expire: 86400, Minttl: 300,
+		}
+	}
+	records := []dns.RR{
+		soa(),
+		&dns.A{Hdr: dns.RR_Header{Name: "www.example.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}},
+		&dns.A{Hdr: dns.RR_Header{Name: "WWW.EXAMPLE.TEST.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 600}},
+		soa(),
+	}
+	if err := validateTransferredAXFR("example.test.", records); err == nil || !strings.Contains(err.Error(), "inconsistent TTLs") {
+		t.Fatalf("AXFR TTL validation error = %v, want inconsistent RRset TTL rejection", err)
+	}
+}
 
 // TestParsePrimaryAddress covers the transport scheme prefixes for
 // XFR-over-TLS (RFC 9103) support in transfer_policy.

@@ -127,7 +127,7 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
-		if err := validateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
+		if err := ValidateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
 			return fmt.Errorf("zone-file import: %w", err)
 		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
@@ -363,7 +363,8 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	existingRows, err := tx.Query(`
 		SELECT name, type, value, ttl, COALESCE(priority, 0), COALESCE(weight, 0),
 			COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
-		FROM dns_records WHERE zone_id = ? AND enabled = 1`, zoneID)
+		FROM dns_records WHERE zone_id = ? AND enabled = 1
+			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))`, zoneID)
 	if err != nil {
 		return fmt.Errorf("querying existing records: %w", err)
 	}

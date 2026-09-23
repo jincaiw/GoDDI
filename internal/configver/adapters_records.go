@@ -220,12 +220,24 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 		if rowID == "" {
 			rowID = uuid.New().String()
 		}
+		name := zone.NormalizeRecordName(rec.Name, zoneName)
 		expiresAt, err := parseRecordInstant(rec.ExpiresAt)
 		if err != nil {
 			return fmt.Errorf("record %s: expires_at: %w", rec.Name, err)
 		}
+		live := rec.Enabled
+		if expiryText, ok := expiresAt.(string); ok {
+			if expiresAtTime, parseErr := time.Parse("2006-01-02 15:04:05", expiryText); parseErr == nil && !expiresAtTime.After(time.Now()) {
+				live = false
+			}
+		}
+		if live {
+			if err := zone.ValidateRRsetTTLTx(tx, id, name, rec.Type, rec.TTL, ""); err != nil {
+				return fmt.Errorf("record %s %s: %w", rec.Name, rec.Type, err)
+			}
+		}
 		if _, err := stmt.Exec(
-			rowID, id, zone.NormalizeRecordName(rec.Name, zoneName), rec.Type, rec.Value,
+			rowID, id, name, rec.Type, rec.Value,
 			rec.TTL, intOrNil(rec.Priority), intOrNil(rec.Weight), intOrNil(rec.Port),
 			intOrNil(rec.Flag), rec.Enabled, rec.Comment, rec.Tags, rec.Owner, expiresAt,
 		); err != nil {

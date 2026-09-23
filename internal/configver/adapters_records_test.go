@@ -96,6 +96,53 @@ func TestTheRecordSetLeavesTheRecordsADataPlaneAuthoredAlone(t *testing.T) {
 	}
 }
 
+func TestDNSRecordSetRejectsTTLConflictWithDataPlaneAuthoredRRset(t *testing.T) {
+	db := newTestDB(t)
+	seedZone(t, db, "zone-ttl", "ttl.example.test.")
+	seedRecord(t, db, "dynamic-ttl", "zone-ttl", "www.ttl.example.test.", "A", "192.0.2.90", 1)
+	if _, err := db.Exec(`UPDATE dns_records SET ttl = 600 WHERE id = 'dynamic-ttl'`); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewDNSRecordsAdapter(nil).Apply(tx, "zone-ttl", json.RawMessage(`{"schema":1,"records":[
+		{"name":"www","type":"A","value":"192.0.2.91","ttl":300,"enabled":true}]}`))
+	_ = tx.Rollback()
+	if err == nil {
+		t.Fatal("control-plane publish with an inconsistent mixed-authorship RRset unexpectedly succeeded")
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = 'zone-ttl'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rejected publish left %d rows, want the original data-plane row only", count)
+	}
+}
+
+func TestDNSRecordSetRejectsInconsistentTTLWithinPublishedRRset(t *testing.T) {
+	db := newTestDB(t)
+	seedZone(t, db, "zone-publish-ttl", "publish-ttl.example.test.")
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewDNSRecordsAdapter(nil).Apply(tx, "zone-publish-ttl", json.RawMessage(`{"schema":1,"records":[
+		{"name":"www","type":"A","value":"192.0.2.101","ttl":300,"enabled":true},
+		{"name":"www","type":"A","value":"192.0.2.102","ttl":600,"enabled":true}]}`))
+	_ = tx.Rollback()
+	if err == nil {
+		t.Fatal("configuration publish with inconsistent RRset TTLs unexpectedly succeeded")
+	}
+	if count := countRecords(t, db, "zone-publish-ttl", 0); count != 0 {
+		t.Fatalf("rejected publish left %d control-authored rows", count)
+	}
+}
+
 // TestARecordSetTheConsoleWouldRefuseIsRefusedHere covers validation.
 //
 // The publish path writes the same rows the record API writes. If it validated
