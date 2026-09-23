@@ -46,18 +46,6 @@ func newConsumerDB(t *testing.T) *sql.DB {
 	if err := goose.Up(db, "."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE dhcp_ipam_observation_events (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		event_id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL, entity TEXT NOT NULL,
-		action TEXT NOT NULL, generation INTEGER NOT NULL, sequence INTEGER NOT NULL UNIQUE,
-		source TEXT NOT NULL, occurred_at DATETIME NOT NULL, payload_version INTEGER NOT NULL,
-		payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-		next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')), last_error TEXT NOT NULL DEFAULT '',
-		status TEXT NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-	); CREATE TABLE facts_projection_watermark (domain TEXT PRIMARY KEY, applied_seq INTEGER NOT NULL DEFAULT 0);`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.Exec(`INSERT INTO ipam_spaces (id, name, description) VALUES ('sp1', 'space', '')`); err != nil {
 		t.Fatal(err)
 	}

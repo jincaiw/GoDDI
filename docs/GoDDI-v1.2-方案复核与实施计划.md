@@ -52,7 +52,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | DHCP→DNS durable outbox | 最新工作计划记录 generation、consumer、retry/reconciliation 和进程级追平演练已经存在 | 范围内已实现，统一事实源仍未完成 | DHCP-DNS-IPAM 统一 sequence、producer 真实接入、跨库 replay 和完整 lag/gap 监测继续单独跟踪 |
 | DHCP 内存选址和租约索引 | 最新工作树新增快照重建及索引更新失败后转为 unready 的路径 | 部分解决，包含未提交改动 | 启动重建失败、写入后索引失败、冲突并发和池变化下不误发 OFFER/ACK；必须与持久租约源对照 |
 | DHCP ACK 持久性 | DHCP 独立 lease data-plane store 单连接运行；`internal/dataplane/store.go` 启动设置并读回 WAL、`synchronous=FULL`；REQUEST 路径先提交 lease，再做 HA 确认，最后构建 ACK | 代码边界存在，物理耐久性未验收 | 在目标驱动、文件系统与硬件上分别验收进程崩溃、主机断电、复制链路分区；`FULL` 是应用请求的同步边界，不替代介质掉电演练 |
-| DHCP→IPAM 持久事件 | 最新工作树新增恢复游标、事件投递协调、消费者和水位结构；当前工作计划也明确 producer 默认未接入、跨库运输/重放/对账未完成 | 部分解决，包含未提交改动 | 首事件缺失、序号空洞、失败首事件、重复/乱序消费和事务回滚必须阻止错误推进水位；默认进程装配仍须独立评审 |
+| DHCP→IPAM 持久事件 | 已有 producer-side lease outbox、sequence allocator、消费者水位；本轮新增从 lease store 到 control inbox 的幂等上行复制、独立投递重试和 control-side transactional consumer boundary | 部分解决，传输基础已实现，未发布 | DHCP 所有授权/续租/释放/过期/Decline 路径仍未统一产生事实；默认装配、HA fencing、首事件缺失与完整对账/运行态验收仍待完成 |
 | DNS DDNS 与 IPAM 统一所有权 | v1.1 识别的生命周期、generation、DNS serial 和所有权风险依然需要核对 | 需按最新代码重新验收 | 旧 RELEASE/过期事件不能删除新代记录；A/PTR、zone 发布和 serial 的失败恢复保持一致 |
 | DNS secondary | 最新基线已有周期扫描、健康状态及 EXPIRE 相关实现，优于 v1.1 描述的初始缺口 | 代码存在，待验证 | 完整检查启动接线、运行态发布、恢复失败、EXPIRE 临界点和重新同步行为 |
 | IPAM 分配与跨 scope 唯一性 | 最新工作树的事实消费接口已强调目标缺失不得当作成功；不能据此推定规划分配 CAS 和跨池唯一性全部完成 | 部分解决 | 比较最新迁移、地址状态迁移、space 作用域唯一索引、导入和并发分配路径 |
@@ -222,6 +222,14 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - DNS CSV dry-run 在同一 SQLite 快照内汇总所有目标区域及文件内部的 RRset TTL、CNAME 独占性和多 CNAME 冲突，返回 CSV 行号、owner、记录类型、稳定冲突码与说明；有效行仍统计新增和未变化数量，冲突行不计作未变化。
 - CSV 正式导入复用相同冲突检查；发现任一冲突时整批拒绝，保持记录、serial 与 journal 不变。预览仍不写入，并以 `valid=false` 和冲突列表表示可修复的数据问题；语法/字段校验错误继续作为请求错误返回。
 - 该改动收敛 W06 导入预检诊断的一部分；其他记录入口的完整不变量核对、多 DNS 关联以及 IXFR 解禁条件仍未完成。
+
+### W04 跨库事实传输实施中（2026-09-24，尚未发布）
+
+- 控制库新增 observation inbox 与 projection watermark；lease data-plane store 增加事实事件 delivery marker。事件内容不可变地传输，控制库负责消费状态，producer 不会覆盖消费者状态。
+- 数据面 Runner 在已有 lease 上行循环中异步投递事实。控制库提交成功后 producer 才确认本地事件和 marker；崩溃窗口可重放。event ID 重复按完整 envelope 校验，sequence 冲突留在有界退避队列中并计入拒绝数。
+- IPAM consumer 明确使用控制库 inbox，使 inbox 完成、水位推进和 IPAM 投影在同一控制库事务内完成；传输与投影之间采用至少一次投递及幂等消费。
+- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖，以及 sequence 冲突保留重试；`internal/dataplane`、`internal/ipam`、`internal/facts` 测试通过。
+- 这仍不是 W04 完成：默认 DHCP lease lifecycle 尚未全部迁移到 FactsMutationWriter，HA 领导权 fencing 与跨数据库故障恢复/端到端运行态演练待办；不据此宣称生产链路已经启用。
 
 ## 范围与限制
 

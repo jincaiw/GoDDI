@@ -228,6 +228,11 @@ func (r *Runner) pushUp(ctx context.Context) {
 		} else if n > 0 {
 			slog.Debug("dataplane: pushed queued DNS work", "entries", n)
 		}
+		if n, err := r.rep.PushFacts(ctx, r.cfg.PushBatch); err != nil {
+			onPushFailure("IPAM observation facts", err)
+		} else if n > 0 {
+			slog.Debug("dataplane: pushed IPAM observation facts", "entries", n)
+		}
 		if n, err := r.rep.PushLogs(ctx, r.cfg.PushBatch); err != nil {
 			onPushFailure("the DHCP event log", err)
 		} else if n > 0 {
@@ -385,6 +390,8 @@ type Status struct {
 	HeldLeases int
 	// PendingDNSEvents are binding-to-DNS changes owed to the DNS side.
 	PendingDNSEvents int
+	// PendingFacts are lease observation facts owed to the control-side inbox.
+	PendingFacts int
 	// PendingDHCPLogs are event log entries owed to the control database.
 	PendingDHCPLogs int
 	// PendingRecords are DNS records owed to the control database.
@@ -424,6 +431,7 @@ func (s Status) PendingByQueue() []QueueDepth {
 	return []QueueDepth{
 		{Name: "lease_changes", Pending: s.PendingLeaseChanges},
 		{Name: "dns_events", Pending: s.PendingDNSEvents},
+		{Name: "ipam_facts", Pending: s.PendingFacts},
 		{Name: "dhcp_logs", Pending: s.PendingDHCPLogs},
 		{Name: "records", Pending: s.PendingRecords},
 		{Name: "zone_serials", Pending: s.PendingZoneSerials},
@@ -457,6 +465,9 @@ func (r *Runner) Snapshot() Status {
 		}
 		if n, err := r.rep.PendingEvents(); err == nil {
 			st.PendingDNSEvents = n
+		}
+		if n, err := r.rep.PendingFacts(); err == nil {
+			st.PendingFacts = n
 		}
 		if n, err := r.rep.PendingLogs(); err == nil {
 			st.PendingDHCPLogs = n
