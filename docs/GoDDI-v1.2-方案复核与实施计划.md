@@ -60,6 +60,27 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | 配置/租约 HA | 最新已有协议模型、租约 fence/takeover/rejoin、watermark 和 `/ready` 仓内边界；生产配置协调、真实 fencing 与跨主机网络测试未闭合 | 实验/不完整 | 保持 cluster API 501；需要 quorum/witness/fence 决策和真实跨主机测试，单机模型不能关闭 HA 门槛 |
 | 灾备与密钥恢复 | 未见足够证据证明 v1.1 所列全状态备份、离线恢复和密钥恢复已闭环 | 未关闭 | 新路径恢复演练、校验、权限/TSIG/密钥覆盖、旧快照不得覆盖新状态 |
 
+## W01—W14 当前任务状态（2026-09-24）
+
+| 工作包 | 仓内状态 | 尚未关闭的退出条件 |
+|---|---|---|
+| W01 IXFR | primary serial 作者写入者均记录完整 SOA 分界；连续 journal 链服务已实现，缺链回退 AXFR | 真实 secondary、多消息 TCP framing、pruning 临界点与恢复互通 |
+| W02 架构边界 | 单写、双副本确认、无见证时暂停、显式降级/接管操作已有实现与 ADR | 生产围栏设备、跨主机分区、主备恢复演练；不得据此启用自动接管 |
+| W03 DHCP 协议 | REQUEST 分类、server-id、relay allowlist、有界队列及负向用例已有代码 | 真实 relay、多种客户端/多网卡的现场交互和 ACK 行为 |
+| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer、跨库幂等传送/水位和 readiness 已接通 | HA 复制事件与 sequence、接管后首事件连续性、控制库故障重放和实网演练 |
+| W05 配置发布 | revision、CAS、幂等与 release outbox 已有实现 | 多节点 applied 确认、部分节点失败时保留 LKG 的部署级协调验收 |
+| W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；多记录关系按当前读路径核验 | 导入 dry-run/全量预检、多 DNS 关系源及并发地址分配的完整验收 |
+| W07 进程隔离/恢复 | 数据面快照重建和 readiness gate 已接线 | 坏快照、旧 schema、磁盘满、控制进程退出与重启故障注入 |
+| W08 DNS HA | secondary 周期刷新、EXPIRE 与健康状态已有代码 | 双 DNS 地址/策略同步、客户端切换和真实节点断连恢复 |
+| W09 DHCP HA | 单写复制水位、显式 takeover/fence/rejoin 机制存在；当前不自动 promote | HA facts continuity、生产 fencing 和网络分区验收；未完成前不能宣称 HA GA |
+| W10 安全/备份 | 加密备份、restore 版本/schema 门禁和全状态归档已有实现 | 密钥异机保存/找回、真实权限/TSIG 恢复、硬件断电持久性 |
+| W11 可观测性 | facts consumer gap/readiness、producer backlog/失败/水位、HA replication 水位和备份年龄指标已接线 | 正式 Prometheus 抓取、告警规则/阈值、恢复动作与告警演练 |
+| W12 升级/灾备 | 在线 WAL 原地 restore 与空白异路径整机恢复 smoke 均通过 | 逐节点升级、expand-contract 兼容性、现场密钥及介质恢复 |
+| W13 产品体验 | 尚无本轮完成的 UI/API 工作包实现 | 地址详情、子网到池、dry-run 导入、API/Web 权限契约 |
+| W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
+
+最新工作树 `go test ./...` 与 `go vet ./...` 均通过；W12-a/W12-c 隔离式 restore 演练通过。上述表中仍标为未关闭的现场/部署退出条件没有被仓内测试代替。当前分支只作为草稿 PR 评审，未满足正式发布门槛。
+
 ## 调整后的实施计划
 
 ### 第 0 阶段：最新版基线复核与安全收敛
