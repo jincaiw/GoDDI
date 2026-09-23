@@ -295,6 +295,12 @@ func (s *Server) observeLeaseFields(action, leaseID, scopeID, ip, mac, hostname 
 	if s.leaseObserver == nil {
 		return
 	}
+	// Mapped transitions are durably represented in the facts outbox and are
+	// projected by the control-side consumer. Keep the immediate compatibility
+	// observer only for legacy or unmapped transitions.
+	if _, _, useFacts, err := s.resolveLeaseFactSpace(scopeID, ip); err == nil && useFacts {
+		return
+	}
 	if err := s.leaseObserver.ObserveLease(action, leaseID, scopeID, ip, mac, hostname); err != nil {
 		slog.Warn("DHCP: lease observation failed",
 			"action", action, "lease_id", leaseID, "ip", ip, "error", err)

@@ -33,8 +33,8 @@ type LeaseObservationFact struct {
 	Tombstone bool   `json:"tombstone,omitempty"`
 }
 
-// FactsConsumer is an opt-in, restartable IPAM projection consumer. It does
-// not alter the default DHCP path; callers explicitly drive Replay/ProcessOne.
+// FactsConsumer is a restartable IPAM projection consumer. Callers explicitly
+// own its lifecycle and it projects only durable facts from the control inbox.
 type FactsConsumer struct {
 	linkage   *Linkage
 	outbox    *facts.ObservationOutbox

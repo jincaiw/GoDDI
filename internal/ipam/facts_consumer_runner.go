@@ -79,9 +79,8 @@ type FactsConsumerOptions struct {
 	BatchSize    int
 }
 
-// FactsConsumerLifecycle is the explicit opt-in lifecycle surface. It is not
-// installed by the default GoDDI process; a caller owns construction, start,
-// wake, and stop ordering.
+// FactsConsumerLifecycle is the consumer lifecycle surface. A caller owns
+// construction, start, wake, and stop ordering.
 type FactsConsumerLifecycle interface {
 	Start(context.Context) error
 	Wake()

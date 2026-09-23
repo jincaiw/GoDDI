@@ -89,7 +89,7 @@ func TestDefaultProcessKeepsLegacyDNSConsumerUntilFactsMigrationIsComplete(t *te
 	}
 }
 
-func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
+func TestDefaultControlProcessRunsFactsConsumerLifecycle(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -101,32 +101,19 @@ func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
 	}
 	source := string(data)
 
-	for _, forbidden := range []string{
-		"ipam.NewFactsPipeline(",
-		"FactsPipelineOptions{Enabled: true",
-		"factsPipeline.Start(",
-		"factsPipeline.Wake(",
-		"factsPipeline.Stop(",
-		"FactsPipelineLifecycle",
-		"ipam.NewFactsConsumer(",
-		"ipam.NewFactsConsumerWithOptions(",
-		"factsConsumer.Start(",
-		"factsConsumer.Wake(",
-		"factsConsumer.Stop(",
-		"FactsConsumerLifecycle",
-		"facts.ObservationOutbox",
-	} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("default process unexpectedly assembled opt-in facts consumer lifecycle hook %q", forbidden)
-		}
-	}
-
 	for _, required := range []string{
 		"ipam.NewLinkage(db.DB)",
-		"dhcpSrv.SetLeaseObserver(ipamLinkage)",
+		"if controlPlane && !haEnabled {",
+		"facts.NewObservationOutbox(db.DB)",
+		"ipam.NewFactsPipeline(ipamLinkage, controlInbox, ipam.FactsPipelineOptions{",
+		"ipamFactsPipeline.Start(backgroundCtx)",
+		"ipamFactsPipeline.Stop(ctx)",
+		"ipamFactsPipeline.Status(ctx)",
 		"facts.NewSequenceAllocator(dhcpStore.DB)",
 		"facts.NewObservationOutbox(dhcpStore.DB)",
+		"if !haEnabled {",
 		"dhcpSrv.SetLeaseFactsMutation(",
+		"dhcpSrv.SetLeaseObserver(ipamLinkage)",
 		"ipamLinkage.Reconcile(ipamReconcileLimit)",
 	} {
 		if !strings.Contains(source, required) {

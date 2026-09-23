@@ -1044,6 +1044,19 @@ func runServer(configPath string) error {
 	// activity into IPAM, and before the API so the 360° address view has
 	// something to compare the IPAM record against.
 	ipamLinkage := ipam.NewLinkage(db.DB)
+	var ipamFactsPipeline *ipam.FactsPipeline
+	if controlPlane && !haEnabled {
+		controlInbox, err := facts.NewObservationOutbox(db.DB)
+		if err != nil {
+			return fmt.Errorf("opening control-side DHCP facts inbox: %w", err)
+		}
+		ipamFactsPipeline, err = ipam.NewFactsPipeline(ipamLinkage, controlInbox, ipam.FactsPipelineOptions{
+			Enabled: true,
+		})
+		if err != nil {
+			return fmt.Errorf("initializing IPAM facts consumer: %w", err)
+		}
+	}
 
 	// Initialize IPAM API handler services.
 	if controlPlane {
@@ -1056,40 +1069,45 @@ func runServer(configPath string) error {
 		})
 	}
 
-	// Report lease state changes into IPAM. Without this the DHCP server hands
-	// out addresses that IPAM still lists as free, which is how the two views
-	// drift apart until neither is trusted.
+	// Keep the legacy observer for deployments with an unmapped local DHCP
+	// address. Mapped mutations are represented in the durable facts stream and
+	// projected atomically by the control-side consumer.
 	if dhcpSrv != nil {
 		dhcpSrv.SetLeaseObserver(ipamLinkage)
-		allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
-		if err != nil {
-			return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)
-		}
-		outbox, err := facts.NewObservationOutbox(dhcpStore.DB)
-		if err != nil {
-			return fmt.Errorf("initializing DHCP fact outbox: %w", err)
-		}
-		writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
-		if err != nil {
-			return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)
-		}
-		writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(dhcpStore.DB))
-		if dhcpRunner != nil {
-			writer.WithPostCommitWake(dhcpRunner.Wake)
-		}
-		source := strings.TrimSpace(cfg.DHCPHA.NodeID)
-		if source == "" {
-			source, err = os.Hostname()
-			if err != nil || strings.TrimSpace(source) == "" {
-				source = "dhcp-node"
+		// HA replication currently mirrors authoritative lease rows, not the
+		// unified fact sequence/outbox. Keep HA on its existing observer path
+		// until takeover can continue the durable stream without a gap.
+		if !haEnabled {
+			allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)
 			}
+			outbox, err := facts.NewObservationOutbox(dhcpStore.DB)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact outbox: %w", err)
+			}
+			writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)
+			}
+			writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(dhcpStore.DB))
+			if dhcpRunner != nil {
+				writer.WithPostCommitWake(dhcpRunner.Wake)
+			}
+			source := strings.TrimSpace(cfg.DHCPHA.NodeID)
+			if source == "" {
+				source, err = os.Hostname()
+				if err != nil || strings.TrimSpace(source) == "" {
+					source = "dhcp-node"
+				}
+			}
+			dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
+				Caller: writer, Source: source, DNSOutboxAtomic: true,
+				ResolveSpaceID: func(_ string, ip string) (string, error) {
+					return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+				},
+			})
 		}
-		dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
-			Caller: writer, Source: source, DNSOutboxAtomic: true,
-			ResolveSpaceID: func(_ string, ip string) (string, error) {
-				return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
-			},
-		})
 		slog.Info("IPAM: DHCP lease observation enabled")
 	}
 
@@ -1267,6 +1285,11 @@ func runServer(configPath string) error {
 	// --- Background maintenance loops ---
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	defer backgroundCancel()
+	if ipamFactsPipeline != nil {
+		if err := ipamFactsPipeline.Start(backgroundCtx); err != nil {
+			return fmt.Errorf("starting IPAM facts consumer: %w", err)
+		}
+	}
 
 	// DHCP configuration replication. The poll is a single indexed read of the
 	// control-plane revision counter; while it keeps up, a scope edited in the
@@ -1436,6 +1459,41 @@ func runServer(configPath string) error {
 			}
 			return handler.PlaneStatus{Level: handler.LevelOK}
 		}).Probe)
+		if ipamFactsPipeline != nil {
+			handler.SetPlaneProbe("ipam_facts", handler.NewCachedProbe(5*time.Second, func() handler.PlaneStatus {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				status, err := ipamFactsPipeline.Status(ctx)
+				if err != nil {
+					return handler.PlaneStatus{Level: handler.LevelFailing, Reasons: []string{"ipam_facts_status_unavailable"}}
+				}
+				switch status.Consumer.Readiness() {
+				case ipam.FactsReadinessOK:
+					return handler.PlaneStatus{Level: handler.LevelOK}
+				case ipam.FactsReadinessDegraded:
+					return handler.PlaneStatus{Level: handler.LevelDegraded, Reasons: []string{"ipam_facts_backlog"}}
+				default:
+					return handler.PlaneStatus{Level: handler.LevelFailing, Reasons: []string{"ipam_facts_consumer_unavailable"}}
+				}
+			}).Probe)
+		}
+	}
+	if ipamFactsPipeline != nil {
+		metrics.RegisterFactsConsumerStatsProvider(func() []metrics.FactsConsumerSample {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			status, err := ipamFactsPipeline.Status(ctx)
+			if err != nil {
+				slog.Warn("metrics: could not read IPAM facts consumer status", "error", err)
+				return nil
+			}
+			return []metrics.FactsConsumerSample{{
+				Domain: ipam.IPAMFactsConsumerDomain, Pending: int64(status.Consumer.Pending),
+				Failed: int64(status.Consumer.Failed), Applied: status.Consumer.LastApplied,
+				Lag: int64(status.Consumer.Lag), Gap: status.Consumer.Gap,
+				Readiness: status.Consumer.Readiness(),
+			}}
+		})
 	}
 
 	if servesDNS {
@@ -1711,6 +1769,14 @@ func runServer(configPath string) error {
 	if dhcpEventLogger != nil {
 		slog.Info("flushing DHCP event logs...")
 		dhcpEventLogger.Close()
+	}
+	if ipamFactsPipeline != nil {
+		slog.Info("shutting down IPAM facts consumer...")
+		ctx, cancel := newCtx()
+		if err := ipamFactsPipeline.Stop(ctx); err != nil {
+			slog.Error("IPAM facts consumer shutdown error", "error", err)
+		}
+		cancel()
 	}
 
 	// Stop background maintenance loops.
