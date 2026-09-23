@@ -145,6 +145,33 @@ func TestDNSRecordSetRejectsTTLConflictWithDataPlaneAuthoredRRset(t *testing.T) 
 	}
 }
 
+func TestDNSRecordSetRejectsCNAMEConflictWithDataPlaneRecord(t *testing.T) {
+	db := newTestDB(t)
+	seedZone(t, db, "zone-cname", "cname.example.test.")
+	if _, err := db.Exec(`INSERT INTO dns_records
+		(id, zone_id, name, type, value, ttl, enabled, authored_locally)
+		VALUES ('dynamic-cname', 'zone-cname', 'www.cname.example.test.', 'CNAME', 'target.example.test.', 300, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewDNSRecordsAdapter(nil).Apply(tx, "zone-cname", json.RawMessage(`{"schema":1,"records":[
+		{"name":"www","type":"A","value":"192.0.2.90","ttl":300,"enabled":true}]}`))
+	_ = tx.Rollback()
+	if err == nil {
+		t.Fatal("control-plane publish accepted an A record beside a data-plane CNAME")
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = 'zone-cname'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rejected publish left %d rows, want the original CNAME only", count)
+	}
+}
+
 func TestDNSRecordSetRejectsInconsistentTTLWithinPublishedRRset(t *testing.T) {
 	db := newTestDB(t)
 	seedZone(t, db, "zone-publish-ttl", "publish-ttl.example.test.")

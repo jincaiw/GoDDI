@@ -1141,12 +1141,14 @@ func validateRecordTTL(ttl int) error {
 
 func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeID string) error {
 	query := `SELECT COUNT(*) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME'
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type = 'CNAME'
 		AND (? = '' OR id != ?)`
 	args := []any{zoneID, name, excludeID, excludeID}
 	if rtype == "CNAME" {
 		query = `SELECT COUNT(*) FROM dns_records
-			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type != 'CNAME'
+			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type != 'CNAME'
 			AND (? = '' OR id != ?)`
 	}
 	var conflicts int
@@ -1160,7 +1162,9 @@ func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeI
 		return nil
 	}
 	query = `SELECT COUNT(*) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND LOWER(value) != LOWER(?)`
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+		AND type = 'CNAME' AND LOWER(value) != LOWER(?)`
 	args = []any{zoneID, name, value}
 	if excludeID != "" {
 		query += ` AND id != ?`
@@ -1173,6 +1177,12 @@ func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeI
 		return fmt.Errorf("multiple CNAME targets at %s", name)
 	}
 	return nil
+}
+
+// ValidateCNAMEExclusivityTx applies the same DNS owner-name CNAME invariant
+// to transactional writers outside the zone RecordManager.
+func ValidateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeID string) error {
+	return validateCNAMEExclusivityTx(tx, zoneID, name, rtype, value, excludeID)
 }
 
 // bumpZoneSerialTx advances a zone serial within the caller's mutation

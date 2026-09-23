@@ -165,19 +165,23 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		var cnameConflicts int
 		if rec.rtype == "CNAME" {
 			if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-				WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type != 'CNAME'`,
+				WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+				AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type != 'CNAME'`,
 				zoneID, rec.name).Scan(&cnameConflicts); err != nil {
 				return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
 			}
 			if cnameConflicts == 0 {
 				if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-					WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND LOWER(value) != LOWER(?)`,
+					WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+					AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+					AND type = 'CNAME' AND LOWER(value) != LOWER(?)`,
 					zoneID, rec.name, rec.value).Scan(&cnameConflicts); err != nil {
 					return fmt.Errorf("zone-file import: checking CNAME targets: %w", err)
 				}
 			}
 		} else if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME'`,
+			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type = 'CNAME'`,
 			zoneID, rec.name).Scan(&cnameConflicts); err != nil {
 			return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
 		}

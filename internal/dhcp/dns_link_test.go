@@ -258,6 +258,31 @@ func TestApplyCreate_PublishesForwardAndReverse(t *testing.T) {
 	}
 }
 
+func TestApplyCreate_FailsClosedOnForwardCNAMEConflict(t *testing.T) {
+	db := newLinkageDB(t)
+	seedLinkage(t, db)
+	if _, err := db.Exec(`INSERT INTO dns_records
+		(id, zone_id, name, type, value, ttl, enabled)
+		VALUES ('existing-cname', 'zone-forward', 'host1.example.test.', 'CNAME', 'other.example.test.', 300, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	seedLease(t, db, "lease-1", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:01",
+		"host1", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	link := NewDNSLink(Same(db), nil)
+	if err := link.ApplyEvent(DNSEvent{
+		LeaseID: "lease-1", Generation: 1, Action: DNSEventCreate,
+		ScopeID: "scope-1", IPAddress: "192.0.2.10", Hostname: "host1",
+	}); err == nil {
+		t.Fatal("DHCP published an A record alongside an existing CNAME")
+	}
+	if rows := recordsFor(t, db, "zone-forward", "host1.example.test.", "A"); len(rows) != 0 {
+		t.Fatalf("failed DHCP publication left %d A records", len(rows))
+	}
+	if rows := recordsFor(t, db, "zone-forward", "host1.example.test.", "CNAME"); len(rows) != 1 {
+		t.Fatalf("CNAME records after failed DHCP publication = %d, want one", len(rows))
+	}
+}
+
 func TestApplyCreate_RejectsConflictingTTLInForwardRRset(t *testing.T) {
 	db := newLinkageDB(t)
 	seedLinkage(t, db)

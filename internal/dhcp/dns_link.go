@@ -327,6 +327,9 @@ func (dl *DNSLink) upsertARecordTx(tx *sql.Tx, e DNSEvent, zoneID, fqdn, leaseEn
 	if err := zone.ValidateRRsetTTLTx(tx, zoneID, fqdn, "A", 300, ""); err != nil {
 		return nil, fmt.Errorf("dhcp_dns_link: A RRset at %s has an incompatible TTL: %w", fqdn, err)
 	}
+	if err := zone.ValidateCNAMEExclusivityTx(tx, zoneID, fqdn, "A", e.IPAddress, ""); err != nil {
+		return nil, fmt.Errorf("dhcp_dns_link: A record at %s conflicts with CNAME: %w", fqdn, err)
+	}
 
 	if _, err := tx.Exec(`
 		INSERT INTO dns_records
@@ -391,6 +394,9 @@ func (dl *DNSLink) upsertPTRRecordTx(tx *sql.Tx, e DNSEvent, fqdn, leaseEnd, zon
 	}
 	if err := zone.ValidateRRsetTTLTx(tx, zoneID, owner, "PTR", 300, ""); err != nil {
 		return nil, fmt.Errorf("dhcp_dns_link: PTR RRset at %s has an incompatible TTL: %w", owner, err)
+	}
+	if err := zone.ValidateCNAMEExclusivityTx(tx, zoneID, owner, "PTR", target, ""); err != nil {
+		return nil, fmt.Errorf("dhcp_dns_link: PTR record at %s conflicts with CNAME: %w", owner, err)
 	}
 
 	if _, err := tx.Exec(`

@@ -235,6 +235,9 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 			if err := zone.ValidateRRsetTTLTx(tx, id, name, rec.Type, rec.TTL, ""); err != nil {
 				return fmt.Errorf("record %s %s: %w", rec.Name, rec.Type, err)
 			}
+			if err := zone.ValidateCNAMEExclusivityTx(tx, id, name, rec.Type, rec.Value, ""); err != nil {
+				return fmt.Errorf("record %s %s: %w", rec.Name, rec.Type, err)
+			}
 		}
 		if _, err := stmt.Exec(
 			rowID, id, name, rec.Type, rec.Value,
