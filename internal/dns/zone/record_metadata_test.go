@@ -164,6 +164,42 @@ func TestCAARecordMetadataPersistsAcrossCreateUpdateAndJournal(t *testing.T) {
 	})
 }
 
+func TestRecordAPIRejectsMultipleCNAMEsAtOneOwner(t *testing.T) {
+	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	zoneStore := NewStore(store.DB)
+	defer zoneStore.Close()
+	zoneManager := NewZoneManager(store.DB, zoneStore)
+	z, err := zoneManager.CreateZone(ZoneOptions{Name: "cname-api.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewRecordManager(store.DB, zoneStore, zoneManager)
+	if _, err := manager.CreateRecord(z.ID, RecordOptions{Name: "alias", Type: "CNAME", Value: "first.cname-api.test."}); err != nil {
+		t.Fatalf("create first CNAME: %v", err)
+	}
+	if _, err := manager.CreateRecord(z.ID, RecordOptions{Name: "Alias", Type: "CNAME", Value: "second.cname-api.test."}); err == nil {
+		t.Fatal("API accepted two CNAME targets at one owner")
+	}
+	other, err := manager.CreateRecord(z.ID, RecordOptions{Name: "other", Type: "CNAME", Value: "second.cname-api.test."})
+	if err != nil {
+		t.Fatalf("create CNAME at a different owner: %v", err)
+	}
+	if _, err := manager.UpdateRecord(other.ID, RecordOptions{Name: "ALIAS"}); err == nil {
+		t.Fatal("API update moved a conflicting CNAME onto an occupied owner")
+	}
+	var count int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = 'alias.cname-api.test.' AND type = 'CNAME'`, z.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rejected API mutations left %d CNAME records at alias, want one", count)
+	}
+}
+
 func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
 	if err != nil {

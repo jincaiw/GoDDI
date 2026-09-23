@@ -207,19 +207,10 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		return nil, fmt.Errorf("begin record create transaction: %w", err)
 	}
 	defer tx.Rollback()
-	// Check CNAME exclusivity in the same transaction as replacement/insertion.
-	var conflictCount int
-	conflictQuery := "SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'CNAME' AND enabled = 1"
-	conflictMessage := fmt.Sprintf("CNAME conflict: name %s already has a CNAME record", name)
-	if opts.Type == "CNAME" {
-		conflictQuery = "SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type != 'CNAME' AND enabled = 1"
-		conflictMessage = fmt.Sprintf("CNAME conflict: name %s already has other record types", name)
-	}
-	if err := tx.QueryRow(conflictQuery, zoneID, name).Scan(&conflictCount); err != nil {
-		return nil, fmt.Errorf("checking CNAME exclusivity: %w", err)
-	}
-	if conflictCount > 0 {
-		return nil, fmt.Errorf("%s", conflictMessage)
+	if enabled {
+		if err := validateCNAMEExclusivityTx(tx, zoneID, name, opts.Type, opts.Value, ""); err != nil {
+			return nil, err
+		}
 	}
 
 	// Overwrite and its deletions are part of the same zone version as the add.
@@ -723,6 +714,16 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 	if opts.Enabled != nil {
 		updatedEnabled = *opts.Enabled
 	}
+	updatedValue := existing.Value
+	if opts.Value != "" {
+		updatedValue = opts.Value
+	}
+	if updatedEnabled && (updatedEnabled != existing.Enabled || !strings.EqualFold(updatedName, existing.Name) ||
+		!strings.EqualFold(updatedType, existing.Type) || updatedValue != existing.Value) {
+		if err := validateCNAMEExclusivityTx(tx, existing.ZoneID, updatedName, updatedType, updatedValue, id); err != nil {
+			return nil, err
+		}
+	}
 	if updatedEnabled && (updatedEnabled != existing.Enabled || !strings.EqualFold(updatedName, existing.Name) ||
 		!strings.EqualFold(updatedType, existing.Type) || updatedTTL != existing.TTL) {
 		if err := ValidateRRsetTTLTx(tx, existing.ZoneID, updatedName, updatedType, updatedTTL, id); err != nil {
@@ -1134,6 +1135,42 @@ func intOrZero(v *int) int {
 func validateRecordTTL(ttl int) error {
 	if ttl < 0 || uint64(ttl) > 2147483647 {
 		return fmt.Errorf("TTL must be between 0 and 2147483647 seconds")
+	}
+	return nil
+}
+
+func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeID string) error {
+	query := `SELECT COUNT(*) FROM dns_records
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME'
+		AND (? = '' OR id != ?)`
+	args := []any{zoneID, name, excludeID, excludeID}
+	if rtype == "CNAME" {
+		query = `SELECT COUNT(*) FROM dns_records
+			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type != 'CNAME'
+			AND (? = '' OR id != ?)`
+	}
+	var conflicts int
+	if err := tx.QueryRow(query, args...).Scan(&conflicts); err != nil {
+		return fmt.Errorf("checking CNAME exclusivity: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf("CNAME conflict at %s", name)
+	}
+	if rtype != "CNAME" {
+		return nil
+	}
+	query = `SELECT COUNT(*) FROM dns_records
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND value != ?`
+	args = []any{zoneID, name, value}
+	if excludeID != "" {
+		query += ` AND id != ?`
+		args = append(args, excludeID)
+	}
+	if err := tx.QueryRow(query, args...).Scan(&conflicts); err != nil {
+		return fmt.Errorf("checking CNAME targets: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf("multiple CNAME targets at %s", name)
 	}
 	return nil
 }
