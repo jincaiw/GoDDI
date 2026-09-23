@@ -39,6 +39,8 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		priority *int
 		weight   *int
 		port     *int
+		flag     *int
+		tag      string
 	}
 
 	var records []importRR
@@ -82,6 +84,11 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		if port != 0 {
 			rec.port = &port
 		}
+		if caa, ok := rr.(*dns.CAA); ok {
+			flag := int(caa.Flag)
+			rec.flag = &flag
+			rec.tag = caa.Tag
+		}
 		records = append(records, rec)
 	}
 
@@ -97,8 +104,8 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
@@ -107,7 +114,7 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 
 	for _, rec := range records {
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
-			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port))
+			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
 		if err != nil {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
@@ -119,7 +126,7 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		}
 		for _, rec := range records {
 			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
-				intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port)); err != nil {
+				intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port), intOrZero(rec.flag), rec.tag); err != nil {
 				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
 			}
 		}
@@ -217,6 +224,8 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 		priority int
 		weight   int
 		port     int
+		flag     int
+		tag      string
 	}
 
 	var records []csvRecord
@@ -229,7 +238,7 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			continue
 		}
 
-		// CSV format: name, type, value, ttl, priority, weight, port
+		// CSV format: name, type, value, ttl, priority, weight, port, flag, tag.
 		if len(record) < 3 {
 			continue
 		}
@@ -241,6 +250,8 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 		priority := 0
 		weight := 0
 		port := 0
+		flag := 0
+		tag := ""
 
 		if len(record) > 3 && record[3] != "" {
 			if v, err := strconv.Atoi(record[3]); err == nil {
@@ -262,6 +273,20 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 				port = v
 			}
 		}
+		if rtype == "CAA" {
+			if len(record) < 9 {
+				return fmt.Errorf("CSV CAA record requires flag and tag columns")
+			}
+			flag, err = strconv.Atoi(record[7])
+			if err != nil || flag < 0 || flag > 255 || strings.TrimSpace(record[8]) == "" {
+				return fmt.Errorf("CSV CAA record requires a flag from 0 to 255 and a non-empty tag")
+			}
+			// Validate against the same CAA tag/value rules as API writes.
+			tag = record[8]
+			if err := validateRecordValue("CAA", value, nil, nil, nil, tag, &flag); err != nil {
+				return fmt.Errorf("invalid CSV CAA record: %w", err)
+			}
+		}
 
 		if !SupportedRecordTypes[rtype] {
 			continue
@@ -276,6 +301,8 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			priority: priority,
 			weight:   weight,
 			port:     port,
+			flag:     flag,
+			tag:      tag,
 		})
 	}
 
@@ -287,8 +314,8 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
@@ -296,7 +323,7 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
-		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl, rec.priority, rec.weight, rec.port)
+		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl, rec.priority, rec.weight, rec.port, rec.flag, rec.tag)
 		if err != nil {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
@@ -308,7 +335,7 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 		}
 		for _, rec := range records {
 			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
-				rec.priority, rec.weight, rec.port); err != nil {
+				rec.priority, rec.weight, rec.port, rec.flag, rec.tag); err != nil {
 				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
 			}
 		}
@@ -341,11 +368,20 @@ func (m *RecordManager) ExportRecordsCSV(zoneID string) ([]byte, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("name,type,value,ttl,priority,weight,port\n")
+	w := csv.NewWriter(&sb)
+	if err := w.Write([]string{"name", "type", "value", "ttl", "priority", "weight", "port", "flag", "tag"}); err != nil {
+		return nil, err
+	}
 
 	for _, r := range records {
-		sb.WriteString(fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d\n",
-			r.Name, r.Type, r.Value, r.TTL, r.Priority, r.Weight, r.Port))
+		if err := w.Write([]string{r.Name, r.Type, r.Value, strconv.Itoa(r.TTL), strconv.Itoa(r.Priority),
+			strconv.Itoa(r.Weight), strconv.Itoa(r.Port), strconv.Itoa(r.Flag), r.Tag}); err != nil {
+			return nil, err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, err
 	}
 
 	return []byte(sb.String()), nil

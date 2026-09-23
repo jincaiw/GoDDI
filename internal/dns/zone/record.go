@@ -224,7 +224,8 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 	var replaced []Record
 	if opts.Overwrite {
 		rows, queryErr := tx.Query(`SELECT id, zone_id, name, type, value, ttl,
-			COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0)
+			COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0),
+			COALESCE(flag, 0), COALESCE(tag, '')
 			FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?`, zoneID, name, opts.Type)
 		if queryErr != nil {
 			return nil, fmt.Errorf("querying overwritten records: %w", queryErr)
@@ -232,7 +233,7 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		for rows.Next() {
 			var rec Record
 			if scanErr := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
-				&rec.Priority, &rec.Weight, &rec.Port); scanErr != nil {
+				&rec.Priority, &rec.Weight, &rec.Port, &rec.Flag, &rec.Tag); scanErr != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scanning overwritten record: %w", scanErr)
 			}
@@ -252,11 +253,11 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 
 	id := uuid.New().String()
 	_, err = tx.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled, comment, tags, owner, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zoneID, name, opts.Type, opts.Value, ttl,
 		nullInt(opts.Priority), nullInt(opts.Weight), nullInt(opts.Port),
-		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, expiresAt)
+		nullInt(opts.Flag), opts.Tag, enabled, opts.Comment, opts.Tags, opts.Owner, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
@@ -266,12 +267,12 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		return nil, fmt.Errorf("bumping zone serial: %w", err)
 	}
 	for _, rec := range replaced {
-		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value, rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value, rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, fmt.Errorf("journaling overwritten record: %w", err)
 		}
 	}
 	if err := logChangeTx(tx, zoneID, serial, "add", name, opts.Type, opts.Value, ttl,
-		intOrZero(opts.Priority), intOrZero(opts.Weight), intOrZero(opts.Port)); err != nil {
+		intOrZero(opts.Priority), intOrZero(opts.Weight), intOrZero(opts.Port), intOrZero(opts.Flag), opts.Tag); err != nil {
 		return nil, fmt.Errorf("journaling created record: %w", err)
 	}
 	ptrCreated := false
@@ -305,16 +306,16 @@ func (m *RecordManager) GetRecord(id string) (*Record, error) {
 
 	var r Record
 	var priority, weight, port, flag sql.NullInt64
-	var comment, tags, owner sql.NullString
+	var tag, comment, tags, owner sql.NullString
 	var expiresAt sql.NullTime
 
 	err := m.db.QueryRow(`
-		SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag,
+	SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag, COALESCE(tag, ''),
 			enabled, comment, tags, owner, expires_at, created_at, updated_at
 		FROM dns_records WHERE id = ?
 	`, id).Scan(
 		&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.Value, &r.TTL,
-		&priority, &weight, &port, &flag, &r.Enabled,
+		&priority, &weight, &port, &flag, &tag, &r.Enabled,
 		&comment, &tags, &owner, &expiresAt,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
@@ -337,6 +338,9 @@ func (m *RecordManager) GetRecord(id string) (*Record, error) {
 	if flag.Valid {
 		r.Flag = int(flag.Int64)
 	}
+	if tag.Valid {
+		r.Tag = tag.String
+	}
 	if comment.Valid {
 		r.Comment = comment.String
 	}
@@ -356,14 +360,14 @@ func (m *RecordManager) GetRecord(id string) (*Record, error) {
 func getRecordTx(tx *sql.Tx, id string) (*Record, error) {
 	var r Record
 	var priority, weight, port, flag sql.NullInt64
-	var comment, tags, owner sql.NullString
+	var tag, comment, tags, owner sql.NullString
 	var expiresAt sql.NullTime
 	err := tx.QueryRow(`
-		SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag,
+	SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag, COALESCE(tag, ''),
 			enabled, comment, tags, owner, expires_at, created_at, updated_at
 		FROM dns_records WHERE id = ?
 	`, id).Scan(&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.Value, &r.TTL,
-		&priority, &weight, &port, &flag, &r.Enabled,
+		&priority, &weight, &port, &flag, &tag, &r.Enabled,
 		&comment, &tags, &owner, &expiresAt, &r.CreatedAt, &r.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("record not found: %s", id)
@@ -382,6 +386,9 @@ func getRecordTx(tx *sql.Tx, id string) (*Record, error) {
 	}
 	if flag.Valid {
 		r.Flag = int(flag.Int64)
+	}
+	if tag.Valid {
+		r.Tag = tag.String
 	}
 	if comment.Valid {
 		r.Comment = comment.String
@@ -446,7 +453,7 @@ func (m *RecordManager) ListRecords(filter RecordFilter) ([]Record, int64, error
 	// Query page.
 	offset := (filter.Page - 1) * filter.PageSize
 	querySQL := fmt.Sprintf(`
-		SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag,
+		SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag, COALESCE(tag, ''),
 			enabled, comment, tags, owner, expires_at, created_at, updated_at
 		FROM dns_records %s
 		ORDER BY name, type
@@ -464,11 +471,11 @@ func (m *RecordManager) ListRecords(filter RecordFilter) ([]Record, int64, error
 	for rows.Next() {
 		var r Record
 		var priority, weight, port, flag sql.NullInt64
-		var comment, tags, owner sql.NullString
+		var tag, comment, tags, owner sql.NullString
 		var expiresAt sql.NullTime
 		if err := rows.Scan(
 			&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.Value, &r.TTL,
-			&priority, &weight, &port, &flag, &r.Enabled,
+			&priority, &weight, &port, &flag, &tag, &r.Enabled,
 			&comment, &tags, &owner, &expiresAt,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
@@ -485,6 +492,9 @@ func (m *RecordManager) ListRecords(filter RecordFilter) ([]Record, int64, error
 		}
 		if flag.Valid {
 			r.Flag = int(flag.Int64)
+		}
+		if tag.Valid {
+			r.Tag = tag.String
 		}
 		if comment.Valid {
 			r.Comment = comment.String
@@ -563,7 +573,15 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		if opts.Type != "" {
 			recType = opts.Type
 		}
-		if err := validateRecordValue(recType, opts.Value, &priority, &weight, &port, opts.Tag, &existing.Flag); err != nil {
+		tag := existing.Tag
+		if opts.Tag != "" {
+			tag = opts.Tag
+		}
+		flag := existing.Flag
+		if opts.Flag != nil {
+			flag = *opts.Flag
+		}
+		if err := validateRecordValue(recType, opts.Value, &priority, &weight, &port, tag, &flag); err != nil {
 			return nil, fmt.Errorf("invalid record value: %w", err)
 		}
 		setClauses = append(setClauses, "value = ?")
@@ -661,7 +679,15 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		if opts.Port != nil {
 			port = *opts.Port
 		}
-		if err := validateRecordValue(effectiveType, opts.Value, &priority, &weight, &port, opts.Tag, &existing.Flag); err != nil {
+		tag := existing.Tag
+		if opts.Tag != "" {
+			tag = opts.Tag
+		}
+		flag := existing.Flag
+		if opts.Flag != nil {
+			flag = *opts.Flag
+		}
+		if err := validateRecordValue(effectiveType, opts.Value, &priority, &weight, &port, tag, &flag); err != nil {
 			return nil, fmt.Errorf("invalid record value: %w", err)
 		}
 	}
@@ -711,11 +737,11 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		return nil, fmt.Errorf("bumping zone serial: %w", err)
 	}
 	if err := logChangeTx(tx, existing.ZoneID, serial, "delete", existing.Name, existing.Type, existing.Value,
-		existing.TTL, existing.Priority, existing.Weight, existing.Port); err != nil {
+		existing.TTL, existing.Priority, existing.Weight, existing.Port, existing.Flag, existing.Tag); err != nil {
 		return nil, fmt.Errorf("journaling prior record: %w", err)
 	}
 	if err := logChangeTx(tx, updated.ZoneID, serial, "add", updated.Name, updated.Type, updated.Value,
-		updated.TTL, updated.Priority, updated.Weight, updated.Port); err != nil {
+		updated.TTL, updated.Priority, updated.Weight, updated.Port, updated.Flag, updated.Tag); err != nil {
 		return nil, fmt.Errorf("journaling updated record: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -767,7 +793,7 @@ func (m *RecordManager) DeleteRecord(id string) error {
 		return fmt.Errorf("bumping zone serial: %w", err)
 	}
 	if err := logChangeTx(tx, record.ZoneID, serial, "delete", record.Name, record.Type,
-		record.Value, record.TTL, record.Priority, record.Weight, record.Port); err != nil {
+		record.Value, record.TTL, record.Priority, record.Weight, record.Port, record.Flag, record.Tag); err != nil {
 		return fmt.Errorf("journaling deleted record: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -826,7 +852,7 @@ func (m *RecordManager) BatchCreateRecords(zoneID string, records []RecordOption
 	}
 	for _, rec := range created {
 		if err := logChangeTx(tx, rec.ZoneID, serial, "add", rec.Name, rec.Type, rec.Value,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, fmt.Errorf("journaling created record: %w", err)
 		}
 	}
@@ -923,7 +949,7 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 				continue
 			}
 			if err := logChangeTx(tx, deletedRec.ZoneID, newSerial, "delete", deletedRec.Name, deletedRec.Type,
-				deletedRec.Value, deletedRec.TTL, deletedRec.Priority, deletedRec.Weight, deletedRec.Port); err != nil {
+				deletedRec.Value, deletedRec.TTL, deletedRec.Priority, deletedRec.Weight, deletedRec.Port, deletedRec.Flag, deletedRec.Tag); err != nil {
 				return fmt.Errorf("journaling deleted record %s: %w", deletedRec.ID, err)
 			}
 		}
@@ -1002,11 +1028,11 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 
 	id := uuid.New().String()
 	_, err := tx.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled, comment, tags, owner, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zone.ID, name, opts.Type, opts.Value, ttl,
 		nullInt(opts.Priority), nullInt(opts.Weight), nullInt(opts.Port),
-		nullInt(opts.Flag), enabled, opts.Comment, opts.Tags, opts.Owner, opts.ExpiresAt)
+		nullInt(opts.Flag), opts.Tag, enabled, opts.Comment, opts.Tags, opts.Owner, opts.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
@@ -1069,15 +1095,15 @@ func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {
 	return next, nil
 }
 
-func logChangeTx(tx *sql.Tx, zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port int) error {
+func logChangeTx(tx *sql.Tx, zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port, flag int, tag string) error {
 	if serial == 0 {
 		return fmt.Errorf("zone serial must be nonzero")
 	}
 	_, err := tx.Exec(`
-		INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port, flag, tag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, uuid.New().String(), zoneID, serial, changeType, name, rtype, value, ttl,
-		nullInt(&priority), nullInt(&weight), nullInt(&port))
+		nullInt(&priority), nullInt(&weight), nullInt(&port), nullInt(&flag), tag)
 	return err
 }
 
@@ -1154,7 +1180,7 @@ func (m *RecordManager) CleanupExpiredRecords() (int64, error) {
 			zoneSerial[rec.ZoneID] = serial
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return 0, fmt.Errorf("journaling expired record %s: %w", rec.id, err)
 		}
 	}
@@ -1229,7 +1255,7 @@ func (m *RecordManager) createPTRTx(tx *sql.Tx, reverseZone *Zone, owner, target
 	if err != nil {
 		return false, fmt.Errorf("bumping reverse zone serial: %w", err)
 	}
-	if err := logChangeTx(tx, reverseZone.ID, serial, "add", owner, "PTR", target, ttl, 0, 0, 0); err != nil {
+	if err := logChangeTx(tx, reverseZone.ID, serial, "add", owner, "PTR", target, ttl, 0, 0, 0, 0, ""); err != nil {
 		return false, fmt.Errorf("journaling PTR record: %w", err)
 	}
 	return true, nil
@@ -1331,6 +1357,9 @@ func validateRecordValue(rtype, value string, priority, weight, port *int, tag s
 	case "CAA":
 		if flag == nil {
 			return fmt.Errorf("CAA record requires a flag")
+		}
+		if *flag < 0 || *flag > 255 {
+			return fmt.Errorf("CAA flag must be between 0 and 255")
 		}
 		if tag == "" {
 			return fmt.Errorf("CAA record requires a tag")

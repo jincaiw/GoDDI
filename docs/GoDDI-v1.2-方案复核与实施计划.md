@@ -148,6 +148,14 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - W01 仍为局部收敛而非关闭：管理 API、配置发布、DHCP 投影、动态更新、导入和部分 catalog 操作已有事务保护；其他 zone mutation、完整 IXFR 差异表示与 RFC 协议场景仍须审计。IXFR 保持禁用，现有不安全请求回退 AXFR。
 - 仓内验证通过不代表完成真实现场验收：断电持久性、relay/客户端互操作、跨主机分区/围栏、目标硬件容量与长期稳定性仍是后续门槛。
 
+### v0.12.0 后续修复（2026-09-23）
+
+- 复核发现 CAA 的 `tag` 在记录写入和读取路径中遗漏，zonefile/CSV 导入也会丢弃 CAA `flag/tag`；这会令管理 API 接受的记录与权威 DNS 应答不一致。
+- 修复单条/批量记录创建、读取、列表、局部更新、覆写 journal、zonefile 和 CSV 往返中的 CAA 元数据保留；更新 CAA value 时继承未显式修改的 tag/flag，并拒绝超出 8 位 wire flag 的值。
+- 控制库迁移 `026_dns_zone_change_caa_fields.sql` 和 zone 数据面迁移 `010_zone_change_caa_fields.sql` 为历史记录加上 `flag/tag`；迁移可回滚并可重放。区变更历史 API 同步返回字段。
+- 回归用例覆盖创建、局部更新、authoritative CAA answer、journal/API history、CSV 与 zonefile 导入，以及 flag 边界。
+- `go test ./...`、`go vet ./...`、`go build ./...` 及 zone/transfer/dynamic update/dataplane 关键包 race 检查通过。此修复补足了 journal 元数据的一类缺口，但不等于所有 RR 类型都已具备完整 delta history；IXFR 继续回退 AXFR。
+
 ## 范围与限制
 
 本计划按用户授权直接选择工程默认值，已记录在 ADR-0008；DHCP HA 默认沿用已接受的 ADR-0003。`impl-v0.6.0` 中未提交内容仍属于进行中的工作，复核时只读参考；实施分支从其最新发布提交创建，未将那些未提交修改复制或改写。目标客户的容量和真实拓扑仍需在发布验证中固定，未有证据前不作数值承诺。

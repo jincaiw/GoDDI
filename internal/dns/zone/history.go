@@ -20,6 +20,8 @@ type ZoneChangeEntry struct {
 	Priority   int       `json:"priority,omitempty"`
 	Weight     int       `json:"weight,omitempty"`
 	Port       int       `json:"port,omitempty"`
+	Flag       int       `json:"flag,omitempty"`
+	Tag        string    `json:"tag,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -47,7 +49,8 @@ func (m *ZoneManager) ListZoneHistory(zoneID string, page, pageSize int) ([]Zone
 	offset := (page - 1) * pageSize
 	rows, err := m.db.Query(`
 		SELECT id, zone_id, serial, change_type, name, type, value,
-			COALESCE(ttl, 0), COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0), created_at
+			COALESCE(ttl, 0), COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0),
+			COALESCE(flag, 0), COALESCE(tag, ''), created_at
 		FROM dns_zone_changes WHERE zone_id = ?
 		ORDER BY serial DESC, created_at DESC
 		LIMIT ? OFFSET ?
@@ -61,7 +64,7 @@ func (m *ZoneManager) ListZoneHistory(zoneID string, page, pageSize int) ([]Zone
 	for rows.Next() {
 		var e ZoneChangeEntry
 		if err := rows.Scan(&e.ID, &e.ZoneID, &e.Serial, &e.ChangeType, &e.Name, &e.Type,
-			&e.Value, &e.TTL, &e.Priority, &e.Weight, &e.Port, &e.CreatedAt); err != nil {
+			&e.Value, &e.TTL, &e.Priority, &e.Weight, &e.Port, &e.Flag, &e.Tag, &e.CreatedAt); err != nil {
 			continue
 		}
 		entries = append(entries, e)

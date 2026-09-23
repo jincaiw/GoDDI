@@ -66,7 +66,7 @@ func (m *ZoneManager) addCatalogMembership(catalogName, memberName string) error
 	if err != nil {
 		return err
 	}
-	if err := logChangeTx(tx, catalog.ID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0); err != nil {
+	if err := logChangeTx(tx, catalog.ID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0, 0, ""); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -99,7 +99,7 @@ func addCatalogMembershipTx(tx *sql.Tx, catalogName, memberName string) (string,
 	if err != nil {
 		return "", err
 	}
-	if err := logChangeTx(tx, catalogID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0); err != nil {
+	if err := logChangeTx(tx, catalogID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0, 0, ""); err != nil {
 		return "", err
 	}
 	return catalogID, nil
@@ -162,7 +162,7 @@ func (m *ZoneManager) removeCatalogMembership(memberName string) error {
 			serialByZone[rec.ZoneID] = serial
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return err
 		}
 	}
@@ -227,7 +227,7 @@ func removeCatalogMembershipTx(tx *sql.Tx, memberName string) (map[string]struct
 			serialByZone[rec.ZoneID] = serial
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, err
 		}
 	}
@@ -284,11 +284,11 @@ func renameCatalogMemberTx(tx *sql.Tx, oldName, newName string) (map[string]stru
 			return nil, err
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, err
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "add", rec.Name, rec.Type, newValue,
-			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, err
 		}
 	}

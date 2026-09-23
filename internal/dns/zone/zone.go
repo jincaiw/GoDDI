@@ -804,11 +804,12 @@ func renameZoneRecordOwnersTx(tx *sql.Tx, zoneID, oldZoneName, newZoneName strin
 	oldSuffix := "." + strings.TrimSuffix(oldApex, ".") + "."
 	type ownerChange struct {
 		id, oldName, newName, rtype, value string
-		ttl, priority, weight, port        int
+		ttl, priority, weight, port, flag  int
+		tag                                string
 	}
 	rows, err := tx.Query(`
 		SELECT id, name, type, value, ttl, COALESCE(priority, 0),
-			COALESCE(weight, 0), COALESCE(port, 0)
+			COALESCE(weight, 0), COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
 		FROM dns_records WHERE zone_id = ?`, zoneID)
 	if err != nil {
 		return err
@@ -816,7 +817,7 @@ func renameZoneRecordOwnersTx(tx *sql.Tx, zoneID, oldZoneName, newZoneName strin
 	var changes []ownerChange
 	for rows.Next() {
 		var c ownerChange
-		if err := rows.Scan(&c.id, &c.oldName, &c.rtype, &c.value, &c.ttl, &c.priority, &c.weight, &c.port); err != nil {
+		if err := rows.Scan(&c.id, &c.oldName, &c.rtype, &c.value, &c.ttl, &c.priority, &c.weight, &c.port, &c.flag, &c.tag); err != nil {
 			rows.Close()
 			return err
 		}
@@ -846,10 +847,10 @@ func renameZoneRecordOwnersTx(tx *sql.Tx, zoneID, oldZoneName, newZoneName strin
 		if _, err := tx.Exec(`UPDATE dns_records SET name = ?, updated_at = datetime('now') WHERE id = ?`, c.newName, c.id); err != nil {
 			return err
 		}
-		if err := logChangeTx(tx, zoneID, serial, "delete", c.oldName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port); err != nil {
+		if err := logChangeTx(tx, zoneID, serial, "delete", c.oldName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port, c.flag, c.tag); err != nil {
 			return err
 		}
-		if err := logChangeTx(tx, zoneID, serial, "add", c.newName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port); err != nil {
+		if err := logChangeTx(tx, zoneID, serial, "add", c.newName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port, c.flag, c.tag); err != nil {
 			return err
 		}
 	}
