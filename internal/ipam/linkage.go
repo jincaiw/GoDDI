@@ -3,6 +3,7 @@ package ipam
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"github.com/jasonwa/goddi/internal/ipam/subnet"
 	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
+
+var ErrAmbiguousAddress = errors.New("ipam: address exists in multiple spaces")
 
 // Lease actions reported by the DHCP data plane.
 const (
@@ -233,6 +236,25 @@ func (l *Linkage) LinkDNSRecord(recordID, zoneID, name, recordType, value, ip, s
 	if err != nil {
 		return err
 	}
+	return l.linkDNSRecordToAddress(a, recordID, zoneID, name, recordType, value, ip, source)
+}
+
+// LinkDNSRecordInSpace links a published DNS record when the caller knows its
+// address space. This is the unambiguous form for deployments with overlapping
+// subnets in separate VRFs/spaces.
+func (l *Linkage) LinkDNSRecordInSpace(spaceID, recordID, zoneID, name, recordType, value, ip, source string) error {
+	canonical, err := address.NormalizeIP(ip)
+	if err != nil {
+		return err
+	}
+	a, err := l.addrMgr.GetAddressBySpaceIP(spaceID, canonical)
+	if err != nil {
+		return err
+	}
+	return l.linkDNSRecordToAddress(a, recordID, zoneID, name, recordType, value, canonical, source)
+}
+
+func (l *Linkage) linkDNSRecordToAddress(a *address.Address, recordID, zoneID, name, recordType, value, ip, source string) error {
 	if a == nil {
 		slog.Debug("ipam: DNS record points at an untracked address", "ip", ip, "name", name)
 		return nil
@@ -280,6 +302,9 @@ func (l *Linkage) addressByIP(ip string) (*address.Address, error) {
 
 	if len(spaceIDs) == 0 {
 		return nil, nil
+	}
+	if len(spaceIDs) > 1 {
+		return nil, fmt.Errorf("%w: %s", ErrAmbiguousAddress, canonical)
 	}
 	return l.addrMgr.GetAddressBySpaceIP(spaceIDs[0], canonical)
 }
