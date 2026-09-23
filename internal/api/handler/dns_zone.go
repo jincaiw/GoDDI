@@ -262,7 +262,15 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		if req.DryRun {
-			response.BadRequest(w, "dry_run is currently supported for CSV imports only")
+			preview, err := recordMgr.PreviewZoneFile(zoneID, req.Content)
+			if err != nil {
+				response.BadRequest(w, err.Error())
+				return
+			}
+			response.OKWithMessage(w, "zone-file validation succeeded", map[string]interface{}{
+				"zone_id": zoneID, "dry_run": true, "valid": preview.Valid,
+				"record_count": preview.RecordCount, "record_types": preview.RecordTypes,
+			})
 			return
 		}
 		if err := recordMgr.ImportZoneFile(zoneID, req.Content); err != nil {

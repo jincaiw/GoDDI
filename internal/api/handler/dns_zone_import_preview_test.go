@@ -59,6 +59,116 @@ func TestCSVZoneImportDryRunReportsCountsWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestBindZoneImportDryRunValidatesWithoutWriting(t *testing.T) {
+	db := newRecordOwnershipTestDB(t)
+	withDNSRecordServices(t, db)
+	dnsZone, err := cachedZoneMgr.CreateZone(zone.ZoneOptions{Name: "bind-preview.example.test", Type: string(zone.ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "www 300 IN A 192.0.2.25\nmail 300 IN MX 10 mail.example.test.\n"
+	body, err := json.Marshal(struct {
+		Format  string `json:"format"`
+		Content string `json:"content"`
+		DryRun  bool   `json:"dry_run"`
+	}{Format: "bind", Content: content, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/zones/"+dnsZone.ID+"/import", strings.NewReader(string(body)))
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", dnsZone.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	rec := httptest.NewRecorder()
+	ImportZoneFile(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("BIND dry-run status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			ZoneID      string         `json:"zone_id"`
+			DryRun      bool           `json:"dry_run"`
+			Valid       bool           `json:"valid"`
+			RecordCount int            `json:"record_count"`
+			RecordTypes map[string]int `json:"record_types"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode BIND dry-run response: %v (%s)", err, rec.Body.String())
+	}
+	if envelope.Data.ZoneID != dnsZone.ID || !envelope.Data.DryRun || !envelope.Data.Valid ||
+		envelope.Data.RecordCount != 2 || envelope.Data.RecordTypes["A"] != 1 || envelope.Data.RecordTypes["MX"] != 1 {
+		t.Fatalf("BIND dry-run response = %+v", envelope.Data)
+	}
+	var count, historyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, dnsZone.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ?`, dnsZone.ID).Scan(&historyCount); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || historyCount != 0 {
+		t.Fatalf("BIND dry-run wrote %d records and %d history rows", count, historyCount)
+	}
+}
+
+func TestBindZoneImportDryRunRejectsConflictWithoutWriting(t *testing.T) {
+	db := newRecordOwnershipTestDB(t)
+	withDNSRecordServices(t, db)
+	dnsZone, err := cachedZoneMgr.CreateZone(zone.ZoneOptions{Name: "bind-conflict.example.test", Type: string(zone.ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cachedRecordMgr.CreateRecord(dnsZone.ID, zone.RecordOptions{
+		Name: "taken", Type: "CNAME", Value: "target.example.test.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	currentZone, err := cachedZoneMgr.GetZone(dnsZone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSerial := currentZone.Serial
+	var beforeChanges int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ?`, dnsZone.ID).Scan(&beforeChanges); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(struct {
+		Format  string `json:"format"`
+		Content string `json:"content"`
+		DryRun  bool   `json:"dry_run"`
+	}{Format: "bind", Content: "taken 300 IN A 192.0.2.26\n", DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/zones/"+dnsZone.ID+"/import", strings.NewReader(string(body)))
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", dnsZone.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	rec := httptest.NewRecorder()
+	ImportZoneFile(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("conflicting BIND dry-run status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	updatedZone, err := cachedZoneMgr.GetZone(dnsZone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedZone.Serial != beforeSerial {
+		t.Fatalf("serial changed during rejected dry-run: %d -> %d", beforeSerial, updatedZone.Serial)
+	}
+	var records, changes int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, dnsZone.ID).Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ?`, dnsZone.ID).Scan(&changes); err != nil {
+		t.Fatal(err)
+	}
+	if records != 1 || changes != beforeChanges {
+		t.Fatalf("rejected dry-run left records=%d changes=%d, want only original record and journal", records, changes)
+	}
+}
+
 func TestCSVZoneImportDryRunReturnsAllConflictRowsWithoutWriting(t *testing.T) {
 	db := newRecordOwnershipTestDB(t)
 	withDNSRecordServices(t, db)

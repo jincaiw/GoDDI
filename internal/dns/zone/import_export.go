@@ -21,6 +21,14 @@ type CSVImportPreview struct {
 	Conflicts   []CSVImportConflict `json:"conflicts,omitempty"`
 }
 
+// ZoneFileImportPreview summarizes a BIND zone-file import validated against
+// the target zone without committing any rows or journal changes.
+type ZoneFileImportPreview struct {
+	RecordCount int            `json:"record_count"`
+	RecordTypes map[string]int `json:"record_types"`
+	Valid       bool           `json:"valid"`
+}
+
 // CSVImportConflict identifies an import row that cannot be applied without
 // violating an existing or incoming RRset invariant.
 type CSVImportConflict struct {
@@ -46,6 +54,18 @@ func (e *CSVImportConflictError) Error() string {
 
 // ImportZoneFile parses a BIND zone file and imports records into the specified zone.
 func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
+	return m.importZoneFile(zoneID, content, false, nil)
+}
+
+// PreviewZoneFile runs the same parsing, validation, insert, serial, and
+// journal operations as an import, then rolls the transaction back.
+func (m *RecordManager) PreviewZoneFile(zoneID, content string) (ZoneFileImportPreview, error) {
+	var preview ZoneFileImportPreview
+	err := m.importZoneFile(zoneID, content, true, &preview)
+	return preview, err
+}
+
+func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun bool, preview *ZoneFileImportPreview) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
 	}
@@ -134,6 +154,13 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	if err := zp.Err(); err != nil {
 		return fmt.Errorf("zone file parse error: %w", err)
 	}
+	if preview != nil {
+		preview.RecordCount = len(records)
+		preview.RecordTypes = make(map[string]int)
+		for _, rec := range records {
+			preview.RecordTypes[rec.rtype]++
+		}
+	}
 
 	// Insert all records in a single transaction.
 	tx, err := m.db.Begin()
@@ -162,31 +189,8 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		if err := ValidateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
 			return fmt.Errorf("zone-file import: %w", err)
 		}
-		var cnameConflicts int
-		if rec.rtype == "CNAME" {
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-				WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
-				AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type != 'CNAME'`,
-				zoneID, rec.name).Scan(&cnameConflicts); err != nil {
-				return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
-			}
-			if cnameConflicts == 0 {
-				if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-					WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
-					AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
-					AND type = 'CNAME' AND LOWER(value) != LOWER(?)`,
-					zoneID, rec.name, rec.value).Scan(&cnameConflicts); err != nil {
-					return fmt.Errorf("zone-file import: checking CNAME targets: %w", err)
-				}
-			}
-		} else if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
-			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type = 'CNAME'`,
-			zoneID, rec.name).Scan(&cnameConflicts); err != nil {
-			return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
-		}
-		if cnameConflicts > 0 {
-			return fmt.Errorf("zone-file import: CNAME conflict at %s", rec.name)
+		if err := ValidateCNAMEExclusivityTx(tx, zoneID, rec.name, rec.rtype, rec.value, ""); err != nil {
+			return fmt.Errorf("zone-file import: %w", err)
 		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
 			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
@@ -208,6 +212,15 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
 			return fmt.Errorf("journaling updated SOA: %w", err)
 		}
+	}
+	if dryRun {
+		if err := tx.Rollback(); err != nil {
+			return fmt.Errorf("rollback zone-file preview: %w", err)
+		}
+		if preview != nil {
+			preview.Valid = true
+		}
+		return nil
 	}
 
 	if err := tx.Commit(); err != nil {

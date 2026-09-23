@@ -1107,7 +1107,7 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 // more than one TTL. Call it in the same transaction as the record mutation.
 func ValidateRRsetTTLTx(tx *sql.Tx, zoneID, name, rtype string, ttl int, excludeID string) error {
 	query := `SELECT MIN(ttl) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND UPPER(type) = UPPER(?) AND enabled = 1
+		WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND UPPER(type) = UPPER(?) AND enabled = 1
 		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND ttl != ?`
 	args := []any{zoneID, name, rtype, ttl}
 	if excludeID != "" {

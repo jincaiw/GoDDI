@@ -69,7 +69,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W03 DHCP 协议 | REQUEST 分类、server-id、relay allowlist、有界队列及负向用例已有代码 | 真实 relay、多种客户端/多网卡的现场交互和 ACK 行为 |
 | W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer、跨库幂等传送/水位和 readiness 已接通 | HA 复制事件与 sequence、接管后首事件连续性、控制库故障重放和实网演练 |
 | W05 配置发布 | revision、CAS、幂等与 release outbox 已有实现 | 多节点 applied 确认、部分节点失败时保留 LKG 的部署级协调验收 |
-| W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；多记录关系按当前读路径核验 | 导入 dry-run/全量预检、多 DNS 关系源及并发地址分配的完整验收 |
+| W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；CSV 与 BIND 导入均支持 dry-run | BIND 目前返回首个数据冲突而非全部冲突；多 DNS 关系源及并发地址分配仍需完整验收 |
 | W07 进程隔离/恢复 | 数据面快照重建和 readiness gate 已接线 | 坏快照、旧 schema、磁盘满、控制进程退出与重启故障注入 |
 | W08 DNS HA | secondary 周期刷新、EXPIRE 与健康状态已有代码 | 双 DNS 地址/策略同步、客户端切换和真实节点断连恢复 |
 | W09 DHCP HA | 单写复制水位、显式 takeover/fence/rejoin 机制存在；当前不自动 promote | HA facts continuity、生产 fencing 和网络分区验收；未完成前不能宣称 HA GA |
@@ -305,6 +305,8 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - CNAME 冲突验证改为大小写不敏感并忽略末尾点；catalog 加入前显式复用该验证，冲突时整个创建事务回滚。
 - 新回归以合法 CNAME 与自动 catalog membership PTR 覆盖该冲突，并确认失败后没有残留 PTR。zone、DHCP、transfer、dynamic_update 定向回归及 zone lint 通过。
 - 继续核对区域改名批量移动 owner 的写入，发现 owner 移入已有 RR 名称时同样可能产生 CNAME 共存。现改名后在原事务内检查最终 owner 集合；冲突时区域名、记录和 serial/journal 一并回滚。回归覆盖 CNAME 移入已有 A owner；zone、transfer、dynamic_update 测试和 zone lint 通过。
+- 为闭合 BIND zonefile 的 dry-run，新增 `PreviewZoneFile` 与 API `dry_run=true` 路径：使用与真实导入相同的解析、RRset/CNAME 校验、插入、serial 和 journal 操作，成功后显式回滚；失败路径也由事务回滚。回归确认合法 A/MX 给出分类统计但无 records/journal 写入，已有 CNAME 冲突会拒绝且不改变记录、serial 或 history。
+- BIND 导入改为使用共用的 CNAME owner 校验器；RRset TTL 与 CNAME 校验统一忽略 owner 的末尾点，防止 API FQDN 与导入相对名绕过冲突检查。zone 与 API handler 定向测试、lint 通过；仍可进一步补充 BIND 多冲突聚合诊断。
 
 ## 范围与限制
 
