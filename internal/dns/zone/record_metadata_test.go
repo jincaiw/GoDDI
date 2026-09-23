@@ -200,6 +200,36 @@ func TestRecordAPIRejectsMultipleCNAMEsAtOneOwner(t *testing.T) {
 	}
 }
 
+func TestBatchCreateRecordsRejectsMultipleCNAMEsAtomically(t *testing.T) {
+	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	zoneStore := NewStore(store.DB)
+	defer zoneStore.Close()
+	zoneManager := NewZoneManager(store.DB, zoneStore)
+	z, err := zoneManager.CreateZone(ZoneOptions{Name: "cname-batch.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewRecordManager(store.DB, zoneStore, zoneManager)
+	_, err = manager.BatchCreateRecords(z.ID, []RecordOptions{
+		{Name: "alias", Type: "CNAME", Value: "first.cname-batch.test."},
+		{Name: "ALIAS", Type: "CNAME", Value: "second.cname-batch.test."},
+	})
+	if err == nil {
+		t.Fatal("batch API accepted distinct CNAME targets at one owner")
+	}
+	var count int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rejected CNAME batch left %d records, want no partial writes", count)
+	}
+}
+
 func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
 	if err != nil {

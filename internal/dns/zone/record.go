@@ -1031,28 +1031,6 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 	}
 
 	name := normalizeRecordName(opts.Name, zone.Name)
-
-	// CNAME uniqueness check, scoped to the same transaction so that a
-	// concurrent CreateRecord (which would normally use m.db directly)
-	// cannot race us between the read and the insert.
-	if opts.Type == "CNAME" {
-		var count int
-		if err := tx.QueryRow(
-			"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type != 'CNAME' AND enabled = 1",
-			zone.ID, name,
-		).Scan(&count); err == nil && count > 0 {
-			return nil, fmt.Errorf("CNAME conflict: name %s already has other record types", name)
-		}
-	} else {
-		var count int
-		if err := tx.QueryRow(
-			"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'CNAME' AND enabled = 1",
-			zone.ID, name,
-		).Scan(&count); err == nil && count > 0 {
-			return nil, fmt.Errorf("CNAME conflict: name %s already has a CNAME record", name)
-		}
-	}
-
 	ttl := zone.DefaultTTL
 	if opts.TTL != nil {
 		ttl = *opts.TTL
@@ -1063,6 +1041,11 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 	enabled := true
 	if opts.Enabled != nil {
 		enabled = *opts.Enabled
+	}
+	if enabled {
+		if err := validateCNAMEExclusivityTx(tx, zone.ID, name, opts.Type, opts.Value, ""); err != nil {
+			return nil, err
+		}
 	}
 	if enabled {
 		if err := ValidateRRsetTTLTx(tx, zone.ID, name, opts.Type, ttl, ""); err != nil {
