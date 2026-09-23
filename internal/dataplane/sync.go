@@ -93,6 +93,11 @@ var dhcpTables = []table{
 		"id", "scope_id", "reservation_id", "code", "value", "priority",
 		"created_at", "updated_at",
 	}},
+	// DHCP needs this small IPAM projection to stamp durable lease facts with
+	// their address space without querying the control database on ACK.
+	{name: "ipam_subnets", key: "id", mode: replaceWhole, columns: []string{
+		"id", "space_id", "cidr",
+	}},
 }
 
 var dnsTables = []table{

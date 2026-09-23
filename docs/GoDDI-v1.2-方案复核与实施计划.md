@@ -227,8 +227,9 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 
 - 控制库新增 observation inbox 与 projection watermark；lease data-plane store 增加事实事件 delivery marker。事件内容不可变地传输，控制库负责消费状态，producer 不会覆盖消费者状态。
 - 数据面 Runner 在已有 lease 上行循环中异步投递事实。控制库提交成功后 producer 才确认本地事件和 marker；崩溃窗口可重放。event ID 重复按完整 envelope 校验，sequence 冲突留在有界退避队列中并计入拒绝数。
+- 为避免 ACK 在控制库故障时查询 IPAM，DHCP 配置副本增加最小化的 subnet→space 投影；控制库 IPAM 子网新增/修改/删除会推进 DHCP 配置 revision，lease store 可按地址匹配最具体的本地 CIDR。
 - IPAM consumer 明确使用控制库 inbox，使 inbox 完成、水位推进和 IPAM 投影在同一控制库事务内完成；传输与投影之间采用至少一次投递及幂等消费。
-- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖，以及 sequence 冲突保留重试；`internal/dataplane`、`internal/ipam`、`internal/facts` 测试通过。
+- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试，以及 IPAM 映射同步、更新和最具体网段选择；上一批全量 Go 测试通过，本批 `internal/dataplane`、`cmd/goddi`、`internal/ipam` 测试通过。
 - 这仍不是 W04 完成：默认 DHCP lease lifecycle 尚未全部迁移到 FactsMutationWriter，HA 领导权 fencing 与跨数据库故障恢复/端到端运行态演练待办；不据此宣称生产链路已经启用。
 
 ## 范围与限制
