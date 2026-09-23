@@ -356,6 +356,24 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		}
 	})
 
+	t.Run("zone-file CNAME conflict rejects whole import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "zonefile-cname.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := "alias 300 IN CNAME target.zonefile-cname.test.\nalias 300 IN A 192.0.2.21"
+		if err := manager.ImportZoneFile(z.ID, content); err == nil {
+			t.Fatal("zone file with CNAME and A at the same owner unexpectedly imported")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected CNAME-conflicting zone-file import left %d records", count)
+		}
+	})
+
 	t.Run("NAPTR metadata round trips through API and imports", func(t *testing.T) {
 		z, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr.test", Type: string(ZoneTypePrimary)})
 		if err != nil {

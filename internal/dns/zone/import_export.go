@@ -152,8 +152,37 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
+		priority, weight, port, flag := intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port), intOrZero(rec.flag)
+		if err := validateRecordTTL(rec.ttl); err != nil {
+			return fmt.Errorf("zone-file import: %w", err)
+		}
+		if err := validateRecordValue(rec.rtype, rec.value, &priority, &weight, &port, rec.tag, &flag); err != nil {
+			return fmt.Errorf("zone-file import: invalid %s record at %s: %w", rec.rtype, rec.name, err)
+		}
 		if err := ValidateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
 			return fmt.Errorf("zone-file import: %w", err)
+		}
+		var cnameConflicts int
+		if rec.rtype == "CNAME" {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
+				WHERE zone_id = ? AND name = ? AND enabled = 1 AND type != 'CNAME'`,
+				zoneID, rec.name).Scan(&cnameConflicts); err != nil {
+				return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
+			}
+			if cnameConflicts == 0 {
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
+					WHERE zone_id = ? AND name = ? AND enabled = 1 AND type = 'CNAME' AND value != ?`,
+					zoneID, rec.name, rec.value).Scan(&cnameConflicts); err != nil {
+					return fmt.Errorf("zone-file import: checking CNAME targets: %w", err)
+				}
+			}
+		} else if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
+			WHERE zone_id = ? AND name = ? AND enabled = 1 AND type = 'CNAME'`,
+			zoneID, rec.name).Scan(&cnameConflicts); err != nil {
+			return fmt.Errorf("zone-file import: checking CNAME exclusivity: %w", err)
+		}
+		if cnameConflicts > 0 {
+			return fmt.Errorf("zone-file import: CNAME conflict at %s", rec.name)
 		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
 			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
