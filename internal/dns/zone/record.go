@@ -1144,13 +1144,13 @@ func validateRecordTTL(ttl int) error {
 
 func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeID string) error {
 	query := `SELECT COUNT(*) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+		WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND enabled = 1
 		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type = 'CNAME'
 		AND (? = '' OR id != ?)`
 	args := []any{zoneID, name, excludeID, excludeID}
 	if rtype == "CNAME" {
 		query = `SELECT COUNT(*) FROM dns_records
-			WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+			WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND enabled = 1
 			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now')) AND type != 'CNAME'
 			AND (? = '' OR id != ?)`
 	}
@@ -1165,7 +1165,7 @@ func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeI
 		return nil
 	}
 	query = `SELECT COUNT(*) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1
+		WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND enabled = 1
 		AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
 		AND type = 'CNAME' AND LOWER(value) != LOWER(?)`
 	args = []any{zoneID, name, value}

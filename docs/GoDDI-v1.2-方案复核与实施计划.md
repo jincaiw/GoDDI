@@ -271,6 +271,12 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 指标能区分“控制端 consumer 已追平”与“DHCP 生产 outbox 尚未送达”，也能直接暴露失败事件阻塞点；事件 ID、错误文本不作为标签。
 - `internal/metrics` 与 `cmd/goddi` 定向回归及 golangci-lint 通过。HA 生产者/复制水位仍未接通；备份年龄、HA 复制确认水位和真实告警阈值仍需另行补齐。
 
+### W06 DNS owner 名规范化与 catalog 冲突修复（2026-09-24，代码完成）
+
+- 盘点 catalog PTR 写入时发现 owner 以不带末尾点的相对存储形式写入；普通 DNS API 输入会正规化为带末尾点的 FQDN。原 CNAME 排他查询直接比较字符串，未将两者识别为同一 DNS owner，catalog 成员加入可与已有 CNAME 共存。
+- CNAME 冲突验证改为大小写不敏感并忽略末尾点；catalog 加入前显式复用该验证，冲突时整个创建事务回滚。
+- 新回归以合法 CNAME 与自动 catalog membership PTR 覆盖该冲突，并确认失败后没有残留 PTR。zone、DHCP、transfer、dynamic_update 定向回归及 zone lint 通过。
+
 ## 范围与限制
 
 本计划按用户授权直接选择工程默认值，已记录在 ADR-0008；DHCP HA 默认沿用已接受的 ADR-0003。实施分支从 `v0.22.0 / 29e0e6c` 创建，后续提交已推送，但尚未合入发布分支或创建正式版本。目标客户的容量和真实拓扑仍需在发布验证中固定，未有证据前不作数值承诺。

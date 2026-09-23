@@ -133,3 +133,31 @@ func TestCatalogValidation(t *testing.T) {
 		t.Fatal("expected error converting a catalog zone")
 	}
 }
+
+func TestCatalogMembershipRejectsCNAMEOwnerConflict(t *testing.T) {
+	m := setupCatalogTest(t)
+	catalog, err := m.CreateZone(ZoneOptions{Name: "catalog-conflict.example.com", Type: string(ZoneTypeCatalog)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := catalogMembershipOwner("catalog-conflict.example.com", "member.example.com")
+	records := NewRecordManager(m.db, nil, m)
+	if _, err := records.CreateRecord(catalog.ID, RecordOptions{
+		Name: owner, Type: "CNAME", Value: "target.example.net.",
+	}); err != nil {
+		t.Fatalf("create conflicting CNAME: %v", err)
+	}
+
+	if _, err := m.CreateZone(ZoneOptions{
+		Name: "member.example.com", Type: string(ZoneTypePrimary), Catalog: "catalog-conflict.example.com",
+	}); err == nil {
+		t.Fatal("joining a catalog must reject a membership PTR that conflicts with an existing CNAME")
+	}
+	var count int
+	if err := m.db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND type = 'PTR' AND name = ?`, catalog.ID, owner).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("conflicting catalog membership left %d PTR records, want none", count)
+	}
+}

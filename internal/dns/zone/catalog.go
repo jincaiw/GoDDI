@@ -48,6 +48,9 @@ func addCatalogMembershipTx(tx *sql.Tx, catalogName, memberName string) (string,
 	}
 	owner := catalogMembershipOwner(catalogName, memberName)
 	memberValue := strings.TrimSuffix(memberName, ".")
+	if err := ValidateCNAMEExclusivityTx(tx, catalogID, owner, "PTR", memberValue, ""); err != nil {
+		return "", fmt.Errorf("catalog membership owner %s conflicts with CNAME: %w", owner, err)
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
 		VALUES (?, ?, ?, 'PTR', ?, 0, 1)
