@@ -403,7 +403,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/", handler.ListIPAMAddresses)
 				// Static segments before "/{id}" so the router does not treat
 				// "view" as an address id.
-				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/view", handler.GetIPAMAddressView)
+				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read"), handler.WithIPAMAddressViewPermissions(rbacMgr)).Get("/view", handler.GetIPAMAddressView)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/{id}", handler.GetIPAMAddress)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Put("/{id}", handler.UpdateIPAMAddress)
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/{id}/transition", handler.TransitionIPAMAddress)

@@ -779,6 +779,7 @@ const local: App.I18n.Schema = {
     },
     detail: {
       title: 'IP 详情',
+      permissionLimited: '部分 DNS 或 DHCP 关联信息因权限限制未显示。',
       nothingToShow: '没有可显示的内容',
       conflicts: '子系统不一致',
       space: '地址空间',

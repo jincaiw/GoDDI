@@ -866,6 +866,7 @@ declare namespace App {
         }
         detail: {
           title: string;
+          permissionLimited: string;
           nothingToShow: string;
           conflicts: string;
           space: string;

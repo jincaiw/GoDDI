@@ -783,6 +783,7 @@ const local: App.I18n.Schema = {
     },
     detail: {
       title: 'IP detail',
+      permissionLimited: 'Some related DNS or DHCP information is hidden by your permissions.',
       nothingToShow: 'Nothing to show',
       conflicts: 'Subsystems disagree',
       space: 'Address space',

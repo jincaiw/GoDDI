@@ -419,9 +419,10 @@ const maxScopesInView = 200
 // cross-referencing three screens: what IPAM decided, what DNS publishes, what
 // DHCP is doing, and where those disagree.
 type AddressView struct {
-	Address *address.Address `json:"address"`
-	Subnet  *subnet.Subnet   `json:"subnet,omitempty"`
-	Space   *space.Space     `json:"space,omitempty"`
+	Address *address.Address  `json:"address"`
+	Subnet  *subnet.Subnet    `json:"subnet,omitempty"`
+	Space   *space.Space      `json:"space,omitempty"`
+	Access  AddressViewAccess `json:"access"`
 
 	DNSRecords       []PublishingRecord     `json:"dns_records"`
 	DHCPScopes       []ScopeSummary         `json:"dhcp_scopes"`
@@ -440,6 +441,15 @@ type AddressView struct {
 	Conflicts []string `json:"conflicts"`
 }
 
+// AddressViewAccess describes which cross-module details were included in a
+// view returned by the API. Linkage itself reads the complete local picture;
+// the handler narrows it to the caller's permissions before serialization.
+type AddressViewAccess struct {
+	DNS        bool `json:"dns"`
+	DHCP       bool `json:"dhcp"`
+	DNSPartial bool `json:"dns_partial"`
+}
+
 // ViewAddress builds the 360° view for an address identified by space and IP.
 func (l *Linkage) ViewAddress(spaceID, ip string) (*AddressView, error) {
 	canonical, err := address.NormalizeIP(ip)
@@ -455,7 +465,7 @@ func (l *Linkage) ViewAddress(spaceID, ip string) (*AddressView, error) {
 		return nil, fmt.Errorf("%w: %s", address.ErrAddressNotFound, canonical)
 	}
 
-	view := &AddressView{Address: a}
+	view := &AddressView{Address: a, Access: AddressViewAccess{DNS: true, DHCP: true}}
 
 	if sp, err := l.spaceMgr.GetSpace(a.SpaceID); err == nil {
 		view.Space = sp

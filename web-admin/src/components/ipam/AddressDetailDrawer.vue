@@ -3,6 +3,9 @@
     <n-drawer-content :title="title" closable :native-scrollbar="false">
       <n-spin :show="loading">
         <template v-if="view">
+          <n-alert v-if="!view.access.dns || !view.access.dhcp || view.access.dns_partial" type="info" :show-icon="false" style="margin-bottom: 16px;">
+            {{ t('ipam.detail.permissionLimited') }}
+          </n-alert>
           <!-- The four subsystems can disagree about one address. Saying so is
                the reason this view exists; a conflict the operator has to
                discover by cross-reading three pages would not be reported. -->
@@ -32,60 +35,64 @@
             <n-descriptions-item :label="t('common.description')" :span="2">{{ view.address.description || '—' }}</n-descriptions-item>
           </n-descriptions>
 
-          <section-title :text="t('ipam.detail.dnsRecords')" :count="view.dns_records.length" />
-          <p v-if="view.dns_records.length === 0" class="empty">{{ t('ipam.detail.dnsRecordsEmpty') }}</p>
-          <n-data-table
-            v-else
-            size="small"
-            :bordered="false"
-            :single-line="false"
-            :row-key="(row: PublishingRecord) => row.id"
-            :columns="dnsColumns"
-            :data="view.dns_records"
-          />
+          <template v-if="view.access.dns">
+            <section-title :text="t('ipam.detail.dnsRecords')" :count="view.dns_records.length" />
+            <p v-if="view.dns_records.length === 0" class="empty">{{ t('ipam.detail.dnsRecordsEmpty') }}</p>
+            <n-data-table
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: PublishingRecord) => row.id"
+              :columns="dnsColumns"
+              :data="view.dns_records"
+            />
+          </template>
 
-          <section-title :text="t('ipam.detail.scopes')" :count="view.dhcp_scopes.length" />
-          <!-- A bounded list read as an exhaustive one turns "was not listed"
-               into "does not cover". The API says which it is. -->
-          <n-alert v-if="view.scopes_truncated" type="info" :show-icon="false" style="margin-bottom: 8px;">
-            {{ t('ipam.detail.scopesTruncated') }}
-          </n-alert>
-          <p v-if="view.dhcp_scopes.length === 0" class="empty">
-            {{ view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty') }}
-          </p>
-          <n-data-table
-            v-else
-            size="small"
-            :bordered="false"
-            :single-line="false"
-            :row-key="(row: ScopeSummary) => row.id"
-            :columns="scopeColumns"
-            :data="view.dhcp_scopes"
-          />
+          <template v-if="view.access.dhcp">
+            <section-title :text="t('ipam.detail.scopes')" :count="view.dhcp_scopes.length" />
+            <!-- A bounded list read as an exhaustive one turns "was not listed"
+                 into "does not cover". The API says which it is. -->
+            <n-alert v-if="view.scopes_truncated" type="info" :show-icon="false" style="margin-bottom: 8px;">
+              {{ t('ipam.detail.scopesTruncated') }}
+            </n-alert>
+            <p v-if="view.dhcp_scopes.length === 0" class="empty">
+              {{ view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty') }}
+            </p>
+            <n-data-table
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: ScopeSummary) => row.id"
+              :columns="scopeColumns"
+              :data="view.dhcp_scopes"
+            />
 
-          <section-title :text="t('ipam.detail.leases')" :count="view.dhcp_leases.length" />
-          <p v-if="view.dhcp_leases.length === 0" class="empty">{{ t('ipam.detail.leasesEmpty') }}</p>
-          <n-data-table
-            v-else
-            size="small"
-            :bordered="false"
-            :single-line="false"
-            :row-key="(row: LeaseSummary) => row.id"
-            :columns="leaseColumns"
-            :data="view.dhcp_leases"
-          />
+            <section-title :text="t('ipam.detail.leases')" :count="view.dhcp_leases.length" />
+            <p v-if="view.dhcp_leases.length === 0" class="empty">{{ t('ipam.detail.leasesEmpty') }}</p>
+            <n-data-table
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: LeaseSummary) => row.id"
+              :columns="leaseColumns"
+              :data="view.dhcp_leases"
+            />
 
-          <section-title :text="t('ipam.detail.reservations')" :count="view.dhcp_reservations.length" />
-          <p v-if="view.dhcp_reservations.length === 0" class="empty">{{ t('ipam.detail.reservationsEmpty') }}</p>
-          <n-data-table
-            v-else
-            size="small"
-            :bordered="false"
-            :single-line="false"
-            :row-key="(row: ReservationSummary) => row.id"
-            :columns="reservationColumns"
-            :data="view.dhcp_reservations"
-          />
+            <section-title :text="t('ipam.detail.reservations')" :count="view.dhcp_reservations.length" />
+            <p v-if="view.dhcp_reservations.length === 0" class="empty">{{ t('ipam.detail.reservationsEmpty') }}</p>
+            <n-data-table
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: ReservationSummary) => row.id"
+              :columns="reservationColumns"
+              :data="view.dhcp_reservations"
+            />
+          </template>
 
           <section-title :text="t('ipam.detail.history')" :count="view.history.length" />
           <p v-if="view.history.length === 0" class="empty">{{ t('ipam.detail.historyEmpty') }}</p>

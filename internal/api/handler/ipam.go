@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jasonwa/goddi/internal/auth"
 	"github.com/jasonwa/goddi/internal/configver"
 	"github.com/jasonwa/goddi/internal/ipam"
 	"github.com/jasonwa/goddi/internal/ipam/address"
@@ -756,7 +758,81 @@ func GetIPAMAddressView(w http.ResponseWriter, r *http.Request) {
 		respondIPAMError(w, r, err, "查询地址视图失败")
 		return
 	}
+	access, _ := r.Context().Value(addressViewAccessKey{}).(ipam.AddressViewAccess)
+	view.Access = access
+	if !access.DNS {
+		view.DNSRecords = []ipam.PublishingRecord{}
+		view.Conflicts = []string{}
+	} else {
+		visibleRecords := make([]ipam.PublishingRecord, 0, len(view.DNSRecords))
+		if DNSServices == nil || DNSServices.DB == nil {
+			view.Access.DNS = false
+			view.DNSRecords = []ipam.PublishingRecord{}
+			view.Conflicts = []string{}
+		} else {
+			zm := getZoneManager()
+			zoneAccess := make(map[string]bool)
+			for _, record := range view.DNSRecords {
+				allowed, checked := zoneAccess[record.ZoneID]
+				if !checked {
+					var checkErr error
+					allowed, checkErr = zm.ZonePermissionAllows(record.ZoneID, rbac.GetUserID(r.Context()), rbac.GetRoleIDs(r.Context()), "view")
+					if checkErr != nil {
+						response.InternalErrorWithLog(w, "区域权限检查失败", checkErr)
+						return
+					}
+					zoneAccess[record.ZoneID] = allowed
+				}
+				if allowed {
+					visibleRecords = append(visibleRecords, record)
+				}
+			}
+			view.Access.DNSPartial = len(visibleRecords) != len(view.DNSRecords)
+			view.DNSRecords = visibleRecords
+			if view.Access.DNSPartial {
+				view.Conflicts = []string{}
+			}
+		}
+	}
+	if !access.DHCP {
+		view.DHCPScopes = []ipam.ScopeSummary{}
+		view.DHCPLeases = []ipam.LeaseSummary{}
+		view.DHCPReservations = []ipam.ReservationSummary{}
+		view.ScopesTruncated = false
+		view.Conflicts = []string{}
+	}
 	response.OK(w, view)
+}
+
+type addressViewAccessKey struct{}
+
+// WithIPAMAddressViewPermissions records optional cross-module read access for
+// the address detail endpoint. The route itself still requires ipam:read;
+// inaccessible DNS and DHCP sections are omitted from the returned view.
+func WithIPAMAddressViewPermissions(rbacMgr *rbac.RBACManager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := rbac.GetUserID(r.Context())
+			access := ipam.AddressViewAccess{}
+			for _, resource := range []string{"dns", "dhcp"} {
+				if token := rbac.GetAPIToken(r.Context()); token != nil && !auth.TokenScopeAllows(token.Scope, resource, "read") {
+					continue
+				}
+				allowed, err := rbacMgr.CheckPermission(userID, resource, "read")
+				if err != nil {
+					response.InternalErrorWithLog(w, "权限检查失败", err)
+					return
+				}
+				if resource == "dns" {
+					access.DNS = allowed
+				} else {
+					access.DHCP = allowed
+				}
+			}
+			r = r.WithContext(context.WithValue(r.Context(), addressViewAccessKey{}, access))
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // GetIPAMSubnetDependencies reports what would break if a subnet were deleted.

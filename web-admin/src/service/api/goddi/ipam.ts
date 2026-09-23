@@ -317,6 +317,11 @@ export interface AddressView {
   address: IPAMAddress
   subnet?: IPAMSubnet
   space?: IPAMSpace
+  access: {
+    dns: boolean
+    dhcp: boolean
+    dns_partial: boolean
+  }
   dns_records: PublishingRecord[]
   dhcp_scopes: ScopeSummary[]
   dhcp_leases: LeaseSummary[]
