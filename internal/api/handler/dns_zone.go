@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -234,13 +235,24 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 		if req.DryRun {
 			preview, err := recordMgr.PreviewRecordsCSV(zoneID, []byte(req.Content))
 			if err != nil {
+				var conflictErr *zone.CSVImportConflictError
+				if errors.As(err, &conflictErr) {
+					response.OKWithMessage(w, "CSV validation found conflicts", map[string]interface{}{
+						"zone_id": zoneID, "dry_run": true, "valid": preview.Valid,
+						"record_count": preview.RecordCount, "creates": preview.Creates,
+						"unchanged": preview.Unchanged, "record_types": preview.RecordTypes,
+						"conflicts": preview.Conflicts,
+					})
+					return
+				}
 				response.BadRequest(w, err.Error())
 				return
 			}
 			response.OKWithMessage(w, "CSV validation succeeded", map[string]interface{}{
-				"zone_id": zoneID, "dry_run": true,
+				"zone_id": zoneID, "dry_run": true, "valid": preview.Valid,
 				"record_count": preview.RecordCount, "creates": preview.Creates,
 				"unchanged": preview.Unchanged, "record_types": preview.RecordTypes,
+				"conflicts": preview.Conflicts,
 			})
 			return
 		}

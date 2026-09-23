@@ -13,10 +13,35 @@ import (
 
 // CSVImportPreview summarizes a fully parsed CSV import without writing it.
 type CSVImportPreview struct {
-	RecordCount int            `json:"record_count"`
-	Creates     int            `json:"creates"`
-	Unchanged   int            `json:"unchanged"`
-	RecordTypes map[string]int `json:"record_types"`
+	RecordCount int                 `json:"record_count"`
+	Creates     int                 `json:"creates"`
+	Unchanged   int                 `json:"unchanged"`
+	RecordTypes map[string]int      `json:"record_types"`
+	Valid       bool                `json:"valid"`
+	Conflicts   []CSVImportConflict `json:"conflicts,omitempty"`
+}
+
+// CSVImportConflict identifies an import row that cannot be applied without
+// violating an existing or incoming RRset invariant.
+type CSVImportConflict struct {
+	Row     int    `json:"row"`
+	Owner   string `json:"owner"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// CSVImportConflictError indicates that a syntactically valid import contains
+// one or more records that conflict with the target zone or each other.
+type CSVImportConflictError struct {
+	Conflicts []CSVImportConflict
+}
+
+func (e *CSVImportConflictError) Error() string {
+	if e == nil || len(e.Conflicts) == 0 {
+		return "CSV import contains conflicts"
+	}
+	return fmt.Sprintf("CSV import contains %d conflict(s)", len(e.Conflicts))
 }
 
 // ImportZoneFile parses a BIND zone file and imports records into the specified zone.
@@ -245,6 +270,7 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	// Collect all records first, then insert in a transaction.
 	type csvRecord struct {
 		id       string
+		row      int
 		name     string
 		rtype    string
 		value    string
@@ -257,6 +283,7 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	}
 
 	var records []csvRecord
+	rowNumber := 1 // The header occupies the first CSV row.
 	for {
 		record, err := r.Read()
 		if err == io.EOF {
@@ -265,6 +292,7 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 		if err != nil {
 			return fmt.Errorf("reading CSV record: %w", err)
 		}
+		rowNumber++
 
 		// CSV format: name, type, value, ttl, priority, weight, port, flag, tag.
 		if len(record) < 3 {
@@ -341,6 +369,7 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 
 		records = append(records, csvRecord{
 			id:       uuid.New().String(),
+			row:      rowNumber,
 			name:     name,
 			rtype:    rtype,
 			value:    value,
@@ -408,28 +437,51 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 		}
 	}
 	creates := make([]csvRecord, 0, len(records))
+	var conflicts []CSVImportConflict
 	for _, rec := range records {
 		owner := dns.Fqdn(strings.ToLower(rec.name))
 		types := ownerTypes[owner]
 		rrsetKey := csvRRsetIdentity(owner, rec.rtype)
+		conflicted := false
 		for existingTTL := range rrsetTTLs[rrsetKey] {
 			if existingTTL != rec.ttl {
-				return fmt.Errorf("%s RRset at %q has inconsistent TTLs: incoming %d, existing %d", rec.rtype, owner, rec.ttl, existingTTL)
+				conflicts = append(conflicts, CSVImportConflict{
+					Row: rec.row, Owner: owner, Type: rec.rtype, Code: "rrset_ttl_mismatch",
+					Message: fmt.Sprintf("RRset TTL is %d; incoming record uses %d", existingTTL, rec.ttl),
+				})
+				conflicted = true
+				break
 			}
 		}
 		if rec.rtype == "CNAME" {
 			for existingType := range types {
 				if existingType != "CNAME" {
-					return fmt.Errorf("CNAME at %q conflicts with existing %s record", owner, existingType)
+					conflicts = append(conflicts, CSVImportConflict{
+						Row: rec.row, Owner: owner, Type: rec.rtype, Code: "cname_exclusive_type",
+						Message: fmt.Sprintf("CNAME conflicts with %s at this owner", existingType),
+					})
+					conflicted = true
+					break
 				}
 			}
 		} else if _, hasCNAME := types["CNAME"]; hasCNAME {
-			return fmt.Errorf("%s at %q conflicts with existing CNAME record", rec.rtype, owner)
+			conflicts = append(conflicts, CSVImportConflict{
+				Row: rec.row, Owner: owner, Type: rec.rtype, Code: "cname_exclusive_type",
+				Message: fmt.Sprintf("%s conflicts with CNAME at this owner", rec.rtype),
+			})
+			conflicted = true
+		}
+		if conflicted {
+			continue
 		}
 		identity := csvRecordIdentity(owner, rec.rtype, rec.value, rec.priority, rec.weight, rec.port, rec.flag, rec.tag)
 		if previousTTL, duplicate := existing[identity]; duplicate {
 			if previousTTL != rec.ttl {
-				return fmt.Errorf("duplicate %s record at %q has TTL %d, existing value uses TTL %d", rec.rtype, owner, rec.ttl, previousTTL)
+				conflicts = append(conflicts, CSVImportConflict{
+					Row: rec.row, Owner: owner, Type: rec.rtype, Code: "duplicate_ttl_mismatch",
+					Message: fmt.Sprintf("duplicate value uses TTL %d; incoming record uses %d", previousTTL, rec.ttl),
+				})
+				continue
 			}
 			if preview != nil {
 				preview.Unchanged++
@@ -437,7 +489,11 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			continue
 		}
 		if rec.rtype == "CNAME" && len(types) > 0 {
-			return fmt.Errorf("multiple different CNAME records at %q", owner)
+			conflicts = append(conflicts, CSVImportConflict{
+				Row: rec.row, Owner: owner, Type: rec.rtype, Code: "multiple_cname_targets",
+				Message: "owner has more than one distinct CNAME target",
+			})
+			continue
 		}
 		if types == nil {
 			types = make(map[string]struct{})
@@ -453,7 +509,11 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	}
 	if preview != nil {
 		preview.Creates = len(creates)
-		preview.Unchanged = preview.RecordCount - preview.Creates
+		preview.Valid = len(conflicts) == 0
+		preview.Conflicts = append([]CSVImportConflict(nil), conflicts...)
+	}
+	if len(conflicts) > 0 {
+		return &CSVImportConflictError{Conflicts: conflicts}
 	}
 	if dryRun {
 		return nil

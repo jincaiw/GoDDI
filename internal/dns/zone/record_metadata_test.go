@@ -2,6 +2,7 @@ package zone
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -249,6 +250,12 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,CNAME,target.example.test.,300,,,,,\nwww,A,192.0.2.11,300,,,,,\n")
 		if _, err := manager.PreviewRecordsCSV(z.ID, data); err == nil {
 			t.Fatal("CSV containing a CNAME and A record at the same owner unexpectedly passed preview")
+		} else {
+			var conflictErr *CSVImportConflictError
+			if !errors.As(err, &conflictErr) || len(conflictErr.Conflicts) != 1 ||
+				conflictErr.Conflicts[0].Row != 3 || conflictErr.Conflicts[0].Code != "cname_exclusive_type" {
+				t.Fatalf("CNAME preview error = %#v, want row 3 conflict details", err)
+			}
 		}
 		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
 			t.Fatal("CSV containing a CNAME and A record at the same owner unexpectedly imported")
@@ -270,6 +277,12 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.12,300,,,,,\nwww,A,192.0.2.13,600,,,,,\n")
 		if _, err := manager.PreviewRecordsCSV(z.ID, data); err == nil {
 			t.Fatal("CSV with inconsistent TTLs in one RRset unexpectedly passed preview")
+		} else {
+			var conflictErr *CSVImportConflictError
+			if !errors.As(err, &conflictErr) || len(conflictErr.Conflicts) != 1 ||
+				conflictErr.Conflicts[0].Row != 3 || conflictErr.Conflicts[0].Code != "rrset_ttl_mismatch" {
+				t.Fatalf("TTL preview error = %#v, want row 3 conflict details", err)
+			}
 		}
 		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
 			t.Fatal("CSV with inconsistent TTLs in one RRset unexpectedly imported")
