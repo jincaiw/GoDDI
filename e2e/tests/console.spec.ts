@@ -76,7 +76,7 @@ test('mobile login fits viewport', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
 })
 
-test('read-only DNS, DHCP, and IPAM role cannot open module write actions', async ({ page }) => {
+test('read-only module role cannot open write actions', async ({ page }) => {
   const stamp = Date.now()
   const username = `dns_reader_${stamp}`
   const roleName = `dns_reader_role_${stamp}`
@@ -102,7 +102,7 @@ test('read-only DNS, DHCP, and IPAM role cannot open module write actions', asyn
     const permissionsResponse = await api.get('/api/v1/permissions', { headers })
     expect(permissionsResponse.ok()).toBe(true)
     const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
-    const readPermissions = ['dns', 'dhcp', 'ipam'].map(resource => {
+    const readPermissions = ['dns', 'dhcp', 'ipam', 'settings', 'backup', 'token'].map(resource => {
       const permission = permissions.find(item => item.resource === resource && item.action === 'read')
       expect(permission, `the ${resource} read permission must exist`).toBeDefined()
       return permission!.id
@@ -160,13 +160,19 @@ test('read-only DNS, DHCP, and IPAM role cannot open module write actions', asyn
       const readOnlyPages = [
         { path: '/dns/zones', createButton: 'Create Zone' },
         { path: '/dhcp/scopes', createButton: 'Create Scope' },
-        { path: '/ipam/spaces', createButton: 'Create Space' }
+        { path: '/ipam/spaces', createButton: 'Create Space' },
+        { path: '/settings/backup', createButton: 'Create Backup' },
+        { path: '/admin/tokens', createButton: 'Create Token' }
       ]
       for (const item of readOnlyPages) {
         await page.goto(item.path, { waitUntil: 'domcontentloaded', timeout: 15000 })
         await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
         await expect(page.getByRole('button', { name: item.createButton, exact: true })).toHaveCount(0)
       }
+
+      await page.goto('/settings/system', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0)
 
       await page.goto('/dns/zones', { waitUntil: 'domcontentloaded', timeout: 15000 })
       await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
