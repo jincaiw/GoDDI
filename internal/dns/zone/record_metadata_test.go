@@ -118,6 +118,48 @@ func TestCAARecordMetadataPersistsAcrossCreateUpdateAndJournal(t *testing.T) {
 	if importedFlag != 128 || importedTag != "issue" || importedValue != "ca-zonefile.example.test" {
 		t.Fatalf("zone-file CAA fields = flag %d, tag %q, value %q", importedFlag, importedTag, importedValue)
 	}
+
+	t.Run("record create, update, and batch enforce RRset TTL consistency", func(t *testing.T) {
+		zone, err := zoneManager.CreateZone(ZoneOptions{Name: "record-ttl.example.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ttl := 300
+		first, err := manager.CreateRecord(zone.ID, RecordOptions{Name: "api-ttl", Type: "A", Value: "192.0.2.40", TTL: &ttl})
+		if err != nil {
+			t.Fatalf("create first RRset member: %v", err)
+		}
+		second, err := manager.CreateRecord(zone.ID, RecordOptions{Name: "api-ttl", Type: "A", Value: "192.0.2.41", TTL: &ttl})
+		if err != nil {
+			t.Fatalf("create RRset member with matching TTL: %v", err)
+		}
+		mismatchedTTL := 600
+		if _, err := manager.CreateRecord(zone.ID, RecordOptions{Name: "api-ttl", Type: "A", Value: "192.0.2.42", TTL: &mismatchedTTL}); err == nil {
+			t.Fatal("create with inconsistent RRset TTL unexpectedly succeeded")
+		}
+		if _, err := manager.UpdateRecord(second.ID, RecordOptions{TTL: &mismatchedTTL}); err == nil {
+			t.Fatal("update with inconsistent RRset TTL unexpectedly succeeded")
+		}
+		if _, err := manager.BatchCreateRecords(zone.ID, []RecordOptions{
+			{Name: "batch-ttl", Type: "A", Value: "192.0.2.43", TTL: &ttl},
+			{Name: "batch-ttl", Type: "A", Value: "192.0.2.44", TTL: &mismatchedTTL},
+		}); err == nil {
+			t.Fatal("batch with inconsistent RRset TTL unexpectedly succeeded")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'A'`, zone.ID, first.Name).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 2 {
+			t.Fatalf("failed create/update changed existing RRset to %d records; want two", count)
+		}
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = 'batch-ttl.record-ttl.example.test.'`, zone.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("failed batch left %d records", count)
+		}
+	})
 }
 
 func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
@@ -262,6 +304,24 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		}
 		if count != 1 {
 			t.Fatalf("rejected RRset TTL conflict left %d records; want original only", count)
+		}
+	})
+
+	t.Run("zone-file RRset TTL mismatch rejects whole import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "zonefile-rrset-ttl.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := "www 300 IN A 192.0.2.16\nwww 600 IN A 192.0.2.17"
+		if err := manager.ImportZoneFile(z.ID, content); err == nil {
+			t.Fatal("zone file with inconsistent RRset TTLs unexpectedly imported")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected zone-file TTL conflict left %d records", count)
 		}
 	})
 

@@ -127,6 +127,9 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
+		if err := validateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
+			return fmt.Errorf("zone-file import: %w", err)
+		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
 			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
 		if err != nil {

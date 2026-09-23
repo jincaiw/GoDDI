@@ -252,6 +252,11 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 			return nil, fmt.Errorf("overwriting existing record: %w", queryErr)
 		}
 	}
+	if enabled && !opts.Overwrite {
+		if err := validateRRsetTTLTx(tx, zoneID, name, opts.Type, ttl, ""); err != nil {
+			return nil, err
+		}
+	}
 
 	id := uuid.New().String()
 	_, err = tx.Exec(`
@@ -702,6 +707,28 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 			return nil, fmt.Errorf("invalid record value: %w", err)
 		}
 	}
+	updatedName := existing.Name
+	if opts.Name != "" {
+		updatedName = normalizedName
+	}
+	updatedType := existing.Type
+	if opts.Type != "" {
+		updatedType = opts.Type
+	}
+	updatedTTL := existing.TTL
+	if opts.TTL != nil {
+		updatedTTL = *opts.TTL
+	}
+	updatedEnabled := existing.Enabled
+	if opts.Enabled != nil {
+		updatedEnabled = *opts.Enabled
+	}
+	if updatedEnabled && (updatedEnabled != existing.Enabled || !strings.EqualFold(updatedName, existing.Name) ||
+		!strings.EqualFold(updatedType, existing.Type) || updatedTTL != existing.TTL) {
+		if err := validateRRsetTTLTx(tx, existing.ZoneID, updatedName, updatedType, updatedTTL, id); err != nil {
+			return nil, err
+		}
+	}
 	result, err := tx.Exec(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("updating record: %w", err)
@@ -1036,6 +1063,11 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 	if opts.Enabled != nil {
 		enabled = *opts.Enabled
 	}
+	if enabled {
+		if err := validateRRsetTTLTx(tx, zone.ID, name, opts.Type, ttl, ""); err != nil {
+			return nil, err
+		}
+	}
 
 	id := uuid.New().String()
 	_, err := tx.Exec(`
@@ -1065,6 +1097,25 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 		Tags:     opts.Tags,
 		Owner:    opts.Owner,
 	}, nil
+}
+
+func validateRRsetTTLTx(tx *sql.Tx, zoneID, name, rtype string, ttl int, excludeID string) error {
+	query := `SELECT MIN(ttl) FROM dns_records
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND UPPER(type) = UPPER(?) AND enabled = 1 AND ttl != ?`
+	args := []any{zoneID, name, rtype, ttl}
+	if excludeID != "" {
+		query += " AND id != ?"
+		args = append(args, excludeID)
+	}
+	var conflictingTTL sql.NullInt64
+	if err := tx.QueryRow(query, args...).Scan(&conflictingTTL); err != nil {
+		return fmt.Errorf("checking RRset TTL consistency: %w", err)
+	}
+	if conflictingTTL.Valid {
+		return fmt.Errorf("RRset TTL conflict: %s records at %s use TTL %d; requested TTL is %d",
+			strings.ToUpper(rtype), dns.Fqdn(name), conflictingTTL.Int64, ttl)
+	}
+	return nil
 }
 
 // intOrZero dereferences an *int, returning 0 for nil. Used when building
