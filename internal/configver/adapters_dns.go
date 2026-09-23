@@ -179,7 +179,7 @@ func (*DNSZoneAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) err
 		oldMName != c.SOAMName || oldRName != c.SOARName ||
 		oldRefresh != c.Refresh || oldRetry != c.Retry || oldExpire != c.Expire || oldMinimum != c.Minimum
 	if serialRelevantChanged {
-		if err := bumpZoneSerialForRelease(tx, id); err != nil {
+		if _, err := bumpZoneSerialForRelease(tx, id); err != nil {
 			return fmt.Errorf("bump zone serial after SOA release: %w", err)
 		}
 	}

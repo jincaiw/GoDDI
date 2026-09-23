@@ -133,7 +133,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 自动 PTR 创建现与正向 A/AAAA 创建共用同一 SQL 事务；提交后分别通知发生变更的 primary 区域，避免只写入一侧或出现孤立 PTR。
 - 修改：`internal/dataplane/sync.go`、`runner.go` 与 `cmd/goddi/main.go` 在数据面配置同步事务内比较同步前后的 primary SOA/可见 RRset，计算实际变化区域；事务完成后刷新内存 Store，并只对变化的 primary 区域发送 NOTIFY。删除区域已无法从当前配置查询并发送通知，secondary 将按既有刷新/EXPIRE 机制处理，此边界仍需运行态验收。
 - 修改：`internal/dns/zone/zone.go` 将管理 API 修改 SOA 相关参数和 zone 类型转换与 serial 推进纳入同一事务。
-- 修改：`internal/configver/adapters_records.go` 和 `adapters_dns.go` 在配置发布确实改变应答 RRset 或 SOA 字段时，同事务推进 zone serial。history schema 尚不能完整描述所有 RR 元数据，且跨库传播仍是独立队列，因此不代表 IXFR 可用。
+- 修改：`internal/configver/adapters_records.go` 在配置发布改变应答 RRset 时，同事务推进 zone serial 并记录实际删除/新增记录；`adapters_dns.go` 对 SOA 字段变更推进 serial，但尚未写入可供 IXFR 使用的 SOA 差异。history schema 和传输端仍未证明可无损表达所有支持的 RR 类型，且跨库传播仍是独立队列，因此不代表 IXFR 可用。
 - 修改：`internal/dns/transfer/secondary.go` 校验 AXFR 首尾 SOA、SOA 数据一致性、IN 类和 owner 区域范围；缺少闭合 SOA、存储模型不支持/不能无损表示的 RR（包括无法保留字符串边界的 TXT）或任一插入失败均不提交新快照。
 - AXFR 校验进一步要求 SOA 位于响应第一条和最后一条，类别为 IN，并比较首尾 TTL 与其余 SOA 数据；仅“响应中恰好出现两个 SOA”不再视为完整帧。
 - 修改：`internal/dns/zone/store.go` 和 `internal/dns/transfer/transfer.go` 保留显式 TTL=0，不再改写为 3600；RecordManager 限制 TTL 在 DNS 有效范围内，非法数据库记录会阻止不完整的内存快照替换，AXFR 则失败关闭。
@@ -234,6 +234,13 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
 - HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管：现有 HA 复制只镜像 lease rows，不复制 facts 序列和 outbox；启用后会在接管时造成序列断档。W04 仍需补齐 HA 故障转移时的事实复制语义、控制库与 DHCP 数据库分离时的故障恢复及真实网络端到端演练。本批接通非 HA 默认生产者和消费者，但不发布版本。
+
+### W01 配置发布写路径补齐（2026-09-24，IXFR 仍禁用）
+
+- 配置版本发布替换 DNS 控制面记录后，对 before/after 的应答 RR 集合做多重集差分；删除旧 RR、添加新 RR 和推进 serial 后，将差异 journal 写入同一个数据库事务。
+- journal 保留 wire 记录字段（owner、type、RDATA、TTL 及 priority/weight/port/CAA 字段），未变化记录不重复写入；同一内容的重复发布不推进 serial。
+- 回归确认替换一个 A 记录并增加另一个时，当前 serial 下记录一条删除和两条新增。`go test ./internal/configver` 通过。
+- 尚未解决：zone 配置发布中的 SOA 元数据变更没有旧/新 SOA journal；其他 RR 类型的无损表达、跨库传播与 IXFR 协议差异集仍需审计。因此 IXFR 保持回退 AXFR。
 
 ## 范围与限制
 

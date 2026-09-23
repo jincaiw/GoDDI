@@ -249,8 +249,12 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 		return fmt.Errorf("snapshot zone records after release: %w", err)
 	}
 	if !sameServedRRs(before, after) {
-		if err := bumpZoneSerialForRelease(tx, id); err != nil {
+		serial, err := bumpZoneSerialForRelease(tx, id)
+		if err != nil {
 			return fmt.Errorf("bump zone serial after record release: %w", err)
+		}
+		if err := journalServedRRChangesForRelease(tx, id, serial, before, after); err != nil {
+			return fmt.Errorf("journal zone record release: %w", err)
 		}
 	}
 	return nil
@@ -327,20 +331,66 @@ func sameServedRRs(a, b []servedRR) bool {
 	return true
 }
 
-func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) error {
+func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) (uint32, error) {
 	var current uint32
 	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
-		return err
+		return 0, err
 	}
 	next := zone.NextSerial(current)
 	res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if affected, err := res.RowsAffected(); err != nil {
-		return err
+		return 0, err
 	} else if affected != 1 {
-		return fmt.Errorf("zone serial changed concurrently")
+		return 0, fmt.Errorf("zone serial changed concurrently")
+	}
+	return next, nil
+}
+
+// journalServedRRChangesForRelease records the multiset difference between
+// the records served before and after a config release. The journal shares the
+// release transaction, so a secondary can never observe a serial without its
+// record changes (or changes without the matching serial).
+func journalServedRRChangesForRelease(tx *sql.Tx, zoneID string, serial uint32, before, after []servedRR) error {
+	remaining := make(map[servedRR]int, len(after))
+	for _, rr := range after {
+		remaining[rr]++
+	}
+	var deleted, added []servedRR
+	for _, rr := range before {
+		if remaining[rr] > 0 {
+			remaining[rr]--
+		} else {
+			deleted = append(deleted, rr)
+		}
+	}
+	remaining = make(map[servedRR]int, len(before))
+	for _, rr := range before {
+		remaining[rr]++
+	}
+	for _, rr := range after {
+		if remaining[rr] > 0 {
+			remaining[rr]--
+		} else {
+			added = append(added, rr)
+		}
+	}
+	for _, change := range []struct {
+		kind    string
+		records []servedRR
+	}{{"delete", deleted}, {"add", added}} {
+		for _, rr := range change.records {
+			if _, err := tx.Exec(`
+				INSERT INTO dns_zone_changes
+					(id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port, flag, tag)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, uuid.New().String(), zoneID, serial, change.kind, rr.name, rr.rtype, rr.value,
+				rr.ttl, rr.priority, rr.weight, rr.port, rr.flag, rr.tag); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -94,6 +94,27 @@ func TestTheRecordSetLeavesTheRecordsADataPlaneAuthoredAlone(t *testing.T) {
 	if name != "www.example.test." {
 		t.Errorf("stored name = %q, want the normalised absolute form", name)
 	}
+	var serial uint32
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-1'`).Scan(&serial); err != nil {
+		t.Fatalf("read released zone serial: %v", err)
+	}
+	var journalCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ?`, serial).Scan(&journalCount); err != nil {
+		t.Fatalf("count release journal changes: %v", err)
+	}
+	if journalCount != 3 {
+		t.Fatalf("release journal contains %d changes, want delete old row and add two new rows", journalCount)
+	}
+	var deleted, added int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND change_type = 'delete' AND value = '192.0.2.1'`, serial).Scan(&deleted); err != nil {
+		t.Fatalf("find deleted row in release journal: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND change_type = 'add'`, serial).Scan(&added); err != nil {
+		t.Fatalf("count added rows in release journal: %v", err)
+	}
+	if deleted != 1 || added != 2 {
+		t.Fatalf("release journal delete/add counts = %d/%d, want 1/2", deleted, added)
+	}
 }
 
 func TestDNSRecordSetRejectsTTLConflictWithDataPlaneAuthoredRRset(t *testing.T) {
