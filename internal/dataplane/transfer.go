@@ -477,8 +477,7 @@ func (r *Replicator) PushFacts(ctx context.Context, limit int) (int, error) {
 				n += int(affected)
 			}
 			// event_id conflicts are expected replays; verify the complete immutable envelope.
-			var got []interface{}
-			got = make([]interface{}, len(factTransferColumns))
+			got := make([]interface{}, len(factTransferColumns))
 			ptrs := make([]interface{}, len(got))
 			for i := range got {
 				ptrs[i] = &got[i]

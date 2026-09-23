@@ -750,7 +750,7 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 	}
 
 	var quarantined *lease.Lease
-	var err error
+	var quarantineErr error
 	factsCommitted := false
 	if cfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(scopeID, requestedIP.String()); err != nil {
 		return err
@@ -761,23 +761,23 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 		}
 		switch {
 		case existing != nil && (existing.Status == lease.LeaseStatusActive || existing.Status == lease.LeaseStatusOffered):
-			quarantined, err = cfg.Caller.DeclineLease(context.Background(), "", cfg.Source, spaceID, existing.ID, time.Hour)
+			quarantined, quarantineErr = cfg.Caller.DeclineLease(context.Background(), "", cfg.Source, spaceID, existing.ID, time.Hour)
 		case existing == nil:
 			tombstoneID := stableDeclineTombstoneID(cfg.Source, scopeID, requestedIP.String(), mac)
-			quarantined, err = cfg.Caller.DeclineTombstone(context.Background(), "", cfg.Source, spaceID,
+			quarantined, quarantineErr = cfg.Caller.DeclineTombstone(context.Background(), "", cfg.Source, spaceID,
 				tombstoneID, scopeID, requestedIP.String(), mac, time.Hour)
 		default:
 			// Repeated reports for an address already quarantined remain
 			// idempotent in the legacy state machine; they do not create a second
 			// facts transition for the same generation.
-			quarantined, err = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
+			quarantined, quarantineErr = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
 		}
-		factsCommitted = err == nil && cfg.DNSOutboxAtomic && existing != nil && existing.Status != lease.LeaseStatusConflict
+		factsCommitted = quarantineErr == nil && cfg.DNSOutboxAtomic && existing != nil && existing.Status != lease.LeaseStatusConflict
 	} else {
-		quarantined, err = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
+		quarantined, quarantineErr = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
 	}
-	if err != nil {
-		return err
+	if quarantineErr != nil {
+		return quarantineErr
 	}
 	// The quarantine has to reach the mirror too. It is a promise in the
 	// negative: this address must not be handed out. A mirror that never heard
