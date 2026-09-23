@@ -765,6 +765,7 @@ async function openRollback(row: ConfigRevision) {
 }
 
 async function submitRollback() {
+  if (!canWrite('settings')) return
   const row = rollbackRow.value
   if (!row) return
   rollbackLoading.value = true

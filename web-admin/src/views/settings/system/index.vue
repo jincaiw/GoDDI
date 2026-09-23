@@ -101,6 +101,7 @@ async function loadData() {
 }
 
 async function handleSave(setting: SystemSetting) {
+  if (!perm.canWrite('settings')) return
   savingKeys[setting.key] = true
   try {
     const valueToSave = isNumberSetting(setting) ? String(numericValues[setting.key] ?? setting.value) : setting.value

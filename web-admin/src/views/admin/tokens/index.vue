@@ -92,11 +92,13 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('token')) return
   Object.assign(createForm, { name: '', description: '', expires_at: null })
   showCreateModal.value = true
 }
 
 async function handleCreate() {
+  if (!perm.canWrite('token')) return
   creating.value = true
   try {
     const result = await createAPIToken({
@@ -112,6 +114,7 @@ async function handleCreate() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('token')) return
   try { await deleteAPIToken(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }

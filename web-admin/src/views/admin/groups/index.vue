@@ -101,12 +101,14 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('group')) return
   editing.value = null
   Object.assign(formData, { name: '', description: '' })
   showModal.value = true
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('group')) return
   submitting.value = true
   try {
     if (editing.value) { await updateGroup(editing.value.id, formData); message.success(t('common.updateSuccess')) }
@@ -116,6 +118,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('group')) return
   try { await deleteGroup(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }
@@ -125,6 +128,7 @@ async function loadRoles() {
 }
 
 async function handleAssignRoles() {
+  if (!perm.canWrite('group') || !perm.canRead('role')) return
   try {
     await assignGroupRoles(assigningGroupId.value, selectedRoles.value)
     message.success(t('common.updateSuccess'))
