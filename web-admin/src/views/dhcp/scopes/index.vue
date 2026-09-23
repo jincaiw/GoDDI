@@ -103,6 +103,7 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreateScope() {
+  if (!perm.canWrite('dhcp')) return
   editingScope.value = null
   Object.assign(formData, { name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, comment: '' })
   showModal.value = true

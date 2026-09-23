@@ -739,6 +739,7 @@ const rollbackBaselineLoading = ref(false)
  * did you think was current", so it is what this resource is at now.
  */
 async function openRollback(row: ConfigRevision) {
+  if (!canWrite('settings')) return
   rollbackRow.value = row
   rollbackExpected.value = row.revision
   rollbackNote.value = ''
@@ -824,6 +825,7 @@ async function loadQueue() {
 }
 
 async function retryFailed(scoped?: ConfigRelease) {
+  if (!canWrite('settings')) return
   retrying.value = true
   try {
     const res = await retryConfigReleases(

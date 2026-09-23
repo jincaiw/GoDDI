@@ -92,6 +92,7 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 async function handleRelease() {
+  if (!perm.canDelete('dhcp')) return
   try { await deleteDHCPLease(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showReleaseConfirm.value = false
 }

@@ -90,6 +90,7 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('dhcp')) return
   editing.value = null
   Object.assign(formData, { code: 1, value: '', priority: 'global', scope_id: '' })
   showModal.value = true

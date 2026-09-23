@@ -197,6 +197,7 @@ async function loadBlockRules(listId: string) {
 
 // Handlers
 function openCreateBlockList() {
+  if (!perm.canWrite('dns')) return
   Object.assign(blockListForm, { name: '', type: 'custom', url: '', enabled: true })
   showBlockListModal.value = true
 }

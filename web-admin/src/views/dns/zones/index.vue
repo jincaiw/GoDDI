@@ -271,6 +271,7 @@ function applyFilters() {
 }
 
 function openCreateZone() {
+  if (!perm.canWrite('dns')) return
   editingZone.value = null
   const presetType = activeTab.value === 'allowed' ? 'allowed' : activeTab.value === 'blocked' ? 'blocked' : 'primary'
   Object.assign(formData, { name: '', type: presetType, default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
@@ -278,12 +279,14 @@ function openCreateZone() {
 }
 
 function openClone(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   cloneSource.value = zone
   cloneName.value = `${zone.name}-copy`
   showCloneModal.value = true
 }
 
 function openConvert(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   convertSource.value = zone
   convertTarget.value = zone.type === 'primary' ? 'secondary' : 'primary'
   showConvertModal.value = true

@@ -100,6 +100,7 @@ async function handleFlush() {
 }
 
 function triggerImport() {
+  if (!perm.canWrite('dns')) return
   importInput.value?.click()
 }
 

@@ -182,8 +182,8 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
-          <n-button :loading="importPreviewLoading" :disabled="!importContent.trim()" @click="previewImport">{{ t('dns.zones.importPreview') }}</n-button>
-          <n-button type="primary" :loading="importApplying" :disabled="!importPreview?.valid" @click="applyImport">{{ t('dns.zones.importApply') }}</n-button>
+          <n-button :loading="importPreviewLoading" :disabled="!perm.canWrite('dns') || !importContent.trim()" @click="previewImport">{{ t('dns.zones.importPreview') }}</n-button>
+          <n-button type="primary" :loading="importApplying" :disabled="!perm.canWrite('dns') || !importPreview?.valid" @click="applyImport">{{ t('dns.zones.importApply') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -503,6 +503,7 @@ function editRecord(record: DNSRecord) {
 }
 
 function openCreateRecord() {
+  if (!perm.canWrite('dns')) return
   editingRecord.value = null
   resetRecordForm()
   showAddRecord.value = true
@@ -575,6 +576,7 @@ async function loadImportFile(event: Event) {
 }
 
 async function previewImport() {
+  if (!perm.canWrite('dns')) return
   importPreviewLoading.value = true
   try {
     const response = await importZoneFile(zoneId, importContent.value, importFormat.value, true)
@@ -592,6 +594,7 @@ async function previewImport() {
 }
 
 async function applyImport() {
+  if (!perm.canWrite('dns')) return
   if (!importPreview.value?.valid) return
   importApplying.value = true
   try {
@@ -816,6 +819,7 @@ async function handleDeleteKey(key: DNSSECKey) {
 }
 
 function openGenerateKey() {
+  if (!perm.canWrite('dns')) return
   generateKeyType.value = 'KSK'
   generateKeyAlgorithm.value = 'ECDSAP256SHA256'
   showGenerateKey.value = true

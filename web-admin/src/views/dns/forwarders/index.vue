@@ -124,6 +124,7 @@ const condColumns = [
 ]
 
 function openCreateForwarder() {
+  if (!perm.canWrite('dns')) return
   editingFwd.value = null
   Object.assign(fwdForm, { name: '', protocol: 'udp', address: '', enabled: true, priority: 0 })
   showFwdModal.value = true
