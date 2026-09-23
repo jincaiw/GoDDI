@@ -366,6 +366,7 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	}
 	existing := make(map[string]int)
 	ownerTypes := make(map[string]map[string]struct{})
+	rrsetTTLs := make(map[string]map[int]struct{})
 	for existingRows.Next() {
 		var name, rtype, value, tag string
 		var ttl, priority, weight, port, flag int
@@ -379,6 +380,11 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			ownerTypes[owner] = make(map[string]struct{})
 		}
 		ownerTypes[owner][rtype] = struct{}{}
+		rrsetKey := csvRRsetIdentity(owner, rtype)
+		if rrsetTTLs[rrsetKey] == nil {
+			rrsetTTLs[rrsetKey] = make(map[int]struct{})
+		}
+		rrsetTTLs[rrsetKey][ttl] = struct{}{}
 	}
 	if err := existingRows.Err(); err != nil {
 		existingRows.Close()
@@ -401,6 +407,12 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	for _, rec := range records {
 		owner := dns.Fqdn(strings.ToLower(rec.name))
 		types := ownerTypes[owner]
+		rrsetKey := csvRRsetIdentity(owner, rec.rtype)
+		for existingTTL := range rrsetTTLs[rrsetKey] {
+			if existingTTL != rec.ttl {
+				return fmt.Errorf("%s RRset at %q has inconsistent TTLs: incoming %d, existing %d", rec.rtype, owner, rec.ttl, existingTTL)
+			}
+		}
 		if rec.rtype == "CNAME" {
 			for existingType := range types {
 				if existingType != "CNAME" {
@@ -428,6 +440,10 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			ownerTypes[owner] = types
 		}
 		types[rec.rtype] = struct{}{}
+		if rrsetTTLs[rrsetKey] == nil {
+			rrsetTTLs[rrsetKey] = make(map[int]struct{})
+		}
+		rrsetTTLs[rrsetKey][rec.ttl] = struct{}{}
 		existing[identity] = rec.ttl
 		creates = append(creates, rec)
 	}
@@ -487,6 +503,10 @@ func csvRecordIdentity(name, rtype, value string, priority, weight, port, flag i
 	return fmt.Sprintf("%q|%q|%q|%d|%d|%d|%d|%q",
 		dns.Fqdn(strings.ToLower(name)), strings.ToUpper(rtype), value,
 		priority, weight, port, flag, tag)
+}
+
+func csvRRsetIdentity(owner, rtype string) string {
+	return strings.ToLower(dns.Fqdn(owner)) + "\x00" + strings.ToUpper(rtype)
 }
 
 // ExportRecordsCSV exports records from the specified zone as CSV data.

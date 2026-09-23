@@ -219,6 +219,52 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		}
 	})
 
+	t.Run("CSV RRset TTL mismatch rejects preview and import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-rrset-ttl.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.12,300,,,,,\nwww,A,192.0.2.13,600,,,,,\n")
+		if _, err := manager.PreviewRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV with inconsistent TTLs in one RRset unexpectedly passed preview")
+		}
+		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV with inconsistent TTLs in one RRset unexpectedly imported")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected RRset TTL conflict left %d records", count)
+		}
+	})
+
+	t.Run("CSV RRset TTL mismatch against existing records rejects import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-existing-ttl.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ttl := 300
+		if _, err := manager.CreateRecord(z.ID, RecordOptions{Name: "www", Type: "A", Value: "192.0.2.14", TTL: &ttl}); err != nil {
+			t.Fatalf("create existing A record: %v", err)
+		}
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.15,600,,,,,\n")
+		if _, err := manager.PreviewRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV with TTL inconsistent with existing RRset unexpectedly passed preview")
+		}
+		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV with TTL inconsistent with existing RRset unexpectedly imported")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("rejected RRset TTL conflict left %d records; want original only", count)
+		}
+	})
+
 	t.Run("zone-file out-of-zone owner is rejected", func(t *testing.T) {
 		z, err := zoneManager.CreateZone(ZoneOptions{Name: "owner-boundary.test", Type: string(ZoneTypePrimary)})
 		if err != nil {
