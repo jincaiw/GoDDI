@@ -265,6 +265,12 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 恢复实例实际启动，liveness/readiness 均返回 HTTP 200，数据面状态为 current，进程正常退出且无 panic。
 - 这关闭了“空白主机、不同路径、源目录销毁”这一仓内恢复路径验收。演练明确没有验证密钥材料异机保管/找回、物理断电介质持久性、DHCP UDP/67 listener、生产拓扑及真实备份介质；这些仍是发布运行验收项，不据此宣称灾备 GA。
 
+### W12-a 在线快照与原地恢复 smoke（2026-09-24，仓内演练通过）
+
+- 执行 `python3 scripts/w12_snapshot_smoke_check.py`：覆盖 role=all 三库加密备份、`restore --verify` 无写入、活跃 SQLite 连接/WAL 存在时原地恢复、WAL/SHM/残留副本清理，以及安全副本通过 WAL 包含被替换前的状态。
+- 同一演练验证 control-only/缺失 store 的归档清单、`migrate --status/--check` 不意外创建数据面库，以及拒绝新 schema/新版本归档、允许旧 schema 归档后再迁移。
+- 所有断言通过。该演练验证文件/SQLite 路径和兼容性门禁，不证明底层介质断电持久性、加密密钥异机找回或真实生产恢复时间。
+
 ### W11 DHCP facts producer 可观测性（2026-09-24，代码完成）
 
 - DHCP 非 HA 事实 outbox 增加低基数 Prometheus 样本：pending/failed 数、已分配最高 sequence、首个未完成 sequence。查询带 2 秒超时；读取失败只记告警，不伪造零水位。
