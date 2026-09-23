@@ -143,9 +143,41 @@ func startMirror(t *testing.T, primary *Replicator, name string) (*Mirror, *data
 // considers itself redundant.
 func startPair(t *testing.T) (*Replicator, *dataplane.Store, *dataplane.Store) {
 	t.Helper()
+	return startPairWithPeerStaleAfter(t, testPeerStaleAfter)
+}
+
+// startPairWithPeerStaleAfter builds a redundant pair with a caller-selected
+// liveness window. The race-enabled full suite can pause a test goroutine while
+// the scheduler is busy; tests of operator decisions use a wider window so
+// that an unrelated scheduling delay does not turn a live peer into a stale
+// one.
+func startPairWithPeerStaleAfter(t *testing.T, staleAfter time.Duration) (*Replicator, *dataplane.Store, *dataplane.Store) {
+	t.Helper()
 	primaryStore := openStore(t, "primary")
-	primary, _ := startPrimary(t, primaryStore)
-	_, mirrorStore, _ := startMirror(t, primary, "mirror")
+	primaryCfg := testConfig(t, "primary")
+	primaryCfg.PeerStaleAfter = staleAfter
+	primary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatalf("building primary: %v", err)
+	}
+	primaryCtx, stopPrimary := context.WithCancel(context.Background())
+	t.Cleanup(stopPrimary)
+	go func() { _ = primary.Run(primaryCtx) }()
+	waitFor(t, "the primary to bind its peer port", func() bool { return primary.Addr() != nil })
+
+	mirrorStore := openStore(t, "mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	mirrorCfg.PeerStaleAfter = staleAfter
+	mirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatalf("building mirror: %v", err)
+	}
+	mirrorCtx, stopMirror := context.WithCancel(context.Background())
+	t.Cleanup(stopMirror)
+	go func() { _ = mirror.Run(mirrorCtx) }()
+	waitFor(t, "the primary to see mirror", func() bool { return primary.State() == StatePrimary })
 	return primary, primaryStore, mirrorStore
 }
 
