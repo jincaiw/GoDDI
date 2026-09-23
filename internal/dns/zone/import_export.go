@@ -171,7 +171,7 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 			}
 			if cnameConflicts == 0 {
 				if err := tx.QueryRow(`SELECT COUNT(*) FROM dns_records
-					WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND value != ?`,
+					WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND LOWER(value) != LOWER(?)`,
 					zoneID, rec.name, rec.value).Scan(&cnameConflicts); err != nil {
 					return fmt.Errorf("zone-file import: checking CNAME targets: %w", err)
 				}

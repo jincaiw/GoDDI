@@ -1160,7 +1160,7 @@ func validateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeI
 		return nil
 	}
 	query = `SELECT COUNT(*) FROM dns_records
-		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND value != ?`
+		WHERE zone_id = ? AND LOWER(name) = LOWER(?) AND enabled = 1 AND type = 'CNAME' AND LOWER(value) != LOWER(?)`
 	args = []any{zoneID, name, value}
 	if excludeID != "" {
 		query += ` AND id != ?`
