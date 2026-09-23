@@ -1168,6 +1168,37 @@ func ValidateCNAMEExclusivityTx(tx *sql.Tx, zoneID, name, rtype, value, excludeI
 	return validateCNAMEExclusivityTx(tx, zoneID, name, rtype, value, excludeID)
 }
 
+// SOAHistoryState contains the SOA fields needed to preserve a synthesized
+// zone-apex SOA across a metadata update.
+type SOAHistoryState struct {
+	Name, MName, RName string
+	Serial             uint32
+	TTL                int
+	Refresh, Retry     int
+	Expire, Minimum    int
+}
+
+// LogSOAChangeTx records the prior and new synthesized SOA at one committed
+// serial. It is for transactional writers outside ZoneManager; the change
+// history is not sufficient to enable IXFR until every serial-changing writer
+// emits ordered SOA delimiters and protocol tests validate the full sequence.
+func LogSOAChangeTx(tx *sql.Tx, zoneID string, serial uint32, before, after SOAHistoryState) error {
+	soaValue := func(state SOAHistoryState) string {
+		return fmt.Sprintf("%s %s %d %d %d %d %d",
+			dns.Fqdn(state.MName), dns.Fqdn(state.RName), state.Serial,
+			state.Refresh, state.Retry, state.Expire, state.Minimum)
+	}
+	if err := logChangeTx(tx, zoneID, serial, "delete", dns.Fqdn(before.Name), "SOA",
+		soaValue(before), before.TTL, 0, 0, 0, 0, ""); err != nil {
+		return fmt.Errorf("journaling prior SOA: %w", err)
+	}
+	if err := logChangeTx(tx, zoneID, serial, "add", dns.Fqdn(after.Name), "SOA",
+		soaValue(after), after.TTL, 0, 0, 0, 0, ""); err != nil {
+		return fmt.Errorf("journaling updated SOA: %w", err)
+	}
+	return nil
+}
+
 // bumpZoneSerialTx advances a zone serial within the caller's mutation
 // transaction, so records, SOA serial, and history either all commit or none do.
 func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {

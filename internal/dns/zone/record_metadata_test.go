@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,55 @@ func TestBatchCreateRecordsRejectsMultipleCNAMEsAtomically(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("rejected CNAME batch left %d records, want no partial writes", count)
+	}
+}
+
+func TestUpdateZoneJournalsSynthesizedSOAChange(t *testing.T) {
+	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	zoneStore := NewStore(store.DB)
+	defer zoneStore.Close()
+	manager := NewZoneManager(store.DB, zoneStore)
+	z, err := manager.CreateZone(ZoneOptions{Name: "soa-history.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldValue := "ns1.soa-history.test. admin.soa-history.test. " + strconv.FormatUint(uint64(z.Serial), 10) + " 3600 600 86400 300"
+	minimum := 120
+	updated, err := manager.UpdateZone(z.ID, ZoneOptions{SOA_RName: "dns-admin.example.test.", Minimum: &minimum})
+	if err != nil {
+		t.Fatalf("update zone SOA: %v", err)
+	}
+	rows, err := store.Query(`SELECT change_type, value FROM dns_zone_changes
+		WHERE zone_id = ? AND serial = ? AND type = 'SOA'`, z.ID, updated.Serial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := make(map[string]string)
+	for rows.Next() {
+		var kind, value string
+		if err := rows.Scan(&kind, &value); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		changes[kind] = value
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if changes["delete"] != oldValue {
+		t.Errorf("old SOA history = %q, want %q", changes["delete"], oldValue)
+	}
+	wantNew := "ns1.soa-history.test. dns-admin.example.test. " + strconv.FormatUint(uint64(updated.Serial), 10) + " 3600 600 86400 120"
+	if changes["add"] != wantNew {
+		t.Errorf("new SOA history = %q, want %q", changes["add"], wantNew)
 	}
 }
 

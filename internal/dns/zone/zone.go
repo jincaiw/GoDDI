@@ -572,6 +572,11 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		return nil, err
 	}
 	oldZoneName := existing.Name
+	beforeSOA := SOAHistoryState{
+		Name: existing.Name, MName: existing.SOA_MName, RName: existing.SOA_RName,
+		Serial: existing.Serial, TTL: existing.DefaultTTL,
+		Refresh: existing.Refresh, Retry: existing.Retry, Expire: existing.Expire, Minimum: existing.Minimum,
+	}
 
 	// Build update query dynamically.
 	var setClauses []string
@@ -770,6 +775,14 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 			if err := renameZoneRecordOwnersTx(tx, id, oldZoneName, existing.Name, serial); err != nil {
 				return nil, fmt.Errorf("renaming zone record owners: %w", err)
 			}
+		}
+		afterSOA := SOAHistoryState{
+			Name: existing.Name, MName: existing.SOA_MName, RName: existing.SOA_RName,
+			Serial: serial, TTL: existing.DefaultTTL,
+			Refresh: existing.Refresh, Retry: existing.Retry, Expire: existing.Expire, Minimum: existing.Minimum,
+		}
+		if err := LogSOAChangeTx(tx, id, serial, beforeSOA, afterSOA); err != nil {
+			return nil, fmt.Errorf("journaling SOA change: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
