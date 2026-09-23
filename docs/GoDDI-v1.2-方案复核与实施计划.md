@@ -223,7 +223,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - CSV 正式导入复用相同冲突检查；发现任一冲突时整批拒绝，保持记录、serial 与 journal 不变。预览仍不写入，并以 `valid=false` 和冲突列表表示可修复的数据问题；语法/字段校验错误继续作为请求错误返回。
 - 该改动收敛 W06 导入预检诊断的一部分；其他记录入口的完整不变量核对、多 DNS 关联以及 IXFR 解禁条件仍未完成。
 - BIND zonefile 导入现检查 TTL/RR 值并在同一事务中执行 CNAME 独占性验证，覆盖既有记录及本批此前已插入记录；发现冲突时整批回滚。回归确认同 owner 的 CNAME+A 不会留下部分写入。`go test ./internal/dns/zone ./internal/dns/transfer` 通过。其他记录入口的完整不变量、多 DNS 关联和 IXFR 解禁条件仍未完成。
-- Record API 单条/批量创建、更新、配置发布和 DHCP DDNS 共用 DNS 大小写无关且忽略过期/禁用 RR 的 CNAME 独占性事务校验；拒绝同一 owner 下不同 CNAME 目标以及 CNAME 与其他类型共存。批量路径过去会吞掉 CNAME 检查的 SQL 错误，现已移除。更新路径排除当前记录。回归覆盖大小写不同的冲突创建/改名、批次原子回滚、zonefile 整批回滚、DHCP A 与现有 CNAME 冲突、配置发布与 data-plane CNAME 冲突。相关包测试通过。
+- Record API 单条/批量创建、更新、自动 PTR、配置发布和 DHCP DDNS 共用 DNS 大小写无关且忽略过期/禁用 RR 的 CNAME 独占性事务校验；拒绝同一 owner 下不同 CNAME 目标以及 CNAME 与其他类型共存。批量路径过去会吞掉 CNAME 检查的 SQL 错误，现已移除。更新路径排除当前记录。回归覆盖大小写不同的冲突创建/改名、批次原子回滚、zonefile 整批回滚、DHCP A 与现有 CNAME 冲突、自动 PTR 冲突、配置发布与 data-plane CNAME 冲突。相关包测试通过。
 
 ### W04 跨库事实传输实施中（2026-09-24，尚未发布）
 

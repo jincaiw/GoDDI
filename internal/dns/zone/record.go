@@ -1333,6 +1333,9 @@ func (m *RecordManager) findReverseZone(recordType, value string) (*Zone, string
 // transaction. It reports whether a new PTR was created.
 func (m *RecordManager) createPTRTx(tx *sql.Tx, reverseZone *Zone, owner, target string, ttl int) (bool, error) {
 	owner = normalizeRecordName(strings.TrimSuffix(owner, "."), reverseZone.Name)
+	if err := validateCNAMEExclusivityTx(tx, reverseZone.ID, owner, "PTR", target, ""); err != nil {
+		return false, fmt.Errorf("automatic PTR conflicts with CNAME: %w", err)
+	}
 	if err := ValidateRRsetTTLTx(tx, reverseZone.ID, owner, "PTR", ttl, ""); err != nil {
 		return false, err
 	}

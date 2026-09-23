@@ -559,6 +559,20 @@ func TestRRsetTTLConsistencyIncludesAutoPTRAndIgnoresExpiredRecords(t *testing.T
 	if err := manager.DeleteRecord(existingPTR.ID); err != nil {
 		t.Fatalf("delete conflicting PTR: %v", err)
 	}
+	conflictingCNAME, err := manager.CreateRecord(reverse.ID, RecordOptions{
+		Name: "50", Type: "CNAME", Value: "alias.ptr-ttl.test.",
+	})
+	if err != nil {
+		t.Fatalf("create reverse CNAME fixture: %v", err)
+	}
+	if _, err := manager.CreateRecord(forward.ID, RecordOptions{
+		Name: "host", Type: "A", Value: "192.0.2.50", TTL: &forwardTTL, CreatePTR: true,
+	}); err == nil {
+		t.Fatal("automatic PTR was created beside an existing CNAME")
+	}
+	if err := manager.DeleteRecord(conflictingCNAME.ID); err != nil {
+		t.Fatalf("delete conflicting CNAME: %v", err)
+	}
 	if _, err := manager.CreateRecord(forward.ID, RecordOptions{
 		Name: "host", Type: "A", Value: "192.0.2.50", TTL: &forwardTTL, CreatePTR: true,
 	}); err != nil {
