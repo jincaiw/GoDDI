@@ -245,8 +245,15 @@ func TestApplyCreate_PublishesForwardAndReverse(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ?`, zoneID).Scan(&changes); err != nil {
 			t.Fatalf("count %s journal: %v", zoneID, err)
 		}
-		if serial != zone.NextSerial(initialSerials[zoneID]) || changes != 1 {
-			t.Errorf("%s serial/journal = %d/%d, want %d/1", zoneID, serial, changes, zone.NextSerial(initialSerials[zoneID]))
+		if serial != zone.NextSerial(initialSerials[zoneID]) || changes != 3 {
+			t.Errorf("%s serial/journal = %d/%d, want %d/3 (SOA delimiters and RR change)", zoneID, serial, changes, zone.NextSerial(initialSerials[zoneID]))
+		}
+		var soaRows int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ? AND type = 'SOA' AND serial = ?`, zoneID, serial).Scan(&soaRows); err != nil {
+			t.Fatalf("count %s SOA delimiters: %v", zoneID, err)
+		}
+		if soaRows != 2 {
+			t.Errorf("%s SOA journal rows = %d, want delete/add pair", zoneID, soaRows)
 		}
 	}
 

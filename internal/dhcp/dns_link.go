@@ -673,6 +673,10 @@ func journalDNSRRsetChangesTx(tx *sql.Tx, before map[dnsRRsetKey][]dnsRR) (map[s
 		if len(changes) == 0 {
 			continue
 		}
+		beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, zoneID)
+		if err != nil {
+			return nil, fmt.Errorf("reading SOA state for zone %s: %w", zoneID, err)
+		}
 		var current uint32
 		if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
 			return nil, fmt.Errorf("reading SOA serial for zone %s: %w", zoneID, err)
@@ -690,6 +694,9 @@ func journalDNSRRsetChangesTx(tx *sql.Tx, before map[dnsRRsetKey][]dnsRR) (map[s
 			return nil, fmt.Errorf("SOA serial changed concurrently for zone %s", zoneID)
 		}
 		serials[zoneID] = next
+		if err := zone.LogSOARecordTx(tx, zoneID, next, "delete", beforeSOA); err != nil {
+			return nil, fmt.Errorf("writing prior SOA history for zone %s: %w", zoneID, err)
+		}
 		sort.Slice(changes, func(i, j int) bool {
 			if changes[i].rr.name != changes[j].rr.name {
 				return changes[i].rr.name < changes[j].rr.name
@@ -711,6 +718,11 @@ func journalDNSRRsetChangesTx(tx *sql.Tx, before map[dnsRRsetKey][]dnsRR) (map[s
 				rr.ttl, rr.priority, rr.weight, rr.port); err != nil {
 				return nil, fmt.Errorf("writing DNS change history for zone %s: %w", zoneID, err)
 			}
+		}
+		afterSOA := beforeSOA
+		afterSOA.Serial = next
+		if err := zone.LogSOARecordTx(tx, zoneID, next, "add", afterSOA); err != nil {
+			return nil, fmt.Errorf("writing updated SOA history for zone %s: %w", zoneID, err)
 		}
 	}
 	return serials, nil
