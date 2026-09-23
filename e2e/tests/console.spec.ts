@@ -75,3 +75,87 @@ test('mobile login fits viewport', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Login', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
 })
+
+test('DNS read-only role cannot open DNS write actions', async ({ page, request }) => {
+  const stamp = Date.now()
+  const username = `dns_reader_${stamp}`
+  const roleName = `dns_reader_role_${stamp}`
+  const zoneName = `dns-reader-${stamp}.example`
+  const password = 'OnlyForUi-Test-123!'
+  const login = await request.post('/api/v1/auth/login', {
+    data: {
+      username: process.env.GODDI_TEST_USERNAME || 'admin',
+      password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+    }
+  })
+  expect(login.ok()).toBe(true)
+  const admin = (await login.json()).data
+  const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+  let roleID = ''
+  let userID = ''
+  let zoneID = ''
+
+  try {
+    const permissionsResponse = await request.get('/api/v1/permissions', { headers })
+    expect(permissionsResponse.ok()).toBe(true)
+    const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
+    const dnsRead = permissions.find(permission => permission.resource === 'dns' && permission.action === 'read')
+    expect(dnsRead, 'the DNS read permission must exist').toBeDefined()
+
+    const roleResponse = await request.post('/api/v1/roles', {
+      headers,
+      data: { name: roleName, description: 'Read-only browser permission regression' }
+    })
+    expect(roleResponse.status()).toBe(201)
+    roleID = (await roleResponse.json()).data.id
+
+    const grantResponse = await request.post(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: [dnsRead!.id] }
+    })
+    expect(grantResponse.ok()).toBe(true)
+
+    const userResponse = await request.post('/api/v1/users', {
+      headers,
+      data: {
+        username,
+        password,
+        display_name: username,
+        enabled: true,
+        must_change_password: false
+      }
+    })
+    expect(userResponse.status()).toBe(201)
+    userID = (await userResponse.json()).data.id
+
+    const assignResponse = await request.post(`/api/v1/users/${userID}/roles`, {
+      headers,
+      data: { role_ids: [roleID] }
+    })
+    expect(assignResponse.ok()).toBe(true)
+
+    const zoneResponse = await request.post('/api/v1/dns/zones', {
+      headers,
+      data: { name: zoneName, type: 'primary', enabled: true }
+    })
+    expect(zoneResponse.status()).toBe(201)
+    zoneID = (await zoneResponse.json()).data.id
+
+    await page.goto('/login')
+    await page.getByRole('textbox').nth(0).fill(username)
+    await page.getByRole('textbox').nth(1).fill(password)
+    await page.getByRole('button', { name: 'Login', exact: true }).click()
+    await expect(page).toHaveURL(/dashboard$/)
+
+    await page.goto('/dns/zones')
+    await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Create Zone', exact: true })).toHaveCount(0)
+    const zoneRow = page.locator('tbody tr').filter({ hasText: zoneName })
+    await expect(zoneRow).toBeVisible()
+    await expect(zoneRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+  } finally {
+    if (userID) await request.delete(`/api/v1/users/${userID}`, { headers })
+    if (roleID) await request.delete(`/api/v1/roles/${roleID}`, { headers })
+    if (zoneID) await request.delete(`/api/v1/dns/zones/${zoneID}`, { headers })
+  }
+})
