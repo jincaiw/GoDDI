@@ -140,6 +140,24 @@ test('read-only role cannot open write actions across modules and administration
     })
     expect(assignResponse.ok()).toBe(true)
 
+    const readerLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
+    expect(readerLogin.ok()).toBe(true)
+    const reader = (await readerLogin.json()).data
+    const readerHeaders = { Authorization: `Bearer ${reader.token}`, 'X-CSRF-Token': reader.csrf_token }
+    const deniedWrites = await Promise.all([
+      api.post('/api/v1/dns/zones', { headers: readerHeaders, data: { name: `blocked-${stamp}.example`, type: 'primary', enabled: true } }),
+      api.post('/api/v1/dhcp/scopes', { headers: readerHeaders, data: { name: 'blocked', subnet: '192.0.2.0/24' } }),
+      api.post('/api/v1/ipam/spaces', { headers: readerHeaders, data: { name: `blocked-${stamp}` } }),
+      api.post('/api/v1/backup', { headers: readerHeaders, data: { description: 'must be denied' } }),
+      api.post('/api/v1/tokens', { headers: readerHeaders, data: { name: 'must be denied' } }),
+      api.put('/api/v1/settings', { headers: readerHeaders, data: { settings: {} } }),
+      api.post('/api/v1/users', { headers: readerHeaders, data: { username: `blocked_${stamp}`, password } }),
+      api.post('/api/v1/roles', { headers: readerHeaders, data: { name: `blocked_${stamp}` } }),
+      api.post('/api/v1/groups', { headers: readerHeaders, data: { name: `blocked_${stamp}` } })
+    ])
+    expect(deniedWrites.map(response => response.status()), 'read-only API writes must all be forbidden')
+      .toEqual(Array(deniedWrites.length).fill(403))
+
     const zoneResponse = await api.post('/api/v1/dns/zones', {
       headers,
       data: { name: zoneName, type: 'primary', enabled: true }
