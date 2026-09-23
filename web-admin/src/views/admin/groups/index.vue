@@ -16,13 +16,13 @@
 
     <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.groups.editGroup') : t('admin.groups.createGroup')" preset="card" style="width: 450px;">
       <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
+        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" :disabled="!perm.canWrite('group')" /></n-form-item>
+        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('group')" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('group')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -31,13 +31,13 @@
     <n-modal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.groups.assignRoles')" preset="card" style="width: 450px;">
       <n-checkbox-group v-model:value="selectedRoles">
         <n-space item-style="display: flex;">
-          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" />
+          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('group') || !perm.canRead('role')" />
         </n-space>
       </n-checkbox-group>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showRolesModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('group') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -81,8 +81,8 @@ const columns = [
   { title: () => t('admin.users.roles'), key: 'roles', render: (row: Group) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Group) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group'), onClick: () => { assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group') || !perm.canRead('role'), onClick: () => { assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('group'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },

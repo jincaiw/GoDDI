@@ -1,1 +1,0 @@
-import{C as e}from"./router-BZ1skjnp.js";function t(t){return e(`/logs/audit`,t)}export{t};

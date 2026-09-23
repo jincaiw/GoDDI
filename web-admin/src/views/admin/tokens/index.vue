@@ -17,14 +17,14 @@
     <!-- Create Token Modal -->
     <n-modal v-if="showCreateModal" v-model:show="showCreateModal" :title="t('admin.tokens.createToken')" preset="card" style="width: 450px;">
       <n-form :model="createForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('admin.tokens.tokenName')"><n-input v-model:value="createForm.name" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="createForm.description" type="textarea" /></n-form-item>
-        <n-form-item :label="t('admin.tokens.expiresAt')"><n-date-picker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" /></n-form-item>
+        <n-form-item :label="t('admin.tokens.tokenName')"><n-input v-model:value="createForm.name" :disabled="!perm.canWrite('token')" /></n-form-item>
+        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="createForm.description" type="textarea" :disabled="!perm.canWrite('token')" /></n-form-item>
+        <n-form-item :label="t('admin.tokens.expiresAt')"><n-date-picker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" :disabled="!perm.canWrite('token')" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="creating" @click="handleCreate">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="creating" :disabled="!perm.canWrite('token')" @click="handleCreate">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>

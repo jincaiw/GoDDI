@@ -17,13 +17,13 @@
     <!-- Create/Edit Role Modal -->
     <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.roles.editRole') : t('admin.roles.createRole')" preset="card" style="width: 450px;">
       <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
+        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" :disabled="!perm.canWrite('role')" /></n-form-item>
+        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('role')" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('role')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -35,7 +35,7 @@
           <div v-for="group in permissionGroups" :key="group.resource">
             <n-text strong>{{ t(`perm.resource.${group.resource}`) }}</n-text>
             <n-space style="margin-top: 4px; margin-left: 12px;">
-              <n-checkbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" />
+              <n-checkbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" :disabled="!perm.canWrite('role')" />
             </n-space>
           </div>
         </n-space>
@@ -43,7 +43,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showPermModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAssignPermissions">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('role')" @click="handleAssignPermissions">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>

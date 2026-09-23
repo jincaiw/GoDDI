@@ -1,7 +1,7 @@
 <template>
   <div>
     <page-header :title="t('settings.backup.title')">
-      <n-button type="primary" @click="handleCreate">{{ t('settings.backup.createBackup') }}</n-button>
+      <n-button v-if="perm.canWrite('backup')" type="primary" @click="handleCreate">{{ t('settings.backup.createBackup') }}</n-button>
     </page-header>
 
     <n-data-table
@@ -33,10 +33,12 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, NTag, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import { usePermission } from '@/composables/usePermission'
 import { listBackups, createBackup, restoreBackup, deleteBackup, downloadBackup, type Backup } from '@/service/api/goddi/backup'
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 const loading = ref(false)
 const backups = ref<Backup[]>([])
@@ -53,9 +55,9 @@ const columns = [
   { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
   { title: () => t('common.actions'), key: 'actions', width: 260, render: (row: Backup) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
-      h(NButton, { size: 'small', text: true, type: 'warning', onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
-      h(NButton, { size: 'small', text: true, type: 'error', onClick: () => { actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canRead('backup') || row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
+      h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('backup'), onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canWrite('backup'), onClick: () => { actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -72,6 +74,7 @@ function backupName(row: Backup): string {
 }
 
 async function handleDownload(row: Backup) {
+  if (!perm.canRead('backup')) return
   try {
     const { blob, fileName } = await downloadBackup(row.id)
     const url = URL.createObjectURL(blob)
@@ -91,6 +94,7 @@ async function loadData() {
 }
 
 async function handleCreate() {
+  if (!perm.canWrite('backup')) return
   // The backend requires a description. We use a timestamped default so the
   // user is never blocked by a prompt, while still producing a meaningful
   // name in the backup list. A future UX improvement could open a dialog
@@ -100,12 +104,14 @@ async function handleCreate() {
 }
 
 async function handleRestore() {
+  if (!perm.canWrite('backup')) return
   try { await restoreBackup(actionId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showRestoreConfirm.value = false
   restoreTarget.value = null
 }
 
 async function handleDelete() {
+  if (!perm.canWrite('backup')) return
   try { await deleteBackup(actionId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }

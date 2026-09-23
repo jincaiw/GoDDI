@@ -6,10 +6,10 @@
       <n-card>
         <n-form label-placement="left" label-width="200px">
           <n-form-item v-for="setting in settings" :key="setting.key" :label="settingLabel(setting.key)">
-            <n-switch v-if="setting.type === 'bool'" v-model:value="setting.value" :checked-value="'true'" :unchecked-value="'false'" />
-            <n-input-number v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" />
-            <n-input v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" />
-            <n-button type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</n-button>
+            <n-switch v-if="setting.type === 'bool'" v-model:value="setting.value" :checked-value="'true'" :unchecked-value="'false'" :disabled="!perm.canWrite('settings')" />
+            <n-input-number v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
+            <n-input v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
+            <n-button v-if="perm.canWrite('settings')" type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</n-button>
             <template #feedback>
               <span style="color: var(--n-text-color-3); font-size: 12px;">{{ settingDesc(setting) }}</span>
             </template>
@@ -25,10 +25,12 @@ import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
+import { usePermission } from '@/composables/usePermission'
 import { listSystemSettings, updateSystemSetting, type SystemSetting } from '@/service/api/goddi/settings'
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 // Localized label/description for a setting key; falls back to the raw key /
 // backend description for unknown keys.

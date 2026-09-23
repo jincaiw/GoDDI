@@ -240,7 +240,7 @@
           <n-button
             type="warning"
             :loading="rollbackLoading"
-            :disabled="rollbackBaselineLoading"
+            :disabled="!writeAllowed || rollbackBaselineLoading"
             @click="submitRollback"
           >
             {{ t('settings.configVersions.rollbackConfirm') }}
