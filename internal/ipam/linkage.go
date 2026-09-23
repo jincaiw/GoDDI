@@ -243,6 +243,9 @@ func (l *Linkage) LinkDNSRecord(recordID, zoneID, name, recordType, value, ip, s
 // address space. This is the unambiguous form for deployments with overlapping
 // subnets in separate VRFs/spaces.
 func (l *Linkage) LinkDNSRecordInSpace(spaceID, recordID, zoneID, name, recordType, value, ip, source string) error {
+	if strings.TrimSpace(spaceID) == "" {
+		return fmt.Errorf("ipam: space_id is required for a space-scoped DNS link")
+	}
 	canonical, err := address.NormalizeIP(ip)
 	if err != nil {
 		return err
