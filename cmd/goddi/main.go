@@ -1086,6 +1086,20 @@ func runServer(configPath string) error {
 			if err != nil {
 				return fmt.Errorf("initializing DHCP fact outbox: %w", err)
 			}
+			metrics.RegisterFactsProducerStatsProvider(func() []metrics.FactsProducerSample {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				status, err := outbox.Status(ctx)
+				if err != nil {
+					slog.Warn("metrics: could not read DHCP facts producer status", "error", err)
+					return nil
+				}
+				return []metrics.FactsProducerSample{{
+					Domain: "ipam", Pending: status.Pending, Failed: status.Failed,
+					HeadSequence:             status.HeadSequence,
+					FirstOutstandingSequence: status.FirstOutstandingSequence,
+				}}
+			})
 			writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
 			if err != nil {
 				return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)

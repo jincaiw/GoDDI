@@ -298,6 +298,22 @@ var (
 		Name: "goddi_facts_consumer_readiness",
 		Help: "Facts consumer readiness: 1 at ok, 0.5 at degraded, 0 otherwise.",
 	}, []string{"domain"})
+	FactsProducerPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_pending",
+		Help: "Durable facts events awaiting delivery from a producer outbox.",
+	}, []string{"domain"})
+	FactsProducerFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_failed",
+		Help: "Durable facts events retained after producer delivery failure.",
+	}, []string{"domain"})
+	FactsProducerHeadSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_head_sequence",
+		Help: "Highest durable facts sequence allocated by the producer.",
+	}, []string{"domain"})
+	FactsProducerFirstOutstandingSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_first_outstanding_sequence",
+		Help: "Lowest pending or failed facts sequence; zero means no event is outstanding.",
+	}, []string{"domain"})
 
 	DataPlaneHeldLeases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_dataplane_held_leases",
@@ -566,6 +582,16 @@ type FactsConsumerSample struct {
 	Readiness string
 }
 
+// FactsProducerSample is a point-in-time view of one durable producer outbox.
+// Domain is a stable low-cardinality identifier such as "ipam".
+type FactsProducerSample struct {
+	Domain                   string
+	Pending                  int64
+	Failed                   int64
+	HeadSequence             int64
+	FirstOutstandingSequence int64
+}
+
 type DataPlaneSample struct {
 	// Plane names the store: "lease" or "zone".
 	Plane string
@@ -627,6 +653,7 @@ var (
 	dataPlaneStatsFn func() []DataPlaneSample
 
 	factsConsumerStatsFn func() []FactsConsumerSample
+	factsProducerStatsFn func() []FactsProducerSample
 
 	// last samples used to convert absolute gauges into counter deltas.
 	lastCacheHits           int64
@@ -702,6 +729,12 @@ func RegisterDataPlaneStatsProvider(fn func() []DataPlaneSample) {
 // the metrics ticker. It does not construct or start a consumer.
 func RegisterFactsConsumerStatsProvider(fn func() []FactsConsumerSample) {
 	factsConsumerStatsFn = fn
+}
+
+// RegisterFactsProducerStatsProvider registers an optional durable outbox
+// callback sampled by the metrics ticker.
+func RegisterFactsProducerStatsProvider(fn func() []FactsProducerSample) {
+	factsProducerStatsFn = fn
 }
 
 // dataPlaneReadyValue maps a readiness level onto the gauge. Degraded is
@@ -800,6 +833,10 @@ func InitMetrics() {
 			FactsConsumerLag,
 			FactsConsumerGap,
 			FactsConsumerReadiness,
+			FactsProducerPending,
+			FactsProducerFailed,
+			FactsProducerHeadSequence,
+			FactsProducerFirstOutstandingSequence,
 			DHCPHARedundant,
 			DHCPHAPromising,
 			DHCPRequestsInflight,
@@ -936,6 +973,17 @@ func sampleProviders() {
 			FactsConsumerLag.WithLabelValues(s.Domain).Set(float64(s.Lag))
 			FactsConsumerGap.WithLabelValues(s.Domain).Set(boolGauge(s.Gap))
 			FactsConsumerReadiness.WithLabelValues(s.Domain).Set(dataPlaneReadyValue(s.Readiness))
+		}
+	}
+	if fn := factsProducerStatsFn; fn != nil {
+		for _, s := range fn() {
+			if s.Domain == "" {
+				continue
+			}
+			FactsProducerPending.WithLabelValues(s.Domain).Set(float64(s.Pending))
+			FactsProducerFailed.WithLabelValues(s.Domain).Set(float64(s.Failed))
+			FactsProducerHeadSequence.WithLabelValues(s.Domain).Set(float64(s.HeadSequence))
+			FactsProducerFirstOutstandingSequence.WithLabelValues(s.Domain).Set(float64(s.FirstOutstandingSequence))
 		}
 	}
 	if fn := dataPlaneStatsFn; fn != nil {

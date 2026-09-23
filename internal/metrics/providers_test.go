@@ -52,12 +52,35 @@ func withProviders(t *testing.T) {
 		secondaryZoneStatsFn = nil
 		dataPlaneStatsFn = nil
 		factsConsumerStatsFn = nil
+		factsProducerStatsFn = nil
 		dhcpScopeLabels = make(map[string]struct{})
 		DHCPLeasesActive.Reset()
 		DHCPScopeUsageRatio.Reset()
 		DHCPScopeUtilizationScrapeError.Set(0)
 		DHCPScopeUtilizationLastSuccessTimestampSeconds.Reset()
 	})
+}
+
+func TestSampleProvidersPublishesFactsProducerStatus(t *testing.T) {
+	withProviders(t)
+	factsProducerStatsFn = func() []FactsProducerSample {
+		return []FactsProducerSample{{
+			Domain: "ipam", Pending: 3, Failed: 1, HeadSequence: 12,
+			FirstOutstandingSequence: 9,
+		}}
+	}
+	sampleProviders()
+	text := expose(t, FactsProducerPending, FactsProducerFailed, FactsProducerHeadSequence, FactsProducerFirstOutstandingSequence)
+	for _, want := range []string{
+		`goddi_facts_producer_pending{domain="ipam"} 3`,
+		`goddi_facts_producer_failed{domain="ipam"} 1`,
+		`goddi_facts_producer_head_sequence{domain="ipam"} 12`,
+		`goddi_facts_producer_first_outstanding_sequence{domain="ipam"} 9`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\n%s", want, text)
+		}
+	}
 }
 
 // samples returns only the sample lines of one metric: the ones that carry a
