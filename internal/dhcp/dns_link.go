@@ -234,13 +234,39 @@ func (dl *DNSLink) applyCreate(e DNSEvent) (bool, error) {
 	if known && leaseEnd.Valid {
 		expiry = leaseEnd.String
 	}
+	// Resolve the reverse zone before opening the DNS transaction. The lease
+	// stores commonly share a single-connection SQLite pool, and querying the
+	// database again while that transaction is open would wait on its own lock.
+	reverseZoneID, reverseZoneName, reverseErr := dl.findReverseZone(e.IPAddress)
+	if reverseErr != nil {
+		reverseZoneID = ""
+	}
 
-	if err := dl.upsertARecord(e, zoneID, dns.Fqdn(cleaned), expiry); err != nil {
+	tx, err := dl.stores.DNS.Begin()
+	if err != nil {
+		return false, fmt.Errorf("dhcp_dns_link: begin binding DNS transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	before, err := dl.upsertARecordTx(tx, e, zoneID, dns.Fqdn(cleaned), expiry)
+	if err != nil {
 		return false, err
 	}
-	if err := dl.upsertPTRRecord(e, dns.Fqdn(cleaned), expiry); err != nil {
+	ptrBefore, err := dl.upsertPTRRecordTx(tx, e, dns.Fqdn(cleaned), expiry,
+		reverseZoneID, reverseZoneName)
+	if err != nil {
 		return false, err
 	}
+	for key, records := range ptrBefore {
+		before[key] = records
+	}
+	serials, err := journalDNSRRsetChangesTx(tx, before)
+	if err != nil {
+		return false, fmt.Errorf("dhcp_dns_link: journaling binding records for %s: %w", cleaned, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("dhcp_dns_link: commit binding DNS transaction: %w", err)
+	}
+	dl.notifyPrimaryZones(serials)
 
 	slog.Info("dhcp_dns_link: published DNS records",
 		"hostname", cleaned, "ip", e.IPAddress, "zone", zoneName, "lease_id", e.LeaseID,
@@ -284,16 +310,11 @@ func superseded(replicaStatus string, replicaGeneration, eventGeneration int64) 
 // every teardown path failed, the record stops being served once the binding
 // that justified it has expired, instead of pointing at an address the pool may
 // have since handed to somebody else.
-func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) error {
-	tx, err := dl.stores.DNS.Begin()
-	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: begin A record transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op once committed
+func (dl *DNSLink) upsertARecordTx(tx *sql.Tx, e DNSEvent, zoneID, fqdn, leaseEnd string) (map[dnsRRsetKey][]dnsRR, error) {
 	key := dnsRRsetKey{zoneID: zoneID, name: fqdn, rtype: "A"}
 	before, err := readDNSRRsetTx(tx, key)
 	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: reading A RRset before update: %w", err)
+		return nil, fmt.Errorf("dhcp_dns_link: reading A RRset before update: %w", err)
 	}
 
 	if _, err := tx.Exec(`
@@ -301,10 +322,10 @@ func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) erro
 		WHERE zone_id = ? AND name = ? AND type = 'A' AND owner = 'dhcp'
 		  AND (owner_ref IS NULL OR owner_ref <> ?)`,
 		zoneID, fqdn, e.LeaseID); err != nil {
-		return fmt.Errorf("dhcp_dns_link: releasing name %s from previous lease: %w", fqdn, err)
+		return nil, fmt.Errorf("dhcp_dns_link: releasing name %s from previous lease: %w", fqdn, err)
 	}
 	if err := zone.ValidateRRsetTTLTx(tx, zoneID, fqdn, "A", 300, ""); err != nil {
-		return fmt.Errorf("dhcp_dns_link: A RRset at %s has an incompatible TTL: %w", fqdn, err)
+		return nil, fmt.Errorf("dhcp_dns_link: A RRset at %s has an incompatible TTL: %w", fqdn, err)
 	}
 
 	if _, err := tx.Exec(`
@@ -328,32 +349,22 @@ func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) erro
 			updated_at = datetime('now')`,
 		zoneID, fqdn, e.LeaseID,
 		zoneID, fqdn, e.IPAddress, e.LeaseID, e.Generation, leaseEnd); err != nil {
-		return fmt.Errorf("dhcp_dns_link: writing A record %s -> %s: %w", fqdn, e.IPAddress, err)
+		return nil, fmt.Errorf("dhcp_dns_link: writing A record %s -> %s: %w", fqdn, e.IPAddress, err)
 	}
-	serials, err := journalDNSRRsetChangesTx(tx, map[dnsRRsetKey][]dnsRR{key: before})
-	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: journaling A record %s: %w", fqdn, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("dhcp_dns_link: commit A record: %w", err)
-	}
-	dl.notifyPrimaryZones(serials)
-	return nil
+	return map[dnsRRsetKey][]dnsRR{key: before}, nil
 }
 
 // upsertPTRRecord writes the reverse record for a binding. PTR names are
 // derived from the address, so two leases never contend for the same name the
 // way they can for a hostname.
-func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
-	zoneID, zoneName, err := dl.findReverseZone(e.IPAddress)
-	if err != nil || zoneID == "" {
-		return nil // No reverse zone configured, nothing to publish.
+func (dl *DNSLink) upsertPTRRecordTx(tx *sql.Tx, e DNSEvent, fqdn, leaseEnd, zoneID, zoneName string) (map[dnsRRsetKey][]dnsRR, error) {
+	if zoneID == "" {
+		return map[dnsRRsetKey][]dnsRR{}, nil // No reverse zone configured, nothing to publish.
 	}
 
 	reverseName := reverseIP(e.IPAddress) + ".in-addr.arpa"
 	if _, ok := relativeNameInZone(reverseName, zoneName); !ok {
-		return nil
+		return map[dnsRRsetKey][]dnsRR{}, nil
 	}
 	// Zone membership only needs the label-boundary check; the name that gets
 	// stored is the fully qualified one, matching how every other writer
@@ -365,15 +376,10 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 		target += "."
 	}
 
-	tx, err := dl.stores.DNS.Begin()
-	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: begin PTR transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op once committed
 	key := dnsRRsetKey{zoneID: zoneID, name: owner, rtype: "PTR"}
 	before, err := readDNSRRsetTx(tx, key)
 	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: reading PTR RRset before update: %w", err)
+		return nil, fmt.Errorf("dhcp_dns_link: reading PTR RRset before update: %w", err)
 	}
 
 	if _, err := tx.Exec(`
@@ -381,10 +387,10 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 		WHERE zone_id = ? AND name = ? AND type = 'PTR' AND owner = 'dhcp'
 		  AND (owner_ref IS NULL OR owner_ref <> ?)`,
 		zoneID, owner, e.LeaseID); err != nil {
-		return fmt.Errorf("dhcp_dns_link: releasing PTR %s from previous lease: %w", owner, err)
+		return nil, fmt.Errorf("dhcp_dns_link: releasing PTR %s from previous lease: %w", owner, err)
 	}
 	if err := zone.ValidateRRsetTTLTx(tx, zoneID, owner, "PTR", 300, ""); err != nil {
-		return fmt.Errorf("dhcp_dns_link: PTR RRset at %s has an incompatible TTL: %w", owner, err)
+		return nil, fmt.Errorf("dhcp_dns_link: PTR RRset at %s has an incompatible TTL: %w", owner, err)
 	}
 
 	if _, err := tx.Exec(`
@@ -408,18 +414,9 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 			updated_at = datetime('now')`,
 		zoneID, owner, e.LeaseID,
 		zoneID, owner, target, e.LeaseID, e.Generation, leaseEnd); err != nil {
-		return fmt.Errorf("dhcp_dns_link: writing PTR %s -> %s: %w", owner, target, err)
+		return nil, fmt.Errorf("dhcp_dns_link: writing PTR %s -> %s: %w", owner, target, err)
 	}
-	serials, err := journalDNSRRsetChangesTx(tx, map[dnsRRsetKey][]dnsRR{key: before})
-	if err != nil {
-		return fmt.Errorf("dhcp_dns_link: journaling PTR record %s: %w", owner, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("dhcp_dns_link: commit PTR record: %w", err)
-	}
-	dl.notifyPrimaryZones(serials)
-	return nil
+	return map[dnsRRsetKey][]dnsRR{key: before}, nil
 }
 
 // applyDelete withdraws the records written for a binding.
