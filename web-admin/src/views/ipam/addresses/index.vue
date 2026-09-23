@@ -122,7 +122,7 @@ const columns = [
         default: () => [
           h(NButton, { size: 'small', text: true, onClick: () => openDetail(row) }, { default: () => t('ipam.addresses.viewDetail') }),
           row.status === 'used'
-            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
+            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
             : null,
         ].filter(Boolean),
       }),
