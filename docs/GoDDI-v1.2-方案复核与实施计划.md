@@ -76,7 +76,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W10 安全/备份 | 加密备份、restore 版本/schema 门禁和全状态归档已有实现 | 密钥异机保存/找回、真实权限/TSIG 恢复、硬件断电持久性 |
 | W11 可观测性 | facts consumer gap/readiness、producer backlog/失败/水位、HA replication 水位和备份年龄指标已接线 | 正式 Prometheus 抓取、告警规则/阈值、恢复动作与告警演练 |
 | W12 升级/灾备 | 在线 WAL 原地 restore 与空白异路径整机恢复 smoke 均通过 | 逐节点升级、expand-contract 兼容性、现场密钥及介质恢复 |
-| W13 产品体验 | 尚无本轮完成的 UI/API 工作包实现 | 地址详情、子网到池、dry-run 导入、API/Web 权限契约 |
+| W13 产品体验 | DNS 区域详情新增 CSV/BIND 文件导入预检与显式应用；服务层请求契约与后端 JSON API 对齐，嵌入式前端已重建 | 地址详情、子网到池、API/Web 权限契约的全量核对与端到端浏览器验收 |
 | W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
 
 最新工作树 `go test ./...` 与 `go vet ./...` 均通过；W12-a/W12-c 隔离式 restore 演练通过。上述表中仍标为未关闭的现场/部署退出条件没有被仓内测试代替。当前分支只作为草稿 PR 评审，未满足正式发布门槛。
@@ -307,6 +307,12 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 继续核对区域改名批量移动 owner 的写入，发现 owner 移入已有 RR 名称时同样可能产生 CNAME 共存。现改名后在原事务内检查最终 owner 集合；冲突时区域名、记录和 serial/journal 一并回滚。回归覆盖 CNAME 移入已有 A owner；zone、transfer、dynamic_update 测试和 zone lint 通过。
 - 为闭合 BIND zonefile 的 dry-run，新增 `PreviewZoneFile` 与 API `dry_run=true` 路径：使用与真实导入相同的解析、RRset/CNAME 校验、插入、serial 和 journal 操作，成功后显式回滚；失败路径也由事务回滚。回归确认合法 A/MX 给出分类统计但无 records/journal 写入，已有 CNAME 冲突会拒绝且不改变记录、serial 或 history。
 - BIND 导入改为使用共用的 CNAME owner 校验器；RRset TTL 与 CNAME 校验统一忽略 owner 的末尾点，防止 API FQDN 与导入相对名绕过冲突检查。zone 与 API handler 定向测试、lint 通过；仍可进一步补充 BIND 多冲突聚合诊断。
+
+### W13 DNS 区域导入体验（2026-09-24，代码实现完成）
+
+- DNS 区域详情增加 CSV/BIND 导入入口，可选择本地文件或粘贴内容；先调用 dry-run 展示记录数、类型统计与 CSV 冲突，再由用户明确点击执行导入。内容或格式变化会清除预检结果；真正导入若发生并发冲突会要求重新预检。
+- 修复管理端遗留的 multipart 上传与后端 JSON 导入接口不一致问题，统一发送 `{content, format, dry_run}`。中英文文案与 schema 类型已更新，Go 内嵌使用的 `web/dist` 由当前管理端构建产物重新生成。
+- `pnpm typecheck` 与 `pnpm build` 通过。该提交只实现 DNS 导入交互；IP 详情、子网到池工作流、权限契约全量核对和真实浏览器验收仍未完成。
 
 ## 范围与限制
 

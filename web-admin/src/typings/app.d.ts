@@ -650,6 +650,15 @@ declare namespace App {
           minimum: string;
           ttl: string;
           importZone: string;
+          importPreviewHint: string;
+          importContentPlaceholder: string;
+          importPreview: string;
+          importApply: string;
+          importPreviewValid: string;
+          importPreviewConflicts: string;
+          importRecordCount: string;
+          importConflictRow: string;
+          importSuccess: string;
           exportZone: string;
           syncZone: string;
           enableDnssec: string;

@@ -4,6 +4,7 @@
       <n-space>
         <n-button @click="router.push('/dns/zones')">{{ t('common.cancel') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateRecord">{{ t('dns.records.createRecord') }}</n-button>
+        <n-button v-if="perm.canWrite('dns')" @click="showImport = true">{{ t('dns.zones.importZone') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleSync" :disabled="zone?.type !== 'slave'">{{ t('dns.zones.syncZone') }}</n-button>
       </n-space>
@@ -160,6 +161,33 @@
       </n-tabs>
     </n-card>
 
+    <n-modal v-model:show="showImport" preset="card" :title="t('dns.zones.importZone')" style="width: min(760px, 92vw);">
+      <n-space vertical size="large">
+        <n-alert type="info" size="small">{{ t('dns.zones.importPreviewHint') }}</n-alert>
+        <n-space align="center">
+          <n-select v-model:value="importFormat" :options="importFormatOptions" style="width: 180px" @update:value="clearImportPreview" />
+          <input type="file" :accept="importFormat === 'csv' ? '.csv,text/csv' : '.zone,.bind,.txt,text/plain'" @change="loadImportFile" />
+        </n-space>
+        <n-input v-model:value="importContent" type="textarea" :rows="12" :placeholder="t('dns.zones.importContentPlaceholder')" @update:value="clearImportPreview" />
+        <n-alert v-if="importPreview" :type="importPreview.valid ? 'success' : 'warning'" :title="importPreview.valid ? t('dns.zones.importPreviewValid') : t('dns.zones.importPreviewConflicts')">
+          <div>{{ t('dns.zones.importRecordCount', { count: importPreview.record_count }) }}</div>
+          <div v-if="Object.keys(importPreview.record_types || {}).length">{{ Object.entries(importPreview.record_types).map(([type, count]) => `${type}: ${count}`).join(' · ') }}</div>
+          <ul v-if="importPreview.conflicts?.length">
+            <li v-for="(conflict, index) in importPreview.conflicts" :key="`${conflict.row}-${index}`">
+              {{ t('dns.zones.importConflictRow', { row: conflict.row, owner: conflict.owner, type: conflict.type, message: conflict.message }) }}
+            </li>
+          </ul>
+        </n-alert>
+      </n-space>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
+          <n-button :loading="importPreviewLoading" :disabled="!importContent.trim()" @click="previewImport">{{ t('dns.zones.importPreview') }}</n-button>
+          <n-button type="primary" :loading="importApplying" :disabled="!importPreview?.valid" @click="applyImport">{{ t('dns.zones.importApply') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
     <!-- Add/Edit Record Modal -->
     <n-modal v-if="showAddRecord" v-model:show="showAddRecord" preset="card" :title="editingRecord ? t('dns.records.editRecord') : t('dns.records.createRecord')" style="width: 500px;">
       <n-form :model="recordForm" label-placement="left" label-width="100px">
@@ -230,14 +258,14 @@ import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
 import {
-  getDNSZone, updateDNSZone, exportZoneFile, syncSecondaryZone,
+  getDNSZone, updateDNSZone, exportZoneFile, importZoneFile, syncSecondaryZone,
   enableDNSSEC, disableDNSSEC, rotateDNSSECKeys, getDNSSECStatus,
   listDNSRecords, createDNSRecord, updateDNSRecord, deleteDNSRecord,
   getZoneHistory, getZonePermissions, setZonePermissions, getCatalogMembers, listDNSZones,
   getZoneDSRecords, generateDNSSECKey, deleteDNSSECKey, toggleDNSSECKey, promoteDNSSECStandbyKeys,
   getNSEC3Params, setNSEC3Params,
   type DNSZone, type DNSRecord, type CreateDNSRecordRequest, type ZoneACL,
-  type ZonePermission, type ZoneChangeEntry, type DNSSECKey, type DNSSECStatus, type DSInfo,
+  type ZonePermission, type ZoneChangeEntry, type DNSSECKey, type DNSSECStatus, type DSInfo, type ZoneImportPreview,
 } from '@/service/api/goddi/dns'
 
 const router = useRouter()
@@ -245,6 +273,17 @@ const route = useRoute()
 const { t } = useI18n()
 const message = useMessage()
 const perm = usePermission()
+
+const showImport = ref(false)
+const importFormat = ref<'bind' | 'csv'>('bind')
+const importContent = ref('')
+const importPreview = ref<ZoneImportPreview | null>(null)
+const importPreviewLoading = ref(false)
+const importApplying = ref(false)
+const importFormatOptions = [
+  { label: 'BIND zone file', value: 'bind' },
+  { label: 'CSV', value: 'csv' },
+]
 
 const zoneId = route.params.id as string
 const zone = ref<DNSZone | null>(null)
@@ -507,6 +546,56 @@ async function handleExport() {
     window.URL.revokeObjectURL(url)
   } catch (err: unknown) {
     message.error(err instanceof Error ? err.message : t('common.failed'))
+  }
+}
+
+function clearImportPreview() {
+  importPreview.value = null
+}
+
+async function loadImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    importContent.value = await file.text()
+    importPreview.value = null
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    input.value = ''
+  }
+}
+
+async function previewImport() {
+  importPreviewLoading.value = true
+  try {
+    const response = await importZoneFile(zoneId, importContent.value, importFormat.value, true)
+    importPreview.value = response.data.data as ZoneImportPreview
+  } catch (err: unknown) {
+    importPreview.value = null
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    importPreviewLoading.value = false
+  }
+}
+
+async function applyImport() {
+  if (!importPreview.value?.valid) return
+  importApplying.value = true
+  try {
+    await importZoneFile(zoneId, importContent.value, importFormat.value)
+    message.success(t('dns.zones.importSuccess'))
+    showImport.value = false
+    importContent.value = ''
+    importPreview.value = null
+    loadZone()
+    loadRecords()
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+    importPreview.value = null
+  } finally {
+    importApplying.value = false
   }
 }
 
