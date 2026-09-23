@@ -201,6 +201,7 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
 		Format  string `json:"format"` // "bind" or "csv"
+		DryRun  bool   `json:"dry_run,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.BadRequest(w, "无效的请求数据")
@@ -230,11 +231,27 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Format {
 	case "csv":
+		if req.DryRun {
+			preview, err := recordMgr.PreviewRecordsCSV(zoneID, []byte(req.Content))
+			if err != nil {
+				response.BadRequest(w, err.Error())
+				return
+			}
+			response.OKWithMessage(w, "CSV validation succeeded", map[string]interface{}{
+				"zone_id": zoneID, "dry_run": true,
+				"record_count": preview.RecordCount, "record_types": preview.RecordTypes,
+			})
+			return
+		}
 		if err := recordMgr.ImportRecordsCSV(zoneID, []byte(req.Content)); err != nil {
 			response.InternalErrorWithLog(w, "导入CSV失败", err)
 			return
 		}
 	default:
+		if req.DryRun {
+			response.BadRequest(w, "dry_run is currently supported for CSV imports only")
+			return
+		}
 		if err := recordMgr.ImportZoneFile(zoneID, req.Content); err != nil {
 			response.InternalErrorWithLog(w, "导入区域文件失败", err)
 			return

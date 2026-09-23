@@ -11,6 +11,12 @@ import (
 	"github.com/miekg/dns"
 )
 
+// CSVImportPreview summarizes a fully parsed CSV import without writing it.
+type CSVImportPreview struct {
+	RecordCount int            `json:"record_count"`
+	RecordTypes map[string]int `json:"record_types"`
+}
+
 // ImportZoneFile parses a BIND zone file and imports records into the specified zone.
 func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	if zoneID == "" {
@@ -204,6 +210,17 @@ func (m *RecordManager) ExportZoneFile(zoneID string) (string, error) {
 
 // ImportRecordsCSV imports records from CSV data into the specified zone.
 func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
+	return m.importRecordsCSV(zoneID, csvData, false, nil)
+}
+
+// PreviewRecordsCSV validates a CSV import and reports its size without writing records.
+func (m *RecordManager) PreviewRecordsCSV(zoneID string, csvData []byte) (CSVImportPreview, error) {
+	var preview CSVImportPreview
+	err := m.importRecordsCSV(zoneID, csvData, true, &preview)
+	return preview, err
+}
+
+func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun bool, preview *CSVImportPreview) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
 	}
@@ -331,6 +348,16 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			flag:     flag,
 			tag:      tag,
 		})
+	}
+	if preview != nil {
+		preview.RecordCount = len(records)
+		preview.RecordTypes = make(map[string]int)
+		for _, rec := range records {
+			preview.RecordTypes[rec.rtype]++
+		}
+	}
+	if dryRun {
+		return nil
 	}
 
 	// Insert all records in a single transaction.

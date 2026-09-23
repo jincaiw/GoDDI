@@ -160,6 +160,28 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		}
 	})
 
+	t.Run("CSV preview validates without writing", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-preview.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.10,300,,,,,\n")
+		preview, err := manager.PreviewRecordsCSV(z.ID, data)
+		if err != nil {
+			t.Fatalf("preview CSV import: %v", err)
+		}
+		if preview.RecordCount != 1 || preview.RecordTypes["A"] != 1 {
+			t.Fatalf("CSV preview = %+v", preview)
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("dry-run wrote %d records", count)
+		}
+	})
+
 	t.Run("zone-file out-of-zone owner is rejected", func(t *testing.T) {
 		z, err := zoneManager.CreateZone(ZoneOptions{Name: "owner-boundary.test", Type: string(ZoneTypePrimary)})
 		if err != nil {
