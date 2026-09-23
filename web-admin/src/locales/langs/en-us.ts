@@ -876,6 +876,8 @@ const local: App.I18n.Schema = {
       replan: 'Recalculate the plan',
       next: 'Next',
       create: 'Create scope',
+      noDhcpPermission: 'DHCP write permission required',
+      noDhcpPermissionHint: 'Viewing the pool plan requires IPAM write permission. Creating the scope also requires DHCP write permission. Ask an administrator to update your permissions.',
       created: 'Scope created',
     },
   },

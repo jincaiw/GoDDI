@@ -871,6 +871,8 @@ const local: App.I18n.Schema = {
       replan: '重新计算计划',
       next: '下一步',
       create: '创建作用域',
+      noDhcpPermission: '缺少 DHCP 写入权限',
+      noDhcpPermissionHint: '查看建池计划需要 IPAM 写入权限；提交作用域还需要 DHCP 写入权限。请联系管理员调整权限。',
       created: '作用域已创建',
     },
   },

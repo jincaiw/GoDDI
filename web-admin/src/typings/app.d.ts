@@ -954,6 +954,8 @@ declare namespace App {
           replan: string;
           next: string;
           create: string;
+          noDhcpPermission: string;
+          noDhcpPermissionHint: string;
           created: string;
         };
       };

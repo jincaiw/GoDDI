@@ -1,1 +1,0 @@
-import{C as e}from"./router-DopQxr2x.js";function t(t){return e(`/logs/audit`,t)}export{t};

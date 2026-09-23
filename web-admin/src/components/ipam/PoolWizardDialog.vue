@@ -18,6 +18,10 @@
       </n-alert>
 
       <template v-else-if="plan">
+        <n-alert v-if="!perm.canWrite('dhcp')" type="warning" :title="t('ipam.pool.noDhcpPermission')" style="margin-bottom: 14px;">
+          {{ t('ipam.pool.noDhcpPermissionHint') }}
+        </n-alert>
+
         <!-- The world moved between the plan and the create. The operator is
              holding an approval of something that is no longer true, so the
              only useful action is to look again. -->
@@ -125,7 +129,7 @@
         >
           {{ t('ipam.pool.next') }}
         </n-button>
-        <n-button v-else type="primary" :loading="creating" @click="create">
+        <n-button v-else type="primary" :loading="creating" :disabled="!perm.canWrite('dhcp')" @click="create">
           {{ t('ipam.pool.create') }}
         </n-button>
       </n-space>
@@ -137,6 +141,7 @@
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NTag, useMessage } from 'naive-ui'
+import { usePermission } from '@/composables/usePermission'
 import SectionTitle from '@/components/ipam/SectionTitle.vue'
 import { ApiError } from '@/service/api/goddi/client'
 import { getIPAMPoolPlan, type DHCPScopePlan, type PlanAddress, type ScopeDraft } from '@/service/api/goddi/ipam'
@@ -155,6 +160,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 const step = ref<'plan' | 'confirm'>('plan')
 const loading = ref(false)
