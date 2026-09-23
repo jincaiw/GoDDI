@@ -119,6 +119,65 @@ func TestCAARecordMetadataPersistsAcrossCreateUpdateAndJournal(t *testing.T) {
 	}
 }
 
+func TestImportsFailClosedOnMalformedOrLossyRecords(t *testing.T) {
+	store, err := dataplane.Open(config.DataPlaneZone, filepath.Join(t.TempDir(), "zones.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	zoneStore := NewStore(store.DB)
+	defer zoneStore.Close()
+	zoneManager := NewZoneManager(store.DB, zoneStore)
+	manager := NewRecordManager(store.DB, zoneStore, zoneManager)
+
+	t.Run("CSV unsupported type rolls back entire import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-fail.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.8,300,,,,,\nbad,TYPE65000,\\# 1 00,300,,,,,\n")
+		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("import with unsupported type unexpectedly succeeded")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("failed CSV import left %d records", count)
+		}
+	})
+
+	t.Run("CSV malformed row is rejected", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-malformed.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.ImportRecordsCSV(z.ID, []byte("name,type,value\nwww,A,192.0.2.8\nbad,\"A,broken\n")); err == nil {
+			t.Fatal("malformed CSV unexpectedly succeeded")
+		}
+	})
+
+	t.Run("zone file lossy NAPTR is rejected", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "naptr-fail.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		zoneFile := `@ 300 IN NAPTR 100 10 "s" "SIP+D2U" "" _sip._udp.naptr-fail.test.`
+		if err := manager.ImportZoneFile(z.ID, zoneFile); err == nil {
+			t.Fatal("lossy NAPTR import unexpectedly succeeded")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("failed zone-file import left %d records", count)
+		}
+	})
+}
+
 func TestCAAFlagMustFitWireOctet(t *testing.T) {
 	for _, flag := range []int{-1, 256} {
 		if err := validateRecordValue("CAA", "ca.example.test", nil, nil, nil, "issue", &flag); err == nil {

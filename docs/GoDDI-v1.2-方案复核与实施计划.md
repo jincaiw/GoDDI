@@ -156,6 +156,14 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 回归用例覆盖创建、局部更新、authoritative CAA answer、journal/API history、CSV 与 zonefile 导入，以及 flag 边界。
 - `go test ./...`、`go vet ./...`、`go build ./...` 及 zone/transfer/dynamic update/dataplane 关键包 race 检查通过。此修复补足了 journal 元数据的一类缺口，但不等于所有 RR 类型都已具备完整 delta history；IXFR 继续回退 AXFR。
 
+### v0.13.0 后续修复（2026-09-23）
+
+- 导入路径此前会忽略 CSV 语法错误、列不足、无效数字及不支持的 RR 类型；zonefile 导入会跳过无法表示的 RR，并且 NAPTR 只保留 replacement 字段。这些情况会让调用方得到成功响应但区域数据不完整。
+- CSV 导入改为对解析错误、字段数量、数值字段和不支持的类型明确报错；所有记录先完成校验，再进入单一事务，不会部分写入。
+- zonefile 导入遇到未知 RR 类型、无法编码的 RDATA 或当前 schema 无法无损表示的 NAPTR 时明确失败；此前已能保留元数据的 CAA 路径保持正常。
+- 回归覆盖 CSV 混合有效/无效行整体拒绝、CSV 语法错误和 NAPTR zonefile 拒绝，确认失败后记录数为零。全量 Go 测试、关键 DNS/dataplane 竞态检查、`go vet` 与构建通过。
+- W06 的 dry-run、导入预检及更多 RR 类型的无损表示仍未完成；本修复只消除静默部分成功，不代表导入能力验收完成。
+
 ## 范围与限制
 
 本计划按用户授权直接选择工程默认值，已记录在 ADR-0008；DHCP HA 默认沿用已接受的 ADR-0003。`impl-v0.6.0` 中未提交内容仍属于进行中的工作，复核时只读参考；实施分支从其最新发布提交创建，未将那些未提交修改复制或改写。目标客户的容量和真实拓扑仍需在发布验证中固定，未有证据前不作数值承诺。

@@ -60,9 +60,18 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		}
 
 		rtype := dns.TypeToString[hdr.Rrtype]
+		if rtype == "" {
+			return fmt.Errorf("zone-file import contains an unsupported RR type %d", hdr.Rrtype)
+		}
+		// NAPTR RDATA contains flags, service, and regexp fields that the
+		// current record schema cannot preserve. Reject it instead of
+		// importing only the replacement name and returning a partial success.
+		if rtype == "NAPTR" {
+			return fmt.Errorf("zone-file import cannot preserve NAPTR RDATA yet")
+		}
 		value := rrToString(rr)
-		if value == "" {
-			continue
+		if value == "" && rtype != "TXT" {
+			return fmt.Errorf("zone-file import cannot represent %s record at %s", rtype, hdr.Name)
 		}
 
 		id := uuid.New().String()
@@ -235,12 +244,15 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			break
 		}
 		if err != nil {
-			continue
+			return fmt.Errorf("reading CSV record: %w", err)
 		}
 
 		// CSV format: name, type, value, ttl, priority, weight, port, flag, tag.
 		if len(record) < 3 {
-			continue
+			return fmt.Errorf("CSV record must contain at least name, type, and value")
+		}
+		if len(record) > 9 {
+			return fmt.Errorf("CSV record has %d columns; at most 9 are supported", len(record))
 		}
 
 		name := record[0]
@@ -254,24 +266,35 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 		tag := ""
 
 		if len(record) > 3 && record[3] != "" {
-			if v, err := strconv.Atoi(record[3]); err == nil {
-				ttl = v
+			v, err := strconv.Atoi(record[3])
+			if err != nil || v < 0 {
+				return fmt.Errorf("invalid CSV TTL %q", record[3])
 			}
+			ttl = v
 		}
 		if len(record) > 4 && record[4] != "" {
-			if v, err := strconv.Atoi(record[4]); err == nil {
-				priority = v
+			v, err := strconv.Atoi(record[4])
+			if err != nil {
+				return fmt.Errorf("invalid CSV priority %q", record[4])
 			}
+			priority = v
 		}
 		if len(record) > 5 && record[5] != "" {
-			if v, err := strconv.Atoi(record[5]); err == nil {
-				weight = v
+			v, err := strconv.Atoi(record[5])
+			if err != nil {
+				return fmt.Errorf("invalid CSV weight %q", record[5])
 			}
+			weight = v
 		}
 		if len(record) > 6 && record[6] != "" {
-			if v, err := strconv.Atoi(record[6]); err == nil {
-				port = v
+			v, err := strconv.Atoi(record[6])
+			if err != nil {
+				return fmt.Errorf("invalid CSV port %q", record[6])
 			}
+			port = v
+		}
+		if !SupportedRecordTypes[rtype] {
+			return fmt.Errorf("CSV contains unsupported record type %q", rtype)
 		}
 		if rtype == "CAA" {
 			if len(record) < 9 {
@@ -286,10 +309,6 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			if err := validateRecordValue("CAA", value, nil, nil, nil, tag, &flag); err != nil {
 				return fmt.Errorf("invalid CSV CAA record: %w", err)
 			}
-		}
-
-		if !SupportedRecordTypes[rtype] {
-			continue
 		}
 
 		records = append(records, csvRecord{
