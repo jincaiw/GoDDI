@@ -80,7 +80,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -98,7 +98,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCloneModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleClone">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleClone">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -119,7 +119,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showConvertModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleConvert">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleConvert">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>

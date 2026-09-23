@@ -61,7 +61,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="importing" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
+            <n-button type="primary" :loading="importing" :disabled="!perm.canWrite('dns')" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -145,6 +145,7 @@ async function handleQuery() {
 }
 
 async function openImport(row: DNSQueryAnswer) {
+  if (!perm.canWrite('dns')) return
   importForm.name = row.name
   importForm.type = row.type
   importForm.value = row.data
@@ -164,6 +165,7 @@ async function openImport(row: DNSQueryAnswer) {
 }
 
 async function handleImportSubmit() {
+  if (!perm.canWrite('dns')) return
   if (!importForm.zone_id || !importForm.name || !importForm.value) {
     message.warning(t('common.required'))
     return

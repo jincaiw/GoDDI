@@ -1,1 +1,0 @@
-import{C as e}from"./router-CuiVsVq4.js";function t(t){return e(`/logs/audit`,t)}export{t};

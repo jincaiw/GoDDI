@@ -241,6 +241,7 @@ async function load() {
 }
 
 async function create() {
+  if (!perm.canWrite('dhcp')) return
   if (!plan.value || !draft.value) return
   creating.value = true
   stale.value = false

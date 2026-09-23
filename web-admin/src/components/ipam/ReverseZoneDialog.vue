@@ -134,6 +134,7 @@ async function load() {
 }
 
 async function create() {
+  if (!perm.canWrite('dns')) return
   if (!plan.value || !selected.value) return
   creating.value = true
   try {

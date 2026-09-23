@@ -41,7 +41,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAllocateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="allocating" @click="handleAllocate">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="allocating" :disabled="!perm.canWrite('ipam')" @click="handleAllocate">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -152,6 +152,7 @@ async function loadSubnets() {
 }
 
 async function handleAllocate() {
+  if (!perm.canWrite('ipam')) return
   allocating.value = true
   try {
     await allocateIP(allocateForm)
@@ -162,6 +163,7 @@ async function handleAllocate() {
 }
 
 async function handleRelease() {
+  if (!perm.canWrite('ipam')) return
   try { await releaseIP(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showReleaseConfirm.value = false
 }

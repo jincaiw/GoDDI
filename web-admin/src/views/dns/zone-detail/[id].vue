@@ -216,7 +216,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAddRecord = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="recordSubmitting" @click="handleRecordSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="recordSubmitting" :disabled="!perm.canWrite('dns')" @click="handleRecordSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -234,7 +234,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showGenerateKey = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleGenerateKey">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleGenerateKey">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
