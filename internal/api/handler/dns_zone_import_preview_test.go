@@ -36,13 +36,16 @@ func TestCSVZoneImportDryRunReportsCountsWithoutWriting(t *testing.T) {
 			ZoneID      string         `json:"zone_id"`
 			DryRun      bool           `json:"dry_run"`
 			RecordCount int            `json:"record_count"`
+			Creates     int            `json:"creates"`
+			Unchanged   int            `json:"unchanged"`
 			RecordTypes map[string]int `json:"record_types"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode dry-run response: %v (%s)", err, rec.Body.String())
 	}
-	if envelope.Data.ZoneID != zone.ID || !envelope.Data.DryRun || envelope.Data.RecordCount != 1 || envelope.Data.RecordTypes["A"] != 1 {
+	if envelope.Data.ZoneID != zone.ID || !envelope.Data.DryRun || envelope.Data.RecordCount != 1 ||
+		envelope.Data.Creates != 1 || envelope.Data.Unchanged != 0 || envelope.Data.RecordTypes["A"] != 1 {
 		t.Fatalf("dry-run response = %+v", envelope.Data)
 	}
 	var count int

@@ -239,7 +239,8 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 			}
 			response.OKWithMessage(w, "CSV validation succeeded", map[string]interface{}{
 				"zone_id": zoneID, "dry_run": true,
-				"record_count": preview.RecordCount, "record_types": preview.RecordTypes,
+				"record_count": preview.RecordCount, "creates": preview.Creates,
+				"unchanged": preview.Unchanged, "record_types": preview.RecordTypes,
 			})
 			return
 		}

@@ -165,12 +165,12 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.10,300,,,,,\n")
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,A,192.0.2.10,300,,,,,\nwww,A,192.0.2.10,300,,,,,\n")
 		preview, err := manager.PreviewRecordsCSV(z.ID, data)
 		if err != nil {
 			t.Fatalf("preview CSV import: %v", err)
 		}
-		if preview.RecordCount != 1 || preview.RecordTypes["A"] != 1 {
+		if preview.RecordCount != 2 || preview.RecordTypes["A"] != 2 || preview.Creates != 1 || preview.Unchanged != 1 {
 			t.Fatalf("CSV preview = %+v", preview)
 		}
 		var count int
@@ -179,6 +179,43 @@ func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
 		}
 		if count != 0 {
 			t.Fatalf("dry-run wrote %d records", count)
+		}
+		if err := manager.ImportRecordsCSV(z.ID, data); err != nil {
+			t.Fatalf("import duplicate rows idempotently: %v", err)
+		}
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("duplicate CSV import wrote %d rows, want one RR", count)
+		}
+		preview, err = manager.PreviewRecordsCSV(z.ID, data)
+		if err != nil {
+			t.Fatalf("preview already imported CSV: %v", err)
+		}
+		if preview.Creates != 0 || preview.Unchanged != 2 {
+			t.Fatalf("existing-record CSV preview = %+v", preview)
+		}
+	})
+
+	t.Run("CSV CNAME conflict rejects the whole import", func(t *testing.T) {
+		z, err := zoneManager.CreateZone(ZoneOptions{Name: "csv-cname-conflict.test", Type: string(ZoneTypePrimary)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("name,type,value,ttl,priority,weight,port,flag,tag\nwww,CNAME,target.example.test.,300,,,,,\nwww,A,192.0.2.11,300,,,,,\n")
+		if _, err := manager.PreviewRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV containing a CNAME and A record at the same owner unexpectedly passed preview")
+		}
+		if err := manager.ImportRecordsCSV(z.ID, data); err == nil {
+			t.Fatal("CSV containing a CNAME and A record at the same owner unexpectedly imported")
+		}
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ?`, z.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected CNAME conflict left %d records", count)
 		}
 	})
 

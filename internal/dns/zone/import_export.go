@@ -14,6 +14,8 @@ import (
 // CSVImportPreview summarizes a fully parsed CSV import without writing it.
 type CSVImportPreview struct {
 	RecordCount int            `json:"record_count"`
+	Creates     int            `json:"creates"`
+	Unchanged   int            `json:"unchanged"`
 	RecordTypes map[string]int `json:"record_types"`
 }
 
@@ -292,6 +294,9 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			}
 			ttl = v
 		}
+		if err := validateRecordTTL(ttl); err != nil {
+			return fmt.Errorf("invalid CSV TTL: %w", err)
+		}
 		if len(record) > 4 && record[4] != "" {
 			v, err := strconv.Atoi(record[4])
 			if err != nil {
@@ -326,14 +331,9 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			}
 			// Validate against the same CAA tag/value rules as API writes.
 			tag = record[8]
-			if err := validateRecordValue("CAA", value, nil, nil, nil, tag, &flag); err != nil {
-				return fmt.Errorf("invalid CSV CAA record: %w", err)
-			}
 		}
-		if rtype == "NAPTR" {
-			if err := validateRecordValue(rtype, value, &priority, &weight, nil, "", nil); err != nil {
-				return fmt.Errorf("invalid CSV NAPTR record: %w", err)
-			}
+		if err := validateRecordValue(rtype, value, &priority, &weight, &port, tag, &flag); err != nil {
+			return fmt.Errorf("invalid CSV %s record: %w", rtype, err)
 		}
 
 		records = append(records, csvRecord{
@@ -349,23 +349,96 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 			tag:      tag,
 		})
 	}
-	if preview != nil {
-		preview.RecordCount = len(records)
-		preview.RecordTypes = make(map[string]int)
-		for _, rec := range records {
-			preview.RecordTypes[rec.rtype]++
-		}
-	}
-	if dryRun {
-		return nil
-	}
-
-	// Insert all records in a single transaction.
+	// Classify duplicates and CNAME conflicts against one database snapshot,
+	// then insert the accepted rows in that same transaction.
 	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	existingRows, err := tx.Query(`
+		SELECT name, type, value, ttl, COALESCE(priority, 0), COALESCE(weight, 0),
+			COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
+		FROM dns_records WHERE zone_id = ? AND enabled = 1`, zoneID)
+	if err != nil {
+		return fmt.Errorf("querying existing records: %w", err)
+	}
+	existing := make(map[string]int)
+	ownerTypes := make(map[string]map[string]struct{})
+	for existingRows.Next() {
+		var name, rtype, value, tag string
+		var ttl, priority, weight, port, flag int
+		if err := existingRows.Scan(&name, &rtype, &value, &ttl, &priority, &weight, &port, &flag, &tag); err != nil {
+			existingRows.Close()
+			return fmt.Errorf("scanning existing record: %w", err)
+		}
+		owner := dns.Fqdn(strings.ToLower(name))
+		existing[csvRecordIdentity(owner, rtype, value, priority, weight, port, flag, tag)] = ttl
+		if ownerTypes[owner] == nil {
+			ownerTypes[owner] = make(map[string]struct{})
+		}
+		ownerTypes[owner][rtype] = struct{}{}
+	}
+	if err := existingRows.Err(); err != nil {
+		existingRows.Close()
+		return fmt.Errorf("reading existing records: %w", err)
+	}
+	if err := existingRows.Close(); err != nil {
+		return fmt.Errorf("closing existing records: %w", err)
+	}
+
+	if preview != nil {
+		preview.RecordCount = len(records)
+		preview.RecordTypes = make(map[string]int)
+		preview.Creates = 0
+		preview.Unchanged = 0
+		for _, rec := range records {
+			preview.RecordTypes[rec.rtype]++
+		}
+	}
+	creates := make([]csvRecord, 0, len(records))
+	for _, rec := range records {
+		owner := dns.Fqdn(strings.ToLower(rec.name))
+		types := ownerTypes[owner]
+		if rec.rtype == "CNAME" {
+			for existingType := range types {
+				if existingType != "CNAME" {
+					return fmt.Errorf("CNAME at %q conflicts with existing %s record", owner, existingType)
+				}
+			}
+		} else if _, hasCNAME := types["CNAME"]; hasCNAME {
+			return fmt.Errorf("%s at %q conflicts with existing CNAME record", rec.rtype, owner)
+		}
+		identity := csvRecordIdentity(owner, rec.rtype, rec.value, rec.priority, rec.weight, rec.port, rec.flag, rec.tag)
+		if previousTTL, duplicate := existing[identity]; duplicate {
+			if previousTTL != rec.ttl {
+				return fmt.Errorf("duplicate %s record at %q has TTL %d, existing value uses TTL %d", rec.rtype, owner, rec.ttl, previousTTL)
+			}
+			if preview != nil {
+				preview.Unchanged++
+			}
+			continue
+		}
+		if rec.rtype == "CNAME" && len(types) > 0 {
+			return fmt.Errorf("multiple different CNAME records at %q", owner)
+		}
+		if types == nil {
+			types = make(map[string]struct{})
+			ownerTypes[owner] = types
+		}
+		types[rec.rtype] = struct{}{}
+		existing[identity] = rec.ttl
+		creates = append(creates, rec)
+	}
+	if preview != nil {
+		preview.Creates = len(creates)
+		preview.Unchanged = preview.RecordCount - preview.Creates
+	}
+	if dryRun {
+		return nil
+	}
+	records = creates
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled)
@@ -408,6 +481,12 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 	}
 
 	return nil
+}
+
+func csvRecordIdentity(name, rtype, value string, priority, weight, port, flag int, tag string) string {
+	return fmt.Sprintf("%q|%q|%q|%d|%d|%d|%d|%q",
+		dns.Fqdn(strings.ToLower(name)), strings.ToUpper(rtype), value,
+		priority, weight, port, flag, tag)
 }
 
 // ExportRecordsCSV exports records from the specified zone as CSV data.
