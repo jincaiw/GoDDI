@@ -328,6 +328,7 @@ W12-a/W12-c 隔离式 restore 演练通过。完整 `go test ./...` 与 `go vet 
 - 持续权限审计发现 DHCP 的 scope/reservation/option 编辑及 DNS forwarder、安全策略、封禁/允许列表、区域、DNSSEC 操作、客户端查询结果导入和 IPAM 创建/分配等路径存在遗漏的入口、确认按钮或处理器权限门禁。现已补齐对应 `read`/`write`/`delete` 检查：IPAM 导入预览允许有读取权限者查看，实际导入须有写权限；IPAM 地址/对象变更及 DNS 区域创建/记录编辑/密钥生成均在提交处重新校验。只读 DNS 导出按钮也改为匹配 `dns:read`；保留 API 端的权限校验作为最终边界。
 - 本轮继续抽查发现用户、组、角色、令牌、系统设置和配置版本回滚的按钮虽已按权限禁用，部分处理函数仍缺少自身权限复核。现新增 handler/open-action 权限守卫，覆盖 `user/group/role/token/settings` 的写、删与角色授权操作。
 - 当前增量完成 `go build ./...`、`pnpm --dir web-admin typecheck`、生产构建和内嵌 `web/dist` 同步。跨模块权限修复尚待最新 PR CI 和浏览器验收；没有用静态检查替代端到端权限验收。
+- 后续复核发现 DNS 客户端执行上游查询的按钮和处理函数缺少 `dns:read` 前置门禁；现已同时禁用无读权限用户的执行按钮，并在处理函数入口再次校验。本轮前端类型检查、生产构建、Go 构建、内嵌资源同步和差异检查通过；PR CI 全量 job 尚待通过。
 
 ## 范围与限制
 

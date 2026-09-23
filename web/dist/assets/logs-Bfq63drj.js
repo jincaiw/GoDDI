@@ -1,0 +1,1 @@
+import{C as e}from"./router-JLO-BMlS.js";function t(t){return e(`/logs/audit`,t)}export{t};

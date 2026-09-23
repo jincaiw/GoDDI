@@ -14,7 +14,7 @@
           <n-input v-model:value="queryForm.upstream" placeholder="Optional" style="width: 200px;" clearable />
         </n-form-item>
         <n-form-item>
-          <n-button type="primary" :loading="querying" @click="handleQuery">{{ t('dns.client.execute') }}</n-button>
+          <n-button type="primary" :loading="querying" :disabled="!perm.canRead('dns')" @click="handleQuery">{{ t('dns.client.execute') }}</n-button>
         </n-form-item>
       </n-form>
     </n-card>
@@ -123,6 +123,7 @@ const answerColumns = [
 ]
 
 async function handleQuery() {
+  if (!perm.canRead('dns')) return
   if (!queryForm.name) {
     message.warning('Please enter a domain name')
     return
