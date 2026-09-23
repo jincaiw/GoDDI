@@ -81,9 +81,9 @@ const columns = [
   { title: () => t('admin.users.roles'), key: 'roles', render: (row: Group) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Group) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group') || !perm.canRead('role'), onClick: () => { assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('group'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group'), onClick: () => { if (!perm.canWrite('group')) return; editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group') || !perm.canRead('role'), onClick: () => { if (!perm.canWrite('group') || !perm.canRead('role')) return; assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('group'), onClick: () => { if (!perm.canDelete('group')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

@@ -74,8 +74,8 @@ const columns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPReservation) => h(NSwitch, { value: row.enabled, disabled: true }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPReservation) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dhcp'), onClick: () => { editing.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dhcp'), onClick: () => { if (!perm.canWrite('dhcp')) return; editing.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { if (!perm.canDelete('dhcp')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

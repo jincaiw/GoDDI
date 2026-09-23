@@ -111,7 +111,7 @@ const forwarderColumns = [
   } }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSForwarder) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => { editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => { if (!perm.canWrite('dns')) return; editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteFwd(row.id) }, { default: () => t('common.delete') }),
     ],
   }) },

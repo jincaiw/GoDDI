@@ -124,11 +124,11 @@ const columns = [
   { title: () => t('ipam.subnets.location'), key: 'location' },
   { title: () => t('common.actions'), key: 'actions', width: 340, render: (row: IPAMSubnet) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', text: true, disabled: !perm.canRead('ipam'), onClick: () => openImport(row) }, { default: () => t('ipam.subnets.importAddresses') }),
       h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openPool(row) }, { default: () => t('ipam.subnets.createDhcpScope') }),
       h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openReverseZone(row) }, { default: () => t('ipam.subnets.generateReverseZone') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { if (!perm.canDelete('ipam')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

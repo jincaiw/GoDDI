@@ -237,7 +237,7 @@ const columns = [
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, onClick: () => router.push(`/dns/zone-detail/${row.id}`) }, { default: () => t('common.edit') })]),
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openClone(row) }, { default: () => t('dns.zones.clone') })]),
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openConvert(row) }, { default: () => t('dns.zones.convert') })]),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { if (!perm.canDelete('dns')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

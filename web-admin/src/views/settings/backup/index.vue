@@ -56,8 +56,8 @@ const columns = [
   { title: () => t('common.actions'), key: 'actions', width: 260, render: (row: Backup) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', text: true, disabled: !perm.canRead('backup') || row.status !== 'completed', onClick: () => handleDownload(row) }, { default: () => t('settings.backup.downloadBackup') }),
-      h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('backup'), onClick: () => { actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canWrite('backup'), onClick: () => { actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('backup'), onClick: () => { if (!perm.canWrite('backup')) return; actionId.value = row.id; restoreTarget.value = row; showRestoreConfirm.value = true } }, { default: () => t('settings.backup.restoreBackup') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canWrite('backup'), onClick: () => { if (!perm.canWrite('backup')) return; actionId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

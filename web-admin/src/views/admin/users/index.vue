@@ -88,6 +88,7 @@ const columns = [
     value: row.enabled,
     disabled: !perm.canWrite('user'),
     onUpdateValue: async (enabled: boolean) => {
+      if (!perm.canWrite('user')) return
       try { await updateUser(row.id, { enabled }); await loadData() }
       catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
     },
@@ -95,9 +96,9 @@ const columns = [
   { title: () => t('admin.users.totpEnabled'), key: 'totp_enabled', width: 80, render: (row: User) => h(NTag, { size: 'small', type: row.totp_enabled ? 'success' : 'default' }, { default: () => row.totp_enabled ? 'ON' : 'OFF' }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: User) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user'), onClick: () => { editing.value = row; Object.assign(formData, { username: row.username, email: row.email, display_name: row.display_name, enabled: row.enabled }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user') || !perm.canRead('role'), onClick: () => { assigningUserId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.users.assignRoles') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('user'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user'), onClick: () => { if (!perm.canWrite('user')) return; editing.value = row; Object.assign(formData, { username: row.username, email: row.email, display_name: row.display_name, enabled: row.enabled }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user') || !perm.canRead('role'), onClick: () => { if (!perm.canWrite('user') || !perm.canRead('role')) return; assigningUserId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.users.assignRoles') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('user'), onClick: () => { if (!perm.canDelete('user')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]

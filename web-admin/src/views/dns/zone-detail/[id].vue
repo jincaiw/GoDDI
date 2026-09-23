@@ -333,7 +333,7 @@ const recordColumns = [
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSRecord) => h(NSpace, null, {
     default: () => [
       h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { if (!perm.canDelete('dns')) return; deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -491,6 +491,7 @@ async function toggleRecordEnabled(record: DNSRecord) {
 }
 
 function editRecord(record: DNSRecord) {
+  if (!perm.canWrite('dns')) return
   editingRecord.value = record
   recordForm.name = record.name
   recordForm.type = record.type
