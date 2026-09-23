@@ -332,7 +332,7 @@ const recordColumns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSRecord) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleRecordEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSRecord) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -505,6 +505,7 @@ function openCreateRecord() {
 }
 
 async function handleRecordSubmit() {
+  if (!perm.canWrite('dns')) return
   recordSubmitting.value = true
   try {
     if (editingRecord.value) {
@@ -526,6 +527,7 @@ async function handleRecordSubmit() {
 }
 
 async function handleDeleteRecord() {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSRecord(zoneId, deletingRecordId.value)
     message.success(t('common.deleteSuccess'))
@@ -681,6 +683,7 @@ function removePermission(row: ZonePermission) {
 }
 
 async function savePermissions() {
+  if (!perm.canWrite('dns')) return
   const invalid = permissions.value.find(p => !p.principal_id.trim())
   if (invalid) {
     message.warning(t('dns.zones.permPrincipalId'))

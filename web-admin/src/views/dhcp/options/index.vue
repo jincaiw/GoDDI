@@ -24,7 +24,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -71,7 +71,7 @@ const columns = [
   { title: () => t('common.priority'), key: 'priority', width: 100 },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPOption) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editing.value = row; Object.assign(formData, { code: row.code, value: row.value, priority: row.priority, scope_id: row.scope_id }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dhcp'), onClick: () => { editing.value = row; Object.assign(formData, { code: row.code, value: row.value, priority: row.priority, scope_id: row.scope_id }); showModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -96,6 +96,7 @@ function openCreate() {
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('dhcp')) return
   if (!formData.scope_id) { message.error(t('dhcp.options.scopeRequired')); return }
   submitting.value = true
   try {
@@ -106,6 +107,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('dhcp')) return
   try { await deleteDHCPOption(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }
