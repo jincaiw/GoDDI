@@ -546,13 +546,76 @@ func (rm *RBACManager) ListPermissions() ([]Permission, error) {
 
 // AssignPermissionToRole assigns a permission to a role.
 func (rm *RBACManager) AssignPermissionToRole(roleID, permissionID string) error {
-	_, err := rm.db.Exec(`
-		INSERT OR IGNORE INTO role_permissions (role_id, permission_id, created_at)
-		VALUES (?, ?, datetime('now'))`,
-		roleID, permissionID,
-	)
+	return rm.AssignPermissionsToRole(roleID, []string{permissionID})
+}
+
+// AssignPermissionsToRole adds a set of permissions as one transaction. The
+// single-permission API remains a supported input shape.
+func (rm *RBACManager) AssignPermissionsToRole(roleID string, permissionIDs []string) error {
+	if roleID == "" {
+		return fmt.Errorf("role ID is required")
+	}
+	if len(permissionIDs) == 0 {
+		return fmt.Errorf("at least one permission ID is required")
+	}
+	for _, permissionID := range permissionIDs {
+		if permissionID == "" {
+			return fmt.Errorf("permission ID is required")
+		}
+	}
+	tx, err := rm.db.Begin()
 	if err != nil {
-		return fmt.Errorf("assigning permission to role: %w", err)
+		return fmt.Errorf("begin assigning permissions to role: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, permissionID := range permissionIDs {
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO role_permissions (role_id, permission_id, created_at)
+			VALUES (?, ?, datetime('now'))`, roleID, permissionID); err != nil {
+			return fmt.Errorf("assigning permission %s to role %s: %w", permissionID, roleID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit assigning permissions to role: %w", err)
+	}
+	return nil
+}
+
+// SetRolePermissions atomically replaces the full permission set on a role.
+// An empty list clears the role's explicit permissions.
+func (rm *RBACManager) SetRolePermissions(roleID string, permissionIDs []string) error {
+	if roleID == "" {
+		return fmt.Errorf("role ID is required")
+	}
+	for _, permissionID := range permissionIDs {
+		if permissionID == "" {
+			return fmt.Errorf("permission ID is required")
+		}
+	}
+	tx, err := rm.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replacing role permissions: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var roleExists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, roleID).Scan(&roleExists); err != nil {
+		return fmt.Errorf("check role before replacing permissions: %w", err)
+	}
+	if roleExists == 0 {
+		return fmt.Errorf("role %s not found", roleID)
+	}
+	if _, err := tx.Exec(`DELETE FROM role_permissions WHERE role_id = ?`, roleID); err != nil {
+		return fmt.Errorf("clear role permissions: %w", err)
+	}
+	for _, permissionID := range permissionIDs {
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO role_permissions (role_id, permission_id, created_at)
+			VALUES (?, ?, datetime('now'))`, roleID, permissionID); err != nil {
+			return fmt.Errorf("set permission %s on role %s: %w", permissionID, roleID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replacing role permissions: %w", err)
 	}
 	return nil
 }

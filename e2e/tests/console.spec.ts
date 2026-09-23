@@ -109,7 +109,7 @@ test('DNS read-only role cannot open DNS write actions', async ({ page, request 
     expect(roleResponse.status()).toBe(201)
     roleID = (await roleResponse.json()).data.id
 
-    const grantResponse = await request.post(`/api/v1/roles/${roleID}/permissions`, {
+    const grantResponse = await request.put(`/api/v1/roles/${roleID}/permissions`, {
       headers,
       data: { permission_ids: [dnsRead!.id] }
     })

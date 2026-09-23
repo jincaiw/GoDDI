@@ -174,6 +174,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "role", "write")).Put("/{id}", h.UpdateRole)
 				r.With(rbac.RequirePermission(rbacMgr, "role", "delete")).Delete("/{id}", h.DeleteRole)
 				r.With(rbac.RequirePermission(rbacMgr, "role", "write")).Post("/{id}/permissions", h.AssignRolePermissions)
+				r.With(rbac.RequirePermission(rbacMgr, "role", "write")).Put("/{id}/permissions", h.SetRolePermissions)
 				r.With(rbac.RequirePermission(rbacMgr, "role", "write")).Delete("/{id}/permissions/{permId}", h.RemoveRolePermission)
 			})
 

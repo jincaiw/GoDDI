@@ -100,6 +100,8 @@ func TestALowPrivilegeSessionIsStoppedAtTheRouteItCannotUse(t *testing.T) {
 		{"delete a user", "DELETE", "/api/v1/users/" + viewerID, nil},
 		{"grant itself the administrator role", "POST", "/api/v1/users/" + viewerID + "/roles",
 			map[string]any{"role_ids": []string{adminRoleID}}},
+		{"replace role permissions", "PUT", "/api/v1/roles/00000000-0000-0000-0000-000000000000/permissions",
+			map[string]any{"permission_ids": []string{}}},
 		// The resources below are only ever reached through the middleware here,
 		// which is the point: the denial happens before any handler runs.
 		{"create a DNS zone", "POST", "/api/v1/dns/zones", map[string]any{"name": "w14-refused.example.test", "type": "primary"}},

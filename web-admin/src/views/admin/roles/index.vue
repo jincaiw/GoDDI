@@ -59,7 +59,7 @@ import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
-import { listRoles, createRole, updateRole, deleteRole, assignRolePermissions, listPermissions, type Role, type CreateRoleRequest, type Permission } from '@/service/api/goddi/user'
+import { listRoles, createRole, updateRole, deleteRole, setRolePermissions, listPermissions, type Role, type CreateRoleRequest, type Permission } from '@/service/api/goddi/user'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -163,7 +163,7 @@ async function loadPermissions() {
 async function handleAssignPermissions() {
   if (!perm.canWrite('role')) return
   try {
-    await assignRolePermissions(assigningRoleId.value, selectedPerms.value)
+    await setRolePermissions(assigningRoleId.value, selectedPerms.value)
     message.success(t('common.updateSuccess'))
     showPermModal.value = false
     loadData()
