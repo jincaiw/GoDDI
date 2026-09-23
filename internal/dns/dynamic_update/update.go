@@ -374,6 +374,11 @@ func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp)
 	}
 	// Rollback is a no-op once the transaction has been committed.
 	defer func() { _ = tx.Rollback() }()
+	beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		slog.Error("dynamic_update: reading prior SOA state failed", "error", err)
+		return dns.RcodeServerFailure, false
+	}
 
 	if rc := h.checkPrerequisites(tx, zoneID, msg); rc != dns.RcodeSuccess {
 		return rc, false
@@ -403,9 +408,19 @@ func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp)
 		slog.Error("dynamic_update: serial bump failed", "error", err)
 		return dns.RcodeServerFailure, false
 	}
+	if err := zone.LogSOARecordTx(tx, zoneID, newSerial, "delete", beforeSOA); err != nil {
+		slog.Error("dynamic_update: journaling prior SOA failed", "error", err)
+		return dns.RcodeServerFailure, false
+	}
 
 	if err := logChanges(tx, zoneID, newSerial, changes); err != nil {
 		slog.Error("dynamic_update: zone change journal write failed", "error", err)
+		return dns.RcodeServerFailure, false
+	}
+	afterSOA := beforeSOA
+	afterSOA.Serial = newSerial
+	if err := zone.LogSOARecordTx(tx, zoneID, newSerial, "add", afterSOA); err != nil {
+		slog.Error("dynamic_update: journaling updated SOA failed", "error", err)
 		return dns.RcodeServerFailure, false
 	}
 

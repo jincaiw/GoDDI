@@ -84,6 +84,8 @@ func newUpdateDB(t *testing.T) *sql.DB {
 		priority INTEGER,
 		weight INTEGER,
 		port INTEGER,
+		flag INTEGER,
+		tag TEXT,
 		created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE TABLE dns_dynamic_update_policies (
@@ -402,7 +404,7 @@ func TestHandleUpdateFrom_AppliesAtomicallyAndJournals(t *testing.T) {
 	// The IXFR journal must describe exactly the records that were added, and
 	// must carry the new serial so a secondary can request the delta.
 	rows, err := db.Query(
-		"SELECT serial, change_type, name, type, value FROM dns_zone_changes ORDER BY name")
+		"SELECT serial, change_type, name, type, value FROM dns_zone_changes ORDER BY rowid")
 	if err != nil {
 		t.Fatalf("query journal: %v", err)
 	}
@@ -423,8 +425,17 @@ func TestHandleUpdateFrom_AppliesAtomicallyAndJournals(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate journal: %v", err)
 	}
-	if len(journal) != 2 {
-		t.Fatalf("got %d journal rows, want 2: %v", len(journal), journal)
+	if len(journal) != 4 {
+		t.Fatalf("got %d journal rows, want SOA delimiters around 2 RRs: %v", len(journal), journal)
+	}
+	if !strings.HasPrefix(journal[0], "delete example.com. SOA ns1.example.com. hostmaster.example.com.") {
+		t.Errorf("first journal row should be prior SOA delete, got %q", journal[0])
+	}
+	if !strings.HasPrefix(journal[3], "add example.com. SOA ns1.example.com. hostmaster.example.com.") {
+		t.Errorf("last journal row should be updated SOA add, got %q", journal[3])
+	}
+	if !strings.Contains(journal[3], fmt.Sprint(after)) {
+		t.Errorf("updated SOA journal row lacks new serial %d: %q", after, journal[3])
 	}
 	for _, want := range []string{"add web.example.com. A 192.0.2.30", "add web.example.com. A 192.0.2.31"} {
 		found := false
@@ -733,7 +744,7 @@ func assertRRsetTTL(t *testing.T, db *sql.DB, name, rtype string, ttl, count int
 func assertJournalEntries(t *testing.T, db *sql.DB, serial uint32, want map[string]int) {
 	t.Helper()
 	rows, err := db.Query(`SELECT change_type, ttl, COUNT(*) FROM dns_zone_changes
-		WHERE zone_id = 'zone-1' AND serial = ? GROUP BY change_type, ttl`, serial)
+		WHERE zone_id = 'zone-1' AND serial = ? AND type != 'SOA' GROUP BY change_type, ttl`, serial)
 	if err != nil {
 		t.Fatal(err)
 	}

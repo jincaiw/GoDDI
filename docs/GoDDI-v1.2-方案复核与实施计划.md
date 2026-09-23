@@ -226,6 +226,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - Record API 单条/批量创建、更新、自动 PTR、配置发布和 DHCP DDNS 共用 DNS 大小写无关且忽略过期/禁用 RR 的 CNAME 独占性事务校验；拒绝同一 owner 下不同 CNAME 目标以及 CNAME 与其他类型共存。批量路径过去会吞掉 CNAME 检查的 SQL 错误，现已移除。更新路径排除当前记录。回归覆盖大小写不同的冲突创建/改名、批次原子回滚、zonefile 整批回滚、DHCP A 与现有 CNAME 冲突、自动 PTR 冲突、配置发布与 data-plane CNAME 冲突。相关包测试通过。
 - IPAM 的 DNS 辅助关联曾对跨 space 重叠 IP 使用 `LIMIT 2` 后任取第一条，可能关联错地址对象。现无 scope 的入口在存在多个 space 候选时 fail-closed，并提供显式 `space_id` 的关联方法；回归确认歧义不写入关联、显式 space 关联命中目标对象。
 - SOA 配置/serial 变更（管理 API、配置发布、显式 serial increment 与 zone type conversion）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。该 journal 还缺少所有 RR 写入者共享的有序 SOA 分界，IXFR 继续回退 AXFR。
+- RFC 2136 动态 UPDATE 现在在变更事务内读取旧 synthesized SOA，按旧 SOA 删除、RR 删除/新增、更新后 SOA 添加的顺序写 journal；新 SOA serial、RR、serial 更新与 history 同事务提交。回归验证了四行顺序及更新后 SOA serial，动态 UPDATE、zone 与 transfer 包测试通过。该入口已补齐 SOA 分界，但其它 RR 写入者的分界、journal 读取排序和完整 IXFR 协议测试仍未闭合。
 
 ### W04 跨库事实传输实施中（2026-09-24，尚未发布）
 

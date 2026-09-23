@@ -1178,7 +1178,7 @@ type SOAHistoryState struct {
 	Expire, Minimum    int
 }
 
-func readSOAHistoryStateTx(tx *sql.Tx, zoneID string) (SOAHistoryState, error) {
+func ReadSOAHistoryStateTx(tx *sql.Tx, zoneID string) (SOAHistoryState, error) {
 	var state SOAHistoryState
 	err := tx.QueryRow(`SELECT name, soa_mname, soa_rname, serial, default_ttl,
 		refresh, retry, expire, minimum FROM dns_zones WHERE id = ?`, zoneID).Scan(
@@ -1187,22 +1187,26 @@ func readSOAHistoryStateTx(tx *sql.Tx, zoneID string) (SOAHistoryState, error) {
 	return state, err
 }
 
+// LogSOARecordTx appends one synthesized SOA RR to a zone change sequence.
+// Callers that journal a content mutation should write the old SOA delete,
+// then RR deletes/adds, then the new SOA add, all at the new serial.
+func LogSOARecordTx(tx *sql.Tx, zoneID string, serial uint32, changeType string, state SOAHistoryState) error {
+	value := fmt.Sprintf("%s %s %d %d %d %d %d",
+		dns.Fqdn(state.MName), dns.Fqdn(state.RName), state.Serial,
+		state.Refresh, state.Retry, state.Expire, state.Minimum)
+	return logChangeTx(tx, zoneID, serial, changeType, dns.Fqdn(state.Name), "SOA",
+		value, state.TTL, 0, 0, 0, 0, "")
+}
+
 // LogSOAChangeTx records the prior and new synthesized SOA at one committed
 // serial. It is for transactional writers outside ZoneManager; the change
 // history is not sufficient to enable IXFR until every serial-changing writer
 // emits ordered SOA delimiters and protocol tests validate the full sequence.
 func LogSOAChangeTx(tx *sql.Tx, zoneID string, serial uint32, before, after SOAHistoryState) error {
-	soaValue := func(state SOAHistoryState) string {
-		return fmt.Sprintf("%s %s %d %d %d %d %d",
-			dns.Fqdn(state.MName), dns.Fqdn(state.RName), state.Serial,
-			state.Refresh, state.Retry, state.Expire, state.Minimum)
-	}
-	if err := logChangeTx(tx, zoneID, serial, "delete", dns.Fqdn(before.Name), "SOA",
-		soaValue(before), before.TTL, 0, 0, 0, 0, ""); err != nil {
+	if err := LogSOARecordTx(tx, zoneID, serial, "delete", before); err != nil {
 		return fmt.Errorf("journaling prior SOA: %w", err)
 	}
-	if err := logChangeTx(tx, zoneID, serial, "add", dns.Fqdn(after.Name), "SOA",
-		soaValue(after), after.TTL, 0, 0, 0, 0, ""); err != nil {
+	if err := LogSOARecordTx(tx, zoneID, serial, "add", after); err != nil {
 		return fmt.Errorf("journaling updated SOA: %w", err)
 	}
 	return nil

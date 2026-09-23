@@ -941,7 +941,7 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
-	before, err := readSOAHistoryStateTx(tx, zoneID)
+	before, err := ReadSOAHistoryStateTx(tx, zoneID)
 	if err != nil {
 		return 0, fmt.Errorf("reading SOA before serial increment: %w", err)
 	}
@@ -1194,7 +1194,7 @@ func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
 		return nil, fmt.Errorf("begin zone type conversion: %w", err)
 	}
 	defer tx.Rollback()
-	beforeSOA, err := readSOAHistoryStateTx(tx, id)
+	beforeSOA, err := ReadSOAHistoryStateTx(tx, id)
 	if err != nil {
 		return nil, fmt.Errorf("reading SOA before zone type conversion: %w", err)
 	}
