@@ -205,6 +205,9 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
 			}
 		}
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+			return fmt.Errorf("journaling updated SOA: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -578,6 +581,9 @@ func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun b
 				rec.priority, rec.weight, rec.port, rec.flag, rec.tag); err != nil {
 				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
 			}
+		}
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+			return fmt.Errorf("journaling updated SOA: %w", err)
 		}
 	}
 

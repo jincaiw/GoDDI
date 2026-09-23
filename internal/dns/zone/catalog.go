@@ -61,6 +61,9 @@ func addCatalogMembershipTx(tx *sql.Tx, catalogName, memberName string) (string,
 	if err := logChangeTx(tx, catalogID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0, 0, ""); err != nil {
 		return "", err
 	}
+	if err := logCurrentSOAStateTx(tx, catalogID, serial); err != nil {
+		return "", err
+	}
 	return catalogID, nil
 }
 
@@ -112,6 +115,11 @@ func removeCatalogMembershipTx(tx *sql.Tx, memberName string) (map[string]struct
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
 			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
+			return nil, err
+		}
+	}
+	for zoneID, serial := range serialByZone {
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
 			return nil, err
 		}
 	}
@@ -173,6 +181,11 @@ func renameCatalogMemberTx(tx *sql.Tx, oldName, newName string) (map[string]stru
 		}
 		if err := logChangeTx(tx, rec.ZoneID, serial, "add", rec.Name, rec.Type, newValue,
 			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
+			return nil, err
+		}
+	}
+	for zoneID, serial := range serialByZone {
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
 			return nil, err
 		}
 	}

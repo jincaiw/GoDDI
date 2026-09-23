@@ -102,18 +102,25 @@ func TestTheRecordSetLeavesTheRecordsADataPlaneAuthoredAlone(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ?`, serial).Scan(&journalCount); err != nil {
 		t.Fatalf("count release journal changes: %v", err)
 	}
-	if journalCount != 3 {
-		t.Fatalf("release journal contains %d changes, want delete old row and add two new rows", journalCount)
+	if journalCount != 5 {
+		t.Fatalf("release journal contains %d changes, want SOA delimiters and three RR differences", journalCount)
 	}
 	var deleted, added int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND change_type = 'delete' AND value = '192.0.2.1'`, serial).Scan(&deleted); err != nil {
 		t.Fatalf("find deleted row in release journal: %v", err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND change_type = 'add'`, serial).Scan(&added); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND change_type = 'add' AND type != 'SOA'`, serial).Scan(&added); err != nil {
 		t.Fatalf("count added rows in release journal: %v", err)
 	}
 	if deleted != 1 || added != 2 {
 		t.Fatalf("release journal delete/add counts = %d/%d, want 1/2", deleted, added)
+	}
+	var soaDelimiters int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = 'zone-1' AND serial = ? AND type = 'SOA'`, serial).Scan(&soaDelimiters); err != nil {
+		t.Fatalf("count release SOA delimiters: %v", err)
+	}
+	if soaDelimiters != 2 {
+		t.Fatalf("release SOA delimiters = %d, want delete/add pair", soaDelimiters)
 	}
 }
 

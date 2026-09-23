@@ -259,6 +259,13 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 		if err := journalServedRRChangesForRelease(tx, id, serial, before, after); err != nil {
 			return fmt.Errorf("journal zone record release: %w", err)
 		}
+		soaState, err := zone.ReadSOAHistoryStateTx(tx, id)
+		if err != nil {
+			return fmt.Errorf("read updated SOA after record release: %w", err)
+		}
+		if err := zone.LogSOARecordTx(tx, id, serial, "add", soaState); err != nil {
+			return fmt.Errorf("journal updated SOA after record release: %w", err)
+		}
 	}
 	return nil
 }
@@ -335,10 +342,11 @@ func sameServedRRs(a, b []servedRR) bool {
 }
 
 func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) (uint32, error) {
-	var current uint32
-	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+	beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
 		return 0, err
 	}
+	current := beforeSOA.Serial
 	next := zone.NextSerial(current)
 	res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)
 	if err != nil {
@@ -348,6 +356,9 @@ func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) (uint32, error) {
 		return 0, err
 	} else if affected != 1 {
 		return 0, fmt.Errorf("zone serial changed concurrently")
+	}
+	if err := zone.LogSOARecordTx(tx, zoneID, next, "delete", beforeSOA); err != nil {
+		return 0, err
 	}
 	return next, nil
 }
