@@ -149,6 +149,15 @@ func (*DNSZoneAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) err
 	if err := json.Unmarshal(content, &c); err != nil {
 		return fmt.Errorf("decode zone content: %w", err)
 	}
+	var oldName, oldType, oldMName, oldRName string
+	var oldDNSSEC bool
+	var oldTTL, oldRefresh, oldRetry, oldExpire, oldMinimum int
+	if err := tx.QueryRow(`SELECT name, type, dnssec_enabled, default_ttl, soa_mname, soa_rname,
+		refresh, retry, expire, minimum FROM dns_zones WHERE id = ?`, id).Scan(
+		&oldName, &oldType, &oldDNSSEC, &oldTTL, &oldMName, &oldRName,
+		&oldRefresh, &oldRetry, &oldExpire, &oldMinimum); err != nil {
+		return fmt.Errorf("read zone before release: %w", err)
+	}
 
 	res, err := tx.Exec(`UPDATE dns_zones SET
 			name = ?, type = ?, enabled = ?, dnssec_enabled = ?, default_ttl = ?,
@@ -165,6 +174,14 @@ func (*DNSZoneAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) err
 	affected, err := res.RowsAffected()
 	if err == nil && affected == 0 {
 		return fmt.Errorf("zone %s disappeared before the release was applied", id)
+	}
+	serialRelevantChanged := oldName != c.Name || oldType != c.Type || oldDNSSEC != c.DNSSECEnabled || oldTTL != c.DefaultTTL ||
+		oldMName != c.SOAMName || oldRName != c.SOARName ||
+		oldRefresh != c.Refresh || oldRetry != c.Retry || oldExpire != c.Expire || oldMinimum != c.Minimum
+	if serialRelevantChanged {
+		if err := bumpZoneSerialForRelease(tx, id); err != nil {
+			return fmt.Errorf("bump zone serial after SOA release: %w", err)
+		}
 	}
 	return nil
 }

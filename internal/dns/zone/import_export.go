@@ -112,14 +112,24 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
 	}
+	if len(records) > 0 {
+		serial, err := bumpZoneSerialTx(tx, zoneID)
+		if err != nil {
+			return fmt.Errorf("bumping zone serial: %w", err)
+		}
+		for _, rec := range records {
+			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
+				intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port)); err != nil {
+				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
+			}
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
-
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(zoneID); err != nil {
-		_ = err
+	if len(records) > 0 {
+		m.notifyPrimary(zoneID)
 	}
 
 	// Reload in-memory zone store.
@@ -291,14 +301,24 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
 	}
+	if len(records) > 0 {
+		serial, err := bumpZoneSerialTx(tx, zoneID)
+		if err != nil {
+			return fmt.Errorf("bumping zone serial: %w", err)
+		}
+		for _, rec := range records {
+			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
+				rec.priority, rec.weight, rec.port); err != nil {
+				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
+			}
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
-
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(zoneID); err != nil {
-		_ = err
+	if len(records) > 0 {
+		m.notifyPrimary(zoneID)
 	}
 
 	// Reload in-memory zone store.

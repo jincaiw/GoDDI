@@ -2,9 +2,13 @@ package dataplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 )
@@ -182,6 +186,9 @@ type SyncResult struct {
 	// DroppedLeases counts leases removed because their scope no longer
 	// exists. It replaces the cascade the control database used to perform.
 	DroppedLeases int
+	// ChangedPrimaryZones lists primary zones whose served SOA or RRsets
+	// changed as a result of this DNS replica transaction.
+	ChangedPrimaryZones []string
 	// Duration of the pass.
 	Duration time.Duration
 }
@@ -228,7 +235,7 @@ func (r *Replicator) Sync(ctx context.Context, d Domain) (SyncResult, error) {
 		rows[t.name] = got
 	}
 
-	applied, retained, dropped, err := r.apply(d, tables, rows, remote)
+	applied, retained, dropped, changedZones, err := r.apply(d, tables, rows, remote)
 	if err != nil {
 		r.recordError(d, err)
 		return res, err
@@ -236,6 +243,7 @@ func (r *Replicator) Sync(ctx context.Context, d Domain) (SyncResult, error) {
 	res.Applied = applied
 	res.RetainedScopes = retained
 	res.DroppedLeases = dropped
+	res.ChangedPrimaryZones = changedZones
 	for _, got := range rows {
 		res.Rows += len(got)
 	}
@@ -299,13 +307,20 @@ func readAll(ctx context.Context, db *sql.DB, t table) ([][]interface{}, error) 
 
 // apply rewrites the replica inside one transaction on the store.
 func (r *Replicator) apply(d Domain, tables []table, rows map[string][][]interface{}, revision int64) (
-	applied bool, retained []string, dropped int, err error,
+	applied bool, retained []string, dropped int, changedPrimaryZones []string, err error,
 ) {
 	tx, err := r.store.Begin()
 	if err != nil {
-		return false, nil, 0, fmt.Errorf("dataplane: begin %s sync: %w", d, err)
+		return false, nil, 0, nil, fmt.Errorf("dataplane: begin %s sync: %w", d, err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var beforePrimaryZones map[string]primaryZoneSnapshot
+	if d == DomainDNS {
+		beforePrimaryZones, err = snapshotPrimaryZones(tx)
+		if err != nil {
+			return false, nil, 0, nil, fmt.Errorf("dataplane: snapshotting served zones before sync: %w", err)
+		}
+	}
 
 	// A scope the control plane has removed, but which still has leases here,
 	// is kept. Deleting it would leave clients holding addresses the server can
@@ -315,20 +330,20 @@ func (r *Replicator) apply(d Domain, tables []table, rows map[string][][]interfa
 	if d == DomainDHCP {
 		keepScopes, err = r.protectedScopes(tx, rows["dhcp_scopes"])
 		if err != nil {
-			return false, nil, 0, err
+			return false, nil, 0, nil, err
 		}
 	}
 
 	for _, t := range tables {
 		if err := applyTable(tx, t, rows[t.name], keepScopes); err != nil {
-			return false, nil, 0, err
+			return false, nil, 0, nil, err
 		}
 	}
 
 	if d == DomainDHCP {
 		dropped, err = dropOrphanLeases(tx)
 		if err != nil {
-			return false, nil, 0, err
+			return false, nil, 0, nil, err
 		}
 	}
 
@@ -342,8 +357,13 @@ func (r *Replicator) apply(d Domain, tables []table, rows map[string][][]interfa
 	// holds the value to restore; this is where it is honoured.
 	if d == DomainDNS {
 		if err := reapplyLocalSerials(tx); err != nil {
-			return false, nil, 0, err
+			return false, nil, 0, nil, err
 		}
+		afterPrimaryZones, err := snapshotPrimaryZones(tx)
+		if err != nil {
+			return false, nil, 0, nil, fmt.Errorf("dataplane: snapshotting served zones after sync: %w", err)
+		}
+		changedPrimaryZones = changedZoneNames(beforePrimaryZones, afterPrimaryZones)
 	}
 
 	if _, err := tx.Exec(`
@@ -353,17 +373,140 @@ func (r *Replicator) apply(d Domain, tables []table, rows map[string][][]interfa
 			source_revision = excluded.source_revision,
 			synced_at       = excluded.synced_at,
 			last_error      = ''`, string(d), revision); err != nil {
-		return false, nil, 0, fmt.Errorf("dataplane: recording the %s revision: %w", d, err)
+		return false, nil, 0, nil, fmt.Errorf("dataplane: recording the %s revision: %w", d, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, nil, 0, fmt.Errorf("dataplane: commit %s sync: %w", d, err)
+		return false, nil, 0, nil, fmt.Errorf("dataplane: commit %s sync: %w", d, err)
 	}
 	for id := range keepScopes {
 		retained = append(retained, id)
 	}
 	sortStrings(retained)
-	return true, retained, dropped, nil
+	return true, retained, dropped, changedPrimaryZones, nil
+}
+
+type primaryZoneSnapshot struct {
+	name   string
+	hasher hash.Hash
+	digest string
+}
+
+// snapshotPrimaryZones fingerprints only data that affects the authoritative
+// answer or the zone's SOA. It runs inside the replica transaction, so the
+// before and after views bracket one atomic configuration apply.
+func snapshotPrimaryZones(tx *sql.Tx) (map[string]primaryZoneSnapshot, error) {
+	rows, err := tx.Query(`
+		SELECT id, name, enabled, default_ttl, soa_mname, soa_rname, serial,
+			refresh, retry, expire, minimum
+		FROM dns_zones WHERE type = 'primary' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	zones := make(map[string]primaryZoneSnapshot)
+	for rows.Next() {
+		var id, name, soaMName, soaRName string
+		var enabled bool
+		var defaultTTL, refresh, retry, expire, minimum int64
+		var serial int64
+		if err := rows.Scan(&id, &name, &enabled, &defaultTTL, &soaMName, &soaRName,
+			&serial, &refresh, &retry, &expire, &minimum); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		h := sha256.New()
+		for _, value := range []string{id, name, fmt.Sprint(enabled), fmt.Sprint(defaultTTL),
+			soaMName, soaRName, fmt.Sprint(serial), fmt.Sprint(refresh), fmt.Sprint(retry),
+			fmt.Sprint(expire), fmt.Sprint(minimum)} {
+			writeSnapshotField(h, value)
+		}
+		zones[id] = primaryZoneSnapshot{name: name, hasher: h}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	rows, err = tx.Query(`
+		SELECT r.zone_id, r.name, r.type, r.value, r.ttl,
+			COALESCE(r.priority, 0), COALESCE(r.weight, 0), COALESCE(r.port, 0),
+			COALESCE(r.tag, ''), COALESCE(r.flag, 0), COALESCE(r.expires_at, '')
+		FROM dns_records r JOIN dns_zones z ON z.id = r.zone_id
+		WHERE z.type = 'primary' AND z.enabled = 1 AND r.enabled = 1
+		  AND (r.expires_at IS NULL OR r.expires_at > datetime('now'))
+		ORDER BY r.zone_id, r.name, r.type, r.value, r.ttl, r.priority,
+			r.weight, r.port, r.tag, r.flag, r.expires_at`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var zoneID, name, rtype, value, tag, expires string
+		var ttl, priority, weight, port, flag int64
+		if err := rows.Scan(&zoneID, &name, &rtype, &value, &ttl, &priority, &weight,
+			&port, &tag, &flag, &expires); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		zone, ok := zones[zoneID]
+		if !ok {
+			continue
+		}
+		for _, field := range []string{name, rtype, value, fmt.Sprint(ttl), fmt.Sprint(priority),
+			fmt.Sprint(weight), fmt.Sprint(port), tag, fmt.Sprint(flag), expires} {
+			writeSnapshotField(zone.hasher, field)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for id, zone := range zones {
+		zone.digest = hex.EncodeToString(zone.hasher.Sum(nil))
+		zone.hasher = nil
+		zones[id] = zone
+	}
+	return zones, nil
+}
+
+func writeSnapshotField(h hash.Hash, value string) {
+	_, _ = fmt.Fprintf(h, "%d:", len(value))
+	_, _ = h.Write([]byte(value))
+}
+
+func changedZoneNames(before, after map[string]primaryZoneSnapshot) []string {
+	ids := make(map[string]struct{}, len(before)+len(after))
+	for id := range before {
+		ids[id] = struct{}{}
+	}
+	for id := range after {
+		ids[id] = struct{}{}
+	}
+	changed := make(map[string]struct{})
+	for id := range ids {
+		oldZone, hadOld := before[id]
+		newZone, hasNew := after[id]
+		if hadOld && hasNew && oldZone.digest == newZone.digest {
+			continue
+		}
+		if hadOld && oldZone.name != "" {
+			changed[oldZone.name] = struct{}{}
+		}
+		if hasNew && newZone.name != "" {
+			changed[newZone.name] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(changed))
+	for name := range changed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // protectedScopes reports the incoming scopes that must not be removed because

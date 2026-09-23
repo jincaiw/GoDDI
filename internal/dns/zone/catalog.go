@@ -7,6 +7,7 @@ package zone
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -47,17 +48,32 @@ func (m *ZoneManager) addCatalogMembership(catalogName, memberName string) error
 		return err
 	}
 	owner := catalogMembershipOwner(catalogName, memberName)
+	memberValue := strings.TrimSuffix(memberName, ".")
 
-	_, err = m.db.Exec(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
-		VALUES (?, ?, ?, 'PTR', ?, 0, 1)
-	`, uuid.New().String(), catalog.ID, owner, strings.TrimSuffix(memberName, "."))
+	tx, err := m.db.Begin()
 	if err != nil {
 		return err
 	}
-	serial, _ := m.IncrementSerial(catalog.ID)
+	defer tx.Rollback()
+	_, err = tx.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
+		VALUES (?, ?, ?, 'PTR', ?, 0, 1)
+	`, uuid.New().String(), catalog.ID, owner, memberValue)
+	if err != nil {
+		return err
+	}
+	serial, err := bumpZoneSerialTx(tx, catalog.ID)
+	if err != nil {
+		return err
+	}
+	if err := logChangeTx(tx, catalog.ID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	if rm := m.recordManagerForClone(); rm != nil {
-		rm.logChange(catalog.ID, serial, "add", owner, "PTR", memberName, 0, 0, 0, 0)
+		rm.notifyPrimary(catalog.ID)
 	}
 	if m.zoneStore != nil {
 		m.zoneStore.Reload()
@@ -65,47 +81,222 @@ func (m *ZoneManager) addCatalogMembership(catalogName, memberName string) error
 	return nil
 }
 
+func addCatalogMembershipTx(tx *sql.Tx, catalogName, memberName string) (string, error) {
+	var catalogID string
+	if err := tx.QueryRow(`SELECT id FROM dns_zones WHERE name = ? AND type = ?`,
+		catalogName, string(ZoneTypeCatalog)).Scan(&catalogID); err != nil {
+		return "", err
+	}
+	owner := catalogMembershipOwner(catalogName, memberName)
+	memberValue := strings.TrimSuffix(memberName, ".")
+	if _, err := tx.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
+		VALUES (?, ?, ?, 'PTR', ?, 0, 1)
+	`, uuid.New().String(), catalogID, owner, memberValue); err != nil {
+		return "", err
+	}
+	serial, err := bumpZoneSerialTx(tx, catalogID)
+	if err != nil {
+		return "", err
+	}
+	if err := logChangeTx(tx, catalogID, serial, "add", owner, "PTR", memberValue, 0, 0, 0, 0); err != nil {
+		return "", err
+	}
+	return catalogID, nil
+}
+
 // removeCatalogMembership deletes any membership PTR record for memberName
 // from all catalog zones (a zone belongs to at most one catalog, but the
 // lookup is by RDATA to stay name-agnostic).
 func (m *ZoneManager) removeCatalogMembership(memberName string) error {
 	rdata := strings.TrimSuffix(strings.ToLower(memberName), ".")
-	res, err := m.db.Exec(`
-		DELETE FROM dns_records
-		WHERE type = 'PTR' AND LOWER(value) = ? AND zone_id IN (
-			SELECT id FROM dns_zones WHERE type = ?
-		)
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`
+		SELECT r.id, r.zone_id, r.name, r.type, r.value, r.ttl,
+			COALESCE(r.priority, 0), COALESCE(r.weight, 0), COALESCE(r.port, 0)
+		FROM dns_records r JOIN dns_zones z ON z.id = r.zone_id
+		WHERE r.type = 'PTR' AND LOWER(r.value) = ? AND z.type = ?
 	`, rdata, string(ZoneTypeCatalog))
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil
+	var removed []Record
+	for rows.Next() {
+		var rec Record
+		if err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
+			&rec.Priority, &rec.Weight, &rec.Port); err != nil {
+			rows.Close()
+			return err
+		}
+		removed = append(removed, rec)
 	}
-	// Bump serials of every catalog zone that lost a member.
-	rows, err := m.db.Query(`SELECT id FROM dns_zones WHERE type = ?`, string(ZoneTypeCatalog))
-	if err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM dns_records WHERE type = 'PTR' AND LOWER(value) = ? AND zone_id IN (
+			SELECT id FROM dns_zones WHERE type = ?
+		)
+	`, rdata, string(ZoneTypeCatalog)); err != nil {
+		return err
+	}
+	serialByZone := make(map[string]uint32)
+	for _, rec := range removed {
+		serial, ok := serialByZone[rec.ZoneID]
+		if !ok {
+			serial, err = bumpZoneSerialTx(tx, rec.ZoneID)
+			if err != nil {
+				return err
+			}
+			serialByZone[rec.ZoneID] = serial
+		}
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return err
 		}
 	}
-	rows.Close()
-	for _, id := range ids {
-		serial, _ := m.IncrementSerial(id)
-		if rm := m.recordManagerForClone(); rm != nil {
-			rm.logChange(id, serial, "delete", "", "PTR", memberName, 0, 0, 0, 0)
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if rm := m.recordManagerForClone(); rm != nil {
+		for zoneID := range serialByZone {
+			rm.notifyPrimary(zoneID)
 		}
 	}
 	if m.zoneStore != nil {
 		m.zoneStore.Reload()
 	}
 	return nil
+}
+
+func removeCatalogMembershipTx(tx *sql.Tx, memberName string) (map[string]struct{}, error) {
+	rdata := strings.TrimSuffix(strings.ToLower(memberName), ".")
+	rows, err := tx.Query(`
+		SELECT r.id, r.zone_id, r.name, r.type, r.value, r.ttl,
+			COALESCE(r.priority, 0), COALESCE(r.weight, 0), COALESCE(r.port, 0)
+		FROM dns_records r JOIN dns_zones z ON z.id = r.zone_id
+		WHERE r.type = 'PTR' AND LOWER(r.value) = ? AND z.type = ?`,
+		rdata, string(ZoneTypeCatalog))
+	if err != nil {
+		return nil, err
+	}
+	var records []Record
+	for rows.Next() {
+		var rec Record
+		if err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
+			&rec.Priority, &rec.Weight, &rec.Port); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	if _, err := tx.Exec(`DELETE FROM dns_records WHERE type = 'PTR' AND LOWER(value) = ? AND zone_id IN (
+		SELECT id FROM dns_zones WHERE type = ?
+	)`, rdata, string(ZoneTypeCatalog)); err != nil {
+		return nil, err
+	}
+	serialByZone := make(map[string]uint32)
+	for _, rec := range records {
+		serial, ok := serialByZone[rec.ZoneID]
+		if !ok {
+			serial, err = bumpZoneSerialTx(tx, rec.ZoneID)
+			if err != nil {
+				return nil, err
+			}
+			serialByZone[rec.ZoneID] = serial
+		}
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return nil, err
+		}
+	}
+	changed := make(map[string]struct{}, len(serialByZone))
+	for zoneID := range serialByZone {
+		changed[zoneID] = struct{}{}
+	}
+	return changed, nil
+}
+
+// renameCatalogMemberTx updates the catalog PTR RDATA for a member zone name
+// within the caller's transaction and returns the catalog zones whose serials
+// were advanced.
+func renameCatalogMemberTx(tx *sql.Tx, oldName, newName string) (map[string]struct{}, error) {
+	oldValue := strings.TrimSuffix(strings.ToLower(oldName), ".")
+	newValue := strings.TrimSuffix(newName, ".")
+	rows, err := tx.Query(`
+		SELECT r.id, r.zone_id, r.name, r.type, r.value, r.ttl,
+			COALESCE(r.priority, 0), COALESCE(r.weight, 0), COALESCE(r.port, 0)
+		FROM dns_records r JOIN dns_zones z ON z.id = r.zone_id
+		WHERE r.type = 'PTR' AND LOWER(r.value) = ? AND z.type = ?`,
+		oldValue, string(ZoneTypeCatalog))
+	if err != nil {
+		return nil, err
+	}
+	var records []Record
+	for rows.Next() {
+		var rec Record
+		if err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
+			&rec.Priority, &rec.Weight, &rec.Port); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	serialByZone := make(map[string]uint32)
+	for _, rec := range records {
+		serial, ok := serialByZone[rec.ZoneID]
+		if !ok {
+			serial, err = bumpZoneSerialTx(tx, rec.ZoneID)
+			if err != nil {
+				return nil, err
+			}
+			serialByZone[rec.ZoneID] = serial
+		}
+		if _, err := tx.Exec(`UPDATE dns_records SET value = ?, updated_at = datetime('now') WHERE id = ?`, newValue, rec.ID); err != nil {
+			return nil, err
+		}
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return nil, err
+		}
+		if err := logChangeTx(tx, rec.ZoneID, serial, "add", rec.Name, rec.Type, newValue,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return nil, err
+		}
+	}
+	changed := make(map[string]struct{}, len(serialByZone))
+	for zoneID := range serialByZone {
+		changed[zoneID] = struct{}{}
+	}
+	return changed, nil
 }
 
 // ListCatalogMembers returns the member zone names of a catalog zone as

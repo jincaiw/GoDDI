@@ -185,10 +185,9 @@ func (s *SecondarySync) SyncFromPrimary(zoneID string) error {
 
 	// Get zone info.
 	var zoneName, transferPolicy string
-	var currentSerial uint32
 	err := s.db.QueryRow(`
-		SELECT name, COALESCE(transfer_policy, ''), serial FROM dns_zones WHERE id = ? AND type = 'secondary'
-	`, zoneID).Scan(&zoneName, &transferPolicy, &currentSerial)
+		SELECT name, COALESCE(transfer_policy, '') FROM dns_zones WHERE id = ? AND type = 'secondary'
+	`, zoneID).Scan(&zoneName, &transferPolicy)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("secondary zone not found: %s", zoneID)
 	}
@@ -207,6 +206,9 @@ func (s *SecondarySync) SyncFromPrimary(zoneID string) error {
 	if err != nil {
 		return fmt.Errorf("AXFR from primary: %w", err)
 	}
+	if err := validateTransferredAXFR(zoneName, records); err != nil {
+		return fmt.Errorf("invalid AXFR from primary: %w", err)
+	}
 
 	// RFC 8976: verify the ZONEMD digest when the zone publishes one. A
 	// digest mismatch aborts the transfer so corrupted zone data never
@@ -219,14 +221,16 @@ func (s *SecondarySync) SyncFromPrimary(zoneID string) error {
 
 	// Extract serial from SOA record in the AXFR response.
 	var primarySerial uint32
+	soaFound := false
 	for _, rr := range records {
 		if soa, ok := rr.(*dns.SOA); ok {
 			primarySerial = soa.Serial
+			soaFound = true
 			break
 		}
 	}
-	if primarySerial == 0 {
-		primarySerial = currentSerial + 1
+	if !soaFound {
+		return fmt.Errorf("AXFR from primary for zone %s contains no SOA record", zoneName)
 	}
 
 	// Use a transaction: delete old records and insert new ones atomically.
@@ -244,8 +248,7 @@ func (s *SecondarySync) SyncFromPrimary(zoneID string) error {
 	// Insert new records.
 	for _, rr := range records {
 		if err := s.insertRRTx(tx, zoneID, rr, zoneName); err != nil {
-			slog.Warn("secondary_sync: failed to insert record", "error", err)
-			continue
+			return fmt.Errorf("inserting transferred record %s %s: %w", rr.Header().Name, dns.TypeToString[rr.Header().Rrtype], err)
 		}
 	}
 
@@ -670,6 +673,63 @@ func (s *SecondarySync) axfrFromPrimary(zoneName string, cfg *transferTSIGConfig
 	return records, nil
 }
 
+// validateTransferredAXFR rejects truncated or out-of-zone data before the
+// refresh transaction can replace the last known-good copy. AXFR is framed by
+// matching opening and closing SOA records.
+func validateTransferredAXFR(zoneName string, records []dns.RR) error {
+	zoneName = strings.ToLower(dns.Fqdn(zoneName))
+	if len(records) < 2 {
+		return fmt.Errorf("transfer must contain opening and closing SOA records")
+	}
+	firstSOA, firstIsSOA := records[0].(*dns.SOA)
+	lastSOA, lastIsSOA := records[len(records)-1].(*dns.SOA)
+	if !firstIsSOA || !lastIsSOA {
+		return fmt.Errorf("transfer must begin and end with SOA records")
+	}
+	var soaCount int
+	var openingSOA, closingSOA *dns.SOA
+	for _, rr := range records {
+		if rr == nil {
+			return fmt.Errorf("transfer contains a nil resource record")
+		}
+		hdr := rr.Header()
+		if hdr.Class != dns.ClassINET {
+			return fmt.Errorf("record %s has unsupported class %s", hdr.Name, dns.ClassToString[hdr.Class])
+		}
+		if !dns.IsSubDomain(zoneName, strings.ToLower(hdr.Name)) {
+			return fmt.Errorf("record owner %s is outside zone %s", hdr.Name, zoneName)
+		}
+		if soa, ok := rr.(*dns.SOA); ok {
+			soaCount++
+			if soaCount == 1 {
+				openingSOA = soa
+			} else if soaCount == 2 {
+				closingSOA = soa
+			} else {
+				return fmt.Errorf("transfer contains more than two SOA records")
+			}
+		}
+	}
+	if soaCount != 2 || openingSOA == nil || closingSOA == nil {
+		return fmt.Errorf("transfer must contain opening and closing SOA records")
+	}
+	if openingSOA != firstSOA || closingSOA != lastSOA {
+		return fmt.Errorf("transfer SOA records are not at the frame boundaries")
+	}
+	if !strings.EqualFold(openingSOA.Hdr.Name, zoneName) || !strings.EqualFold(closingSOA.Hdr.Name, zoneName) {
+		return fmt.Errorf("opening and closing SOA owners must be the zone apex")
+	}
+	if openingSOA.Hdr.Class != dns.ClassINET || closingSOA.Hdr.Class != dns.ClassINET ||
+		openingSOA.Hdr.Ttl != closingSOA.Hdr.Ttl ||
+		!strings.EqualFold(openingSOA.Ns, closingSOA.Ns) || !strings.EqualFold(openingSOA.Mbox, closingSOA.Mbox) ||
+		openingSOA.Serial != closingSOA.Serial || openingSOA.Refresh != closingSOA.Refresh ||
+		openingSOA.Retry != closingSOA.Retry || openingSOA.Expire != closingSOA.Expire ||
+		openingSOA.Minttl != closingSOA.Minttl {
+		return fmt.Errorf("opening and closing SOA records do not match")
+	}
+	return nil
+}
+
 // hostOnly strips the port from a host:port address, used as the TLS
 // ServerName for XFR-over-TLS certificate verification.
 func hostOnly(addr string) string {
@@ -772,8 +832,24 @@ func (s *SecondarySync) insertRRTx(exec executor, zoneID string, rr dns.RR, zone
 		}
 	}
 
-	rtype := dns.TypeToString[hdr.Rrtype]
+	rtype, ok := dns.TypeToString[hdr.Rrtype]
+	if !ok {
+		return fmt.Errorf("unsupported transferred RR type %d", hdr.Rrtype)
+	}
+	switch rr.(type) {
+	case *dns.A, *dns.AAAA, *dns.CNAME, *dns.MX, *dns.TXT, *dns.SRV, *dns.PTR, *dns.NS, *dns.CAA:
+	default:
+		return fmt.Errorf("cannot persist transferred RR type %s", rtype)
+	}
 	value := rrValue(rr)
+	if txt, ok := rr.(*dns.TXT); ok {
+		if len(txt.Txt) == 0 {
+			return fmt.Errorf("TXT record has no character strings")
+		}
+		if rebuilt := splitTXTValue(value); !sameStrings(txt.Txt, rebuilt) {
+			return fmt.Errorf("TXT character-string boundaries cannot be represented by the current record schema")
+		}
+	}
 
 	// Extract the per-type numeric fields stored in dedicated columns; the
 	// value column alone cannot represent MX preference, SRV priority /
@@ -800,6 +876,18 @@ func (s *SecondarySync) insertRRTx(exec executor, zoneID string, rr dns.RR, zone
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
 	`, uuid.New().String(), zoneID, name, rtype, value, int(hdr.Ttl), priority, weight, port, caaFlag)
 	return err
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // executor is a minimal interface satisfied by both *sql.DB and *sql.Tx.

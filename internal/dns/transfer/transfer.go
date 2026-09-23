@@ -54,9 +54,16 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 		return nil, fmt.Errorf("zone transfer requires TSIG authentication for zone %s", zoneName)
 	}
 
-	// Get zone ID.
+	// Read the zone row, records, and SOA from one SQLite snapshot. A full
+	// transfer must not pair records from one version with an SOA from another.
+	tx, err := h.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin AXFR snapshot: %w", err)
+	}
+	defer tx.Rollback()
+
 	var zoneID string
-	err := h.db.QueryRow("SELECT id FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&zoneID)
+	err = tx.QueryRow("SELECT id FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&zoneID)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("zone not found: %s", zoneName)
 	}
@@ -65,9 +72,10 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 	}
 
 	// Load all records for the zone.
-	rows, err := h.db.Query(`
+	rows, err := tx.Query(`
 		SELECT name, type, ttl, value, priority, weight, port, tag, flag
 		FROM dns_records WHERE zone_id = ? AND enabled = 1
+		  AND (expires_at IS NULL OR expires_at > datetime('now'))
 		ORDER BY name, type
 	`, zoneID)
 	if err != nil {
@@ -83,23 +91,31 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 		var tag sql.NullString
 
 		if err := rows.Scan(&name, &rtype, &ttl, &value, &priority, &weight, &port, &tag, &flag); err != nil {
-			continue
+			return nil, fmt.Errorf("scanning transfer record: %w", err)
 		}
 
 		rr := buildTransferRR(name, rtype, ttl, value, priority, weight, port, tag, flag, zoneName)
-		if rr != nil {
-			records = append(records, rr)
+		if rr == nil {
+			return nil, fmt.Errorf("building AXFR record for %s %s: unsupported or invalid record value", name, rtype)
 		}
+		records = append(records, rr)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating transfer records: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing transfer records: %w", err)
+	}
 
 	// Add SOA at start and end (AXFR requirement).
-	soaRR := h.getZoneSOA(zoneID, zoneName)
-	if soaRR != nil {
-		records = append([]dns.RR{soaRR}, records...)
-		records = append(records, soaRR)
+	soaRR := getZoneSOA(tx, zoneID, zoneName)
+	if soaRR == nil {
+		return nil, fmt.Errorf("zone %s has no SOA", zoneName)
+	}
+	records = append([]dns.RR{soaRR}, records...)
+	records = append(records, soaRR)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit AXFR snapshot: %w", err)
 	}
 
 	return records, nil
@@ -107,11 +123,10 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 
 // HandleIXFR handles an incremental zone transfer (IXFR, RFC 1995) request.
 //
-// Deltas are served from the dns_zone_changes history table, which every
-// record mutation writes to. When the requester's serial is current, a
-// single SOA is returned; when the history does not reach back far enough
-// (client too old or history pruned), the request falls back to a full
-// AXFR. Both paths require TSIG authentication.
+// IXFR requests currently receive a standards-compliant full AXFR unless the
+// requester already has the current serial. This avoids serving a partial
+// delta while all zone mutation paths do not yet guarantee atomic, complete
+// change-history writes. Both paths require TSIG authentication.
 func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName string) ([]dns.RR, error) {
 	if zoneName == "" {
 		return nil, fmt.Errorf("zone name is required")
@@ -138,141 +153,47 @@ func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName str
 		return nil, fmt.Errorf("transfer not authorized for zone %s with key %s", zoneName, tsigKeyName)
 	}
 
+	tx, err := h.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin IXFR serial snapshot: %w", err)
+	}
 	var zoneID string
-	var currentSerial uint32
-	err = h.db.QueryRow("SELECT id, serial FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&zoneID, &currentSerial)
+	err = tx.QueryRow("SELECT id FROM dns_zones WHERE name = ? AND enabled = 1", zoneName).Scan(&zoneID)
 	if err == sql.ErrNoRows {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("zone not found: %s", zoneName)
 	}
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("querying zone serial: %w", err)
 	}
 
-	currentSOA := h.getZoneSOA(zoneID, zoneName)
+	currentSOA := getZoneSOA(tx, zoneID, zoneName)
 	if currentSOA == nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("zone %s has no SOA", zoneName)
 	}
+	soa, ok := currentSOA.(*dns.SOA)
+	if !ok {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("zone %s SOA has an unexpected record type", zoneName)
+	}
+	currentSerial := soa.Serial
 
 	// Client is already up to date: respond with just the current SOA.
 	if serial == currentSerial {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit IXFR serial snapshot: %w", err)
+		}
 		return []dns.RR{currentSOA}, nil
 	}
-
-	// Collect change history newer than the client's serial, grouped by
-	// the serial that was in effect after the change was applied.
-	changes, err := h.loadChanges(zoneID, serial)
-	if err != nil {
-		return nil, err
+	if err := tx.Rollback(); err != nil {
+		return nil, fmt.Errorf("release IXFR serial snapshot: %w", err)
 	}
 
-	// No usable history (e.g. pruned or brand-new history): fall back to
-	// a full AXFR rather than serving a wrong delta.
-	if len(changes) == 0 {
-		slog.Info("transfer: IXFR history unavailable; falling back to AXFR",
-			"zone", zoneName, "client_serial", serial)
-		return h.HandleAXFR(zoneName, tsigKeyName)
-	}
-
-	// RFC 1995 delta layout:
-	//   SOA(current)
-	//   for each version (ascending serial):
-	//     SOA(version)          — old SOA marking the start of the delta
-	//     deletions (CLASS NONE)
-	//     additions (CLASS IN)
-	//   SOA(current)
-	resp := []dns.RR{currentSOA}
-	for _, group := range changes {
-		oldSOA := h.soaWithSerial(currentSOA, group.serial)
-		resp = append(resp, oldSOA)
-		for _, ch := range group.deletions {
-			ch.Header().Class = dns.ClassNONE
-			ch.Header().Ttl = 0
-			resp = append(resp, ch)
-		}
-		resp = append(resp, group.additions...)
-	}
-	resp = append(resp, currentSOA)
-	return resp, nil
-}
-
-// ixfrGroup holds the mutations of one serial version.
-type ixfrGroup struct {
-	serial    uint32
-	deletions []dns.RR
-	additions []dns.RR
-}
-
-// loadChanges reads dns_zone_changes newer than clientSerial and converts
-// the rows into RR groups per serial version. It returns an empty slice
-// when no history covers the requested range.
-func (h *AXFRHandler) loadChanges(zoneID string, clientSerial uint32) ([]ixfrGroup, error) {
-	// Resolve the zone name BEFORE opening the change cursor.
-	//
-	// The SQLite pool is capped at a single connection
-	// (see internal/database/database.go: SetMaxOpenConns(1)). Running a
-	// nested QueryRow while `rows` is still open therefore waits forever for
-	// a connection that cannot be released until this function returns — a
-	// self-deadlock that surfaces only as a busy_timeout error after 5s, and
-	// which no in-process retry can resolve.
-	var zoneName string
-	if err := h.db.QueryRow("SELECT name FROM dns_zones WHERE id = ?", zoneID).Scan(&zoneName); err != nil {
-		return nil, fmt.Errorf("querying zone name: %w", err)
-	}
-
-	rows, err := h.db.Query(`
-		SELECT serial, change_type, name, type, value, ttl, priority, weight, port
-		FROM dns_zone_changes
-		WHERE zone_id = ? AND serial > ?
-		ORDER BY serial ASC, created_at ASC
-	`, zoneID, clientSerial)
-	if err != nil {
-		return nil, fmt.Errorf("querying zone changes: %w", err)
-	}
-	defer rows.Close()
-
-	var groups []ixfrGroup
-	for rows.Next() {
-		var serial uint32
-		var changeType, name, rtype, value string
-		var ttl int
-		var priority, weight, port sql.NullInt64
-
-		if err := rows.Scan(&serial, &changeType, &name, &rtype, &value, &ttl, &priority, &weight, &port); err != nil {
-			continue
-		}
-
-		rr := buildTransferRR(name, rtype, ttl, value, priority, weight, port, sql.NullString{}, sql.NullInt64{}, zoneName)
-		if rr == nil {
-			continue
-		}
-
-		// Append to the group for this serial (rows arrive in order).
-		if len(groups) == 0 || groups[len(groups)-1].serial != serial {
-			groups = append(groups, ixfrGroup{serial: serial})
-		}
-		g := &groups[len(groups)-1]
-		if changeType == "delete" {
-			g.deletions = append(g.deletions, rr)
-		} else {
-			g.additions = append(g.additions, rr)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating zone changes: %w", err)
-	}
-	return groups, nil
-}
-
-// soaWithSerial returns a copy of soa with the given serial.
-func (h *AXFRHandler) soaWithSerial(soa dns.RR, serial uint32) dns.RR {
-	s, ok := soa.(*dns.SOA)
-	if !ok {
-		return soa
-	}
-	clone := *s
-	clone.Hdr = s.Hdr
-	clone.Serial = serial
-	return &clone
+	slog.Info("transfer: serving full AXFR response to IXFR request until journal writes are atomic",
+		"zone", zoneName, "client_serial", serial, "current_serial", currentSerial)
+	return h.HandleAXFR(zoneName, tsigKeyName)
 }
 
 // SendNotify sends a DNS NOTIFY message to the specified targets.
@@ -387,17 +308,23 @@ func (h *AXFRHandler) CheckTransferACL(zoneName string, clientIP string) bool {
 	return false
 }
 
-// getZoneSOA builds the SOA RR for a zone from the database.
-func (h *AXFRHandler) getZoneSOA(zoneID, zoneName string) dns.RR {
+type rowQueryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func getZoneSOA(queryer rowQueryer, zoneID, zoneName string) dns.RR {
 	var soaMName, soaRName string
 	var serial, refresh, retry, expire, minimum uint32
 	var defaultTTL int
 
-	err := h.db.QueryRow(`
+	err := queryer.QueryRow(`
 		SELECT soa_mname, soa_rname, serial, refresh, retry, expire, minimum, default_ttl
 		FROM dns_zones WHERE id = ?
 	`, zoneID).Scan(&soaMName, &soaRName, &serial, &refresh, &retry, &expire, &minimum, &defaultTTL)
 	if err != nil {
+		return nil
+	}
+	if defaultTTL < 0 || uint64(defaultTTL) > 2147483647 || minimum > 2147483647 {
 		return nil
 	}
 
@@ -421,6 +348,9 @@ func (h *AXFRHandler) getZoneSOA(zoneID, zoneName string) dns.RR {
 // buildTransferRR constructs a dns.RR from database fields for zone transfer.
 func buildTransferRR(name, rtype string, ttl int, value string,
 	priority, weight, port sql.NullInt64, tag sql.NullString, flag sql.NullInt64, zoneName string) dns.RR {
+	if ttl < 0 || uint64(ttl) > 2147483647 {
+		return nil
+	}
 
 	if name == "" || name == "@" {
 		name = zoneName
@@ -436,9 +366,6 @@ func buildTransferRR(name, rtype string, ttl int, value string,
 	}
 
 	ttlU := uint32(ttl)
-	if ttlU == 0 {
-		ttlU = 3600
-	}
 
 	hdr := dns.RR_Header{
 		Name:   name,

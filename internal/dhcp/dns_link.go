@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/miekg/dns"
 )
 
@@ -54,8 +57,9 @@ func Same(db *sql.DB) Stores { return Stores{Lease: db, DNS: db} }
 // DNSLink handles the DHCP to DNS half of the linkage: publishing and
 // withdrawing the A/PTR records of a binding.
 type DNSLink struct {
-	stores   Stores
-	reloader ZoneReloader
+	stores     Stores
+	reloader   ZoneReloader
+	notifyHook func(zoneName string)
 }
 
 // NewDNSLink creates a new DNS link manager. reloader may be nil, in which case
@@ -66,6 +70,26 @@ func NewDNSLink(stores Stores, reloader ZoneReloader) *DNSLink {
 
 // SetZoneReloader attaches the zone store to reload after each change.
 func (dl *DNSLink) SetZoneReloader(r ZoneReloader) { dl.reloader = r }
+
+// SetNotifyHook registers the callback used to announce committed changes in
+// primary zones to their configured secondary servers.
+func (dl *DNSLink) SetNotifyHook(fn func(zoneName string)) { dl.notifyHook = fn }
+
+func (dl *DNSLink) notifyPrimaryZones(serials map[string]uint32) {
+	if dl.notifyHook == nil || len(serials) == 0 {
+		return
+	}
+	for zoneID := range serials {
+		var name, zoneType string
+		if err := dl.stores.DNS.QueryRow(`SELECT name, type FROM dns_zones WHERE id = ?`, zoneID).Scan(&name, &zoneType); err != nil {
+			slog.Warn("dhcp_dns_link: could not resolve changed zone for NOTIFY", "zone_id", zoneID, "error", err)
+			continue
+		}
+		if zoneType == string(zone.ZoneTypePrimary) {
+			go dl.notifyHook(name)
+		}
+	}
+}
 
 func (dl *DNSLink) reload() {
 	if dl.reloader != nil {
@@ -266,6 +290,11 @@ func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) erro
 		return fmt.Errorf("dhcp_dns_link: begin A record transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	key := dnsRRsetKey{zoneID: zoneID, name: fqdn, rtype: "A"}
+	before, err := readDNSRRsetTx(tx, key)
+	if err != nil {
+		return fmt.Errorf("dhcp_dns_link: reading A RRset before update: %w", err)
+	}
 
 	if _, err := tx.Exec(`
 		DELETE FROM dns_records
@@ -298,10 +327,15 @@ func (dl *DNSLink) upsertARecord(e DNSEvent, zoneID, fqdn, leaseEnd string) erro
 		zoneID, fqdn, e.IPAddress, e.LeaseID, e.Generation, leaseEnd); err != nil {
 		return fmt.Errorf("dhcp_dns_link: writing A record %s -> %s: %w", fqdn, e.IPAddress, err)
 	}
+	serials, err := journalDNSRRsetChangesTx(tx, map[dnsRRsetKey][]dnsRR{key: before})
+	if err != nil {
+		return fmt.Errorf("dhcp_dns_link: journaling A record %s: %w", fqdn, err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("dhcp_dns_link: commit A record: %w", err)
 	}
+	dl.notifyPrimaryZones(serials)
 	return nil
 }
 
@@ -333,6 +367,11 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 		return fmt.Errorf("dhcp_dns_link: begin PTR transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	key := dnsRRsetKey{zoneID: zoneID, name: owner, rtype: "PTR"}
+	before, err := readDNSRRsetTx(tx, key)
+	if err != nil {
+		return fmt.Errorf("dhcp_dns_link: reading PTR RRset before update: %w", err)
+	}
 
 	if _, err := tx.Exec(`
 		DELETE FROM dns_records
@@ -365,10 +404,15 @@ func (dl *DNSLink) upsertPTRRecord(e DNSEvent, fqdn, leaseEnd string) error {
 		zoneID, owner, target, e.LeaseID, e.Generation, leaseEnd); err != nil {
 		return fmt.Errorf("dhcp_dns_link: writing PTR %s -> %s: %w", owner, target, err)
 	}
+	serials, err := journalDNSRRsetChangesTx(tx, map[dnsRRsetKey][]dnsRR{key: before})
+	if err != nil {
+		return fmt.Errorf("dhcp_dns_link: journaling PTR record %s: %w", owner, err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("dhcp_dns_link: commit PTR record: %w", err)
 	}
+	dl.notifyPrimaryZones(serials)
 	return nil
 }
 
@@ -451,7 +495,54 @@ func (dl *DNSLink) deleteOwnedRecords(ownerRef string, generation int64, ip, fqd
 	if ownerRef == "" {
 		return 0, nil
 	}
-	res, err := dl.stores.DNS.Exec(`
+	tx, err := dl.stores.DNS.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: begin lease record withdrawal: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	rows, err := tx.Query(`
+		SELECT DISTINCT zone_id, name, type FROM dns_records
+		WHERE owner = 'dhcp'
+		  AND (
+		        (owner_ref = ? AND owner_generation <= ?)
+		     OR (owner_ref IS NULL AND (
+		             (type = 'A'   AND value = ?)
+		          OR (type = 'PTR' AND value IN (?, ?))
+		        ))
+		      )`,
+		ownerRef, generation,
+		ip, fqdn, strings.TrimSuffix(fqdn, ".")+".")
+	if err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: reading records owned by lease %s: %w", ownerRef, err)
+	}
+	var keys []dnsRRsetKey
+	for rows.Next() {
+		var key dnsRRsetKey
+		if err := rows.Scan(&key.zoneID, &key.name, &key.rtype); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("dhcp_dns_link: scanning owned RRsets: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("dhcp_dns_link: iterating owned RRsets: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: closing owned RRsets: %w", err)
+	}
+	snapshots := make(map[dnsRRsetKey][]dnsRR, len(keys))
+	for _, key := range keys {
+		if _, exists := snapshots[key]; exists {
+			continue
+		}
+		before, err := readDNSRRsetTx(tx, key)
+		if err != nil {
+			return 0, fmt.Errorf("dhcp_dns_link: reading owned RRset: %w", err)
+		}
+		snapshots[key] = before
+	}
+	res, err := tx.Exec(`
 		DELETE FROM dns_records
 		WHERE owner = 'dhcp'
 		  AND (
@@ -466,8 +557,159 @@ func (dl *DNSLink) deleteOwnedRecords(ownerRef string, generation int64, ip, fqd
 	if err != nil {
 		return 0, fmt.Errorf("dhcp_dns_link: deleting records owned by lease %s: %w", ownerRef, err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: counting withdrawn records: %w", err)
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	serials, err := journalDNSRRsetChangesTx(tx, snapshots)
+	if err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: journaling withdrawn records: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("dhcp_dns_link: commit lease record withdrawal: %w", err)
+	}
+	dl.notifyPrimaryZones(serials)
 	return int(n), nil
+}
+
+type dnsRRsetKey struct {
+	zoneID string
+	name   string
+	rtype  string
+}
+
+type dnsRR struct {
+	name     string
+	rtype    string
+	value    string
+	ttl      int
+	priority int
+	weight   int
+	port     int
+}
+
+// readDNSRRsetTx reads the DNS-visible RRset. Ownership metadata is excluded:
+// changing the lease generation alone does not change what a secondary serves.
+func readDNSRRsetTx(tx *sql.Tx, key dnsRRsetKey) ([]dnsRR, error) {
+	rows, err := tx.Query(`
+		SELECT name, type, value, ttl, COALESCE(priority, 0),
+			COALESCE(weight, 0), COALESCE(port, 0)
+		FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND enabled = 1
+	`, key.zoneID, key.name, key.rtype)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []dnsRR
+	for rows.Next() {
+		var rr dnsRR
+		if err := rows.Scan(&rr.name, &rr.rtype, &rr.value, &rr.ttl, &rr.priority, &rr.weight, &rr.port); err != nil {
+			return nil, err
+		}
+		out = append(out, rr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// journalDNSRRsetChangesTx compares each touched RRset before and after its
+// mutation. It bumps one SOA serial per changed zone and records only
+// DNS-visible additions and removals in the caller's transaction.
+func journalDNSRRsetChangesTx(tx *sql.Tx, before map[dnsRRsetKey][]dnsRR) (map[string]uint32, error) {
+	changesByZone := make(map[string][]dnsRRChange)
+	keys := make([]dnsRRsetKey, 0, len(before))
+	for key := range before {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].zoneID != keys[j].zoneID {
+			return keys[i].zoneID < keys[j].zoneID
+		}
+		if keys[i].name != keys[j].name {
+			return keys[i].name < keys[j].name
+		}
+		return keys[i].rtype < keys[j].rtype
+	})
+	for _, key := range keys {
+		after, err := readDNSRRsetTx(tx, key)
+		if err != nil {
+			return nil, err
+		}
+		oldSet, newSet := make(map[dnsRR]struct{}, len(before[key])), make(map[dnsRR]struct{}, len(after))
+		for _, rr := range before[key] {
+			oldSet[rr] = struct{}{}
+		}
+		for _, rr := range after {
+			newSet[rr] = struct{}{}
+		}
+		for rr := range oldSet {
+			if _, exists := newSet[rr]; !exists {
+				changesByZone[key.zoneID] = append(changesByZone[key.zoneID], dnsRRChange{kind: "delete", rr: rr})
+			}
+		}
+		for rr := range newSet {
+			if _, exists := oldSet[rr]; !exists {
+				changesByZone[key.zoneID] = append(changesByZone[key.zoneID], dnsRRChange{kind: "add", rr: rr})
+			}
+		}
+	}
+
+	serials := make(map[string]uint32, len(changesByZone))
+	for zoneID, changes := range changesByZone {
+		if len(changes) == 0 {
+			continue
+		}
+		var current uint32
+		if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+			return nil, fmt.Errorf("reading SOA serial for zone %s: %w", zoneID, err)
+		}
+		next := zone.NextSerial(current)
+		res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)
+		if err != nil {
+			return nil, fmt.Errorf("bumping SOA serial for zone %s: %w", zoneID, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected != 1 {
+			return nil, fmt.Errorf("SOA serial changed concurrently for zone %s", zoneID)
+		}
+		serials[zoneID] = next
+		sort.Slice(changes, func(i, j int) bool {
+			if changes[i].rr.name != changes[j].rr.name {
+				return changes[i].rr.name < changes[j].rr.name
+			}
+			if changes[i].rr.rtype != changes[j].rr.rtype {
+				return changes[i].rr.rtype < changes[j].rr.rtype
+			}
+			if changes[i].kind != changes[j].kind {
+				return changes[i].kind == "delete"
+			}
+			return changes[i].rr.value < changes[j].rr.value
+		})
+		for _, change := range changes {
+			rr := change.rr
+			if _, err := tx.Exec(`
+				INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, uuid.NewString(), zoneID, next, change.kind, rr.name, rr.rtype, rr.value,
+				rr.ttl, rr.priority, rr.weight, rr.port); err != nil {
+				return nil, fmt.Errorf("writing DNS change history for zone %s: %w", zoneID, err)
+			}
+		}
+	}
+	return serials, nil
+}
+
+type dnsRRChange struct {
+	kind string
+	rr   dnsRR
 }
 
 // Reconcile repairs drift between leases and the DHCP-driven DNS records. The

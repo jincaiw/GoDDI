@@ -117,6 +117,12 @@ func (m *RecordManager) notifyPrimary(zoneID string) {
 	}
 }
 
+// NotifyPrimaryZone announces a committed change made outside RecordManager.
+// The caller must invoke it only after the zone's serial and data commit.
+func (m *RecordManager) NotifyPrimaryZone(zoneID string) {
+	m.notifyPrimary(zoneID)
+}
+
 // NewRecordManager creates a new RecordManager.
 func NewRecordManager(db *sql.DB, zoneStore *Store, zoneMgr *ZoneManager) *RecordManager {
 	return &RecordManager{
@@ -160,34 +166,13 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 	// Normalize record name.
 	name := normalizeRecordName(opts.Name, zone.Name)
 
-	// Overwrite (Technitium parity): drop any existing record with the same
-	// name and type in this zone before adding the new one.
-	if opts.Overwrite {
-		if _, err := m.db.Exec("DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?",
-			zoneID, name, opts.Type); err != nil {
-			return nil, fmt.Errorf("overwriting existing record: %w", err)
-		}
-	}
-
-	// CNAME uniqueness: a name that has a CNAME record cannot have any other records.
-	if opts.Type == "CNAME" {
-		var count int
-		err := m.db.QueryRow("SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type != 'CNAME' AND enabled = 1", zoneID, name).Scan(&count)
-		if err == nil && count > 0 {
-			return nil, fmt.Errorf("CNAME conflict: name %s already has other record types", name)
-		}
-	} else {
-		var count int
-		err := m.db.QueryRow("SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'CNAME' AND enabled = 1", zoneID, name).Scan(&count)
-		if err == nil && count > 0 {
-			return nil, fmt.Errorf("CNAME conflict: name %s already has a CNAME record", name)
-		}
-	}
-
 	// Set TTL.
 	ttl := zone.DefaultTTL
 	if opts.TTL != nil {
 		ttl = *opts.TTL
+	}
+	if err := validateRecordTTL(ttl); err != nil {
+		return nil, err
 	}
 
 	enabled := true
@@ -203,8 +188,70 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		expiresAt = &t
 	}
 
+	// Resolve the optional reverse-zone target before opening the write
+	// transaction. The database uses a single SQLite connection, so querying
+	// the zone manager from inside the transaction would deadlock.
+	var ptrZone *Zone
+	var ptrOwner string
+	if opts.CreatePTR && (opts.Type == "A" || opts.Type == "AAAA") {
+		ptrZone, ptrOwner, err = m.findReverseZone(opts.Type, opts.Value)
+		if err != nil {
+			return nil, fmt.Errorf("finding reverse zone for automatic PTR: %w", err)
+		}
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin record create transaction: %w", err)
+	}
+	defer tx.Rollback()
+	// Check CNAME exclusivity in the same transaction as replacement/insertion.
+	var conflictCount int
+	conflictQuery := "SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'CNAME' AND enabled = 1"
+	conflictMessage := fmt.Sprintf("CNAME conflict: name %s already has a CNAME record", name)
+	if opts.Type == "CNAME" {
+		conflictQuery = "SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type != 'CNAME' AND enabled = 1"
+		conflictMessage = fmt.Sprintf("CNAME conflict: name %s already has other record types", name)
+	}
+	if err := tx.QueryRow(conflictQuery, zoneID, name).Scan(&conflictCount); err != nil {
+		return nil, fmt.Errorf("checking CNAME exclusivity: %w", err)
+	}
+	if conflictCount > 0 {
+		return nil, fmt.Errorf("%s", conflictMessage)
+	}
+
+	// Overwrite and its deletions are part of the same zone version as the add.
+	var replaced []Record
+	if opts.Overwrite {
+		rows, queryErr := tx.Query(`SELECT id, zone_id, name, type, value, ttl,
+			COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0)
+			FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?`, zoneID, name, opts.Type)
+		if queryErr != nil {
+			return nil, fmt.Errorf("querying overwritten records: %w", queryErr)
+		}
+		for rows.Next() {
+			var rec Record
+			if scanErr := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
+				&rec.Priority, &rec.Weight, &rec.Port); scanErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning overwritten record: %w", scanErr)
+			}
+			replaced = append(replaced, rec)
+		}
+		if queryErr = rows.Err(); queryErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterating overwritten records: %w", queryErr)
+		}
+		if queryErr = rows.Close(); queryErr != nil {
+			return nil, fmt.Errorf("closing overwritten records: %w", queryErr)
+		}
+		if _, queryErr = tx.Exec("DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?", zoneID, name, opts.Type); queryErr != nil {
+			return nil, fmt.Errorf("overwriting existing record: %w", queryErr)
+		}
+	}
+
 	id := uuid.New().String()
-	_, err = m.db.Exec(`
+	_, err = tx.Exec(`
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, enabled, comment, tags, owner, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, zoneID, name, opts.Type, opts.Value, ttl,
@@ -214,17 +261,32 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
 
-	// Increment zone serial and record the change for IXFR.
-	serial, _ := m.zoneMgr.IncrementSerial(zoneID)
-	m.logChange(zoneID, serial, "add", name, opts.Type, opts.Value, ttl,
-		intOrZero(opts.Priority), intOrZero(opts.Weight), intOrZero(opts.Port))
-
-	// Auto-create PTR record if requested for A/AAAA.
-	if opts.CreatePTR && (opts.Type == "A" || opts.Type == "AAAA") {
-		if err := m.autoCreatePTR(zoneID, name, opts.Type, opts.Value, ttl); err != nil {
-			// Log but don't fail the record creation.
-			_ = err
+	serial, err := bumpZoneSerialTx(tx, zoneID)
+	if err != nil {
+		return nil, fmt.Errorf("bumping zone serial: %w", err)
+	}
+	for _, rec := range replaced {
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value, rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return nil, fmt.Errorf("journaling overwritten record: %w", err)
 		}
+	}
+	if err := logChangeTx(tx, zoneID, serial, "add", name, opts.Type, opts.Value, ttl,
+		intOrZero(opts.Priority), intOrZero(opts.Weight), intOrZero(opts.Port)); err != nil {
+		return nil, fmt.Errorf("journaling created record: %w", err)
+	}
+	ptrCreated := false
+	if ptrZone != nil {
+		ptrCreated, err = m.createPTRTx(tx, ptrZone, ptrOwner, name, ttl)
+		if err != nil {
+			return nil, fmt.Errorf("creating automatic PTR record: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit record create transaction: %w", err)
+	}
+	m.notifyPrimary(zoneID)
+	if ptrCreated {
+		m.notifyPrimary(ptrZone.ID)
 	}
 
 	// Reload in-memory zone store.
@@ -288,6 +350,51 @@ func (m *RecordManager) GetRecord(id string) (*Record, error) {
 		r.ExpiresAt = &expiresAt.Time
 	}
 
+	return &r, nil
+}
+
+func getRecordTx(tx *sql.Tx, id string) (*Record, error) {
+	var r Record
+	var priority, weight, port, flag sql.NullInt64
+	var comment, tags, owner sql.NullString
+	var expiresAt sql.NullTime
+	err := tx.QueryRow(`
+		SELECT id, zone_id, name, type, value, ttl, priority, weight, port, flag,
+			enabled, comment, tags, owner, expires_at, created_at, updated_at
+		FROM dns_records WHERE id = ?
+	`, id).Scan(&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.Value, &r.TTL,
+		&priority, &weight, &port, &flag, &r.Enabled,
+		&comment, &tags, &owner, &expiresAt, &r.CreatedAt, &r.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("record not found: %s", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying record: %w", err)
+	}
+	if priority.Valid {
+		r.Priority = int(priority.Int64)
+	}
+	if weight.Valid {
+		r.Weight = int(weight.Int64)
+	}
+	if port.Valid {
+		r.Port = int(port.Int64)
+	}
+	if flag.Valid {
+		r.Flag = int(flag.Int64)
+	}
+	if comment.Valid {
+		r.Comment = comment.String
+	}
+	if tags.Valid {
+		r.Tags = tags.String
+	}
+	if owner.Valid {
+		r.Owner = owner.String
+	}
+	if expiresAt.Valid {
+		r.ExpiresAt = &expiresAt.Time
+	}
 	return &r, nil
 }
 
@@ -419,6 +526,7 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 	// Build update query dynamically.
 	var setClauses []string
 	var args []interface{}
+	var normalizedName string
 
 	if opts.Name != "" {
 		// Get zone for name normalization.
@@ -427,6 +535,7 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 			return nil, zoneErr
 		}
 		name := normalizeRecordName(opts.Name, zone.Name)
+		normalizedName = name
 		setClauses = append(setClauses, "name = ?")
 		args = append(args, name)
 	}
@@ -461,6 +570,9 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		args = append(args, opts.Value)
 	}
 	if opts.TTL != nil {
+		if err := validateRecordTTL(*opts.TTL); err != nil {
+			return nil, err
+		}
 		setClauses = append(setClauses, "ttl = ?")
 		args = append(args, *opts.TTL)
 	}
@@ -524,15 +636,93 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 	args = append(args, id)
 
 	query := "UPDATE dns_records SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	_, err = m.db.Exec(query, args...)
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin record update transaction: %w", err)
+	}
+	defer tx.Rollback()
+	current, err := getRecordTx(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	existing = current
+	if opts.Value != "" {
+		effectiveType := existing.Type
+		if opts.Type != "" {
+			effectiveType = opts.Type
+		}
+		priority, weight, port := existing.Priority, existing.Weight, existing.Port
+		if opts.Priority != nil {
+			priority = *opts.Priority
+		}
+		if opts.Weight != nil {
+			weight = *opts.Weight
+		}
+		if opts.Port != nil {
+			port = *opts.Port
+		}
+		if err := validateRecordValue(effectiveType, opts.Value, &priority, &weight, &port, opts.Tag, &existing.Flag); err != nil {
+			return nil, fmt.Errorf("invalid record value: %w", err)
+		}
+	}
+	result, err := tx.Exec(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("updating record: %w", err)
 	}
-
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(existing.ZoneID); err != nil {
-		_ = err
+	if affected, affectedErr := result.RowsAffected(); affectedErr != nil || affected != 1 {
+		if affectedErr != nil {
+			return nil, fmt.Errorf("checking updated record: %w", affectedErr)
+		}
+		return nil, fmt.Errorf("record changed concurrently or no longer exists: %s", id)
 	}
+	updated := *existing
+	if opts.Name != "" {
+		updated.Name = normalizedName
+	}
+	if opts.Type != "" {
+		updated.Type = opts.Type
+	}
+	if opts.Value != "" {
+		updated.Value = opts.Value
+	}
+	if opts.TTL != nil {
+		updated.TTL = *opts.TTL
+	}
+	if opts.Priority != nil {
+		updated.Priority = *opts.Priority
+	}
+	if opts.Weight != nil {
+		updated.Weight = *opts.Weight
+	}
+	if opts.Port != nil {
+		updated.Port = *opts.Port
+	}
+	if opts.Tag != "" {
+		updated.Tag = opts.Tag
+	}
+	if opts.Flag != nil {
+		updated.Flag = *opts.Flag
+	}
+	if opts.Enabled != nil {
+		updated.Enabled = *opts.Enabled
+	}
+	serial, err := bumpZoneSerialTx(tx, existing.ZoneID)
+	if err != nil {
+		return nil, fmt.Errorf("bumping zone serial: %w", err)
+	}
+	if err := logChangeTx(tx, existing.ZoneID, serial, "delete", existing.Name, existing.Type, existing.Value,
+		existing.TTL, existing.Priority, existing.Weight, existing.Port); err != nil {
+		return nil, fmt.Errorf("journaling prior record: %w", err)
+	}
+	if err := logChangeTx(tx, updated.ZoneID, serial, "add", updated.Name, updated.Type, updated.Value,
+		updated.TTL, updated.Priority, updated.Weight, updated.Port); err != nil {
+		return nil, fmt.Errorf("journaling updated record: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit record update transaction: %w", err)
+	}
+
+	m.notifyPrimary(existing.ZoneID)
 
 	// Reload in-memory zone store.
 	if m.zoneStore != nil {
@@ -552,21 +742,38 @@ func (m *RecordManager) DeleteRecord(id string) error {
 		return err
 	}
 
-	// Get record to know which zone to update serial for.
-	record, err := m.GetRecord(id)
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin record delete transaction: %w", err)
+	}
+	defer tx.Rollback()
+	record, err := getRecordTx(tx, id)
 	if err != nil {
 		return err
 	}
-
-	_, err = m.db.Exec("DELETE FROM dns_records WHERE id = ?", id)
+	result, err := tx.Exec("DELETE FROM dns_records WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("deleting record: %w", err)
 	}
+	if affected, affectedErr := result.RowsAffected(); affectedErr != nil || affected != 1 {
+		if affectedErr != nil {
+			return fmt.Errorf("checking deleted record: %w", affectedErr)
+		}
+		return fmt.Errorf("record changed concurrently or no longer exists: %s", id)
+	}
 
-	// Increment zone serial and record the change for IXFR.
-	serial, _ := m.zoneMgr.IncrementSerial(record.ZoneID)
-	m.logChange(record.ZoneID, serial, "delete", record.Name, record.Type,
-		record.Value, record.TTL, record.Priority, record.Weight, record.Port)
+	serial, err := bumpZoneSerialTx(tx, record.ZoneID)
+	if err != nil {
+		return fmt.Errorf("bumping zone serial: %w", err)
+	}
+	if err := logChangeTx(tx, record.ZoneID, serial, "delete", record.Name, record.Type,
+		record.Value, record.TTL, record.Priority, record.Weight, record.Port); err != nil {
+		return fmt.Errorf("journaling deleted record: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit record delete transaction: %w", err)
+	}
+	m.notifyPrimary(record.ZoneID)
 
 	// Reload in-memory zone store.
 	if m.zoneStore != nil {
@@ -613,10 +820,21 @@ func (m *RecordManager) BatchCreateRecords(zoneID string, records []RecordOption
 		}
 		created = append(created, *rec)
 	}
+	serial, err := bumpZoneSerialTx(tx, zoneID)
+	if err != nil {
+		return nil, fmt.Errorf("bumping zone serial: %w", err)
+	}
+	for _, rec := range created {
+		if err := logChangeTx(tx, rec.ZoneID, serial, "add", rec.Name, rec.Type, rec.Value,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return nil, fmt.Errorf("journaling created record: %w", err)
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit batch create transaction: %w", err)
 	}
+	m.notifyPrimary(zoneID)
 
 	// Reload in-memory zone store once for the whole batch.
 	if m.zoneStore != nil {
@@ -656,9 +874,22 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 	}
 	defer tx.Rollback()
 
-	for _, rec := range deleted {
-		if _, err := tx.Exec("DELETE FROM dns_records WHERE id = ?", rec.ID); err != nil {
+	for i := range deleted {
+		rec, currentErr := getRecordTx(tx, deleted[i].ID)
+		if currentErr != nil {
+			return fmt.Errorf("reading record %s in delete transaction: %w", deleted[i].ID, currentErr)
+		}
+		deleted[i] = *rec
+		rec = &deleted[i]
+		result, err := tx.Exec("DELETE FROM dns_records WHERE id = ?", rec.ID)
+		if err != nil {
 			return fmt.Errorf("deleting record %s: %w", rec.ID, err)
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr != nil || affected != 1 {
+			if affectedErr != nil {
+				return fmt.Errorf("checking deletion of record %s: %w", rec.ID, affectedErr)
+			}
+			return fmt.Errorf("record changed concurrently or no longer exists: %s", rec.ID)
 		}
 	}
 
@@ -687,21 +918,23 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 		); err != nil {
 			return fmt.Errorf("updating serial for zone %s: %w", rec.ZoneID, err)
 		}
+		for _, deletedRec := range deleted {
+			if deletedRec.ZoneID != rec.ZoneID {
+				continue
+			}
+			if err := logChangeTx(tx, deletedRec.ZoneID, newSerial, "delete", deletedRec.Name, deletedRec.Type,
+				deletedRec.Value, deletedRec.TTL, deletedRec.Priority, deletedRec.Weight, deletedRec.Port); err != nil {
+				return fmt.Errorf("journaling deleted record %s: %w", deletedRec.ID, err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit batch delete transaction: %w", err)
 	}
 
-	// Record one change-history batch per zone for IXFR.
-	zoneSerial := make(map[string]uint32, len(zoneBumped))
 	for zoneID := range zoneBumped {
-		serial, _ := m.zoneMgr.IncrementSerial(zoneID)
-		zoneSerial[zoneID] = serial
-	}
-	for _, rec := range deleted {
-		m.logChange(rec.ZoneID, zoneSerial[rec.ZoneID], "delete", rec.Name, rec.Type,
-			rec.Value, rec.TTL, rec.Priority, rec.Weight, rec.Port)
+		m.notifyPrimary(zoneID)
 	}
 
 	if m.zoneStore != nil {
@@ -759,6 +992,9 @@ func (m *RecordManager) insertRecordTx(tx *sql.Tx, zone *Zone, opts RecordOption
 	if opts.TTL != nil {
 		ttl = *opts.TTL
 	}
+	if err := validateRecordTTL(ttl); err != nil {
+		return nil, err
+	}
 	enabled := true
 	if opts.Enabled != nil {
 		enabled = *opts.Enabled
@@ -804,26 +1040,45 @@ func intOrZero(v *int) int {
 	return *v
 }
 
-// logChange records one RR mutation into dns_zone_changes for true IXFR
-// (RFC 1995) incremental transfer. Change history failure is logged but
-// never fails the mutation: IXFR clients fall back to AXFR when history
-// is incomplete.
-func (m *RecordManager) logChange(zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port int) {
-	if serial == 0 {
-		return
+func validateRecordTTL(ttl int) error {
+	if ttl < 0 || uint64(ttl) > 2147483647 {
+		return fmt.Errorf("TTL must be between 0 and 2147483647 seconds")
 	}
-	_, err := m.db.Exec(`
+	return nil
+}
+
+// bumpZoneSerialTx advances a zone serial within the caller's mutation
+// transaction, so records, SOA serial, and history either all commit or none do.
+func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {
+	var current uint32
+	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+		return 0, fmt.Errorf("querying serial: %w", err)
+	}
+	next := NextSerial(current)
+	result, err := tx.Exec("UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?", next, zoneID, current)
+	if err != nil {
+		return 0, fmt.Errorf("updating serial: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("checking serial update: %w", err)
+	}
+	if rows != 1 {
+		return 0, fmt.Errorf("serial changed concurrently")
+	}
+	return next, nil
+}
+
+func logChangeTx(tx *sql.Tx, zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port int) error {
+	if serial == 0 {
+		return fmt.Errorf("zone serial must be nonzero")
+	}
+	_, err := tx.Exec(`
 		INSERT INTO dns_zone_changes (id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, uuid.New().String(), zoneID, serial, changeType, name, rtype, value, ttl,
 		nullInt(&priority), nullInt(&weight), nullInt(&port))
-	if err != nil {
-		slog.Warn("record: failed to write zone change history", "zone_id", zoneID, "error", err)
-	}
-
-	// NOTIFY secondaries about the serial bump (primary zones only; the
-	// hook is a no-op when unset or the zone has no notify targets).
-	m.notifyPrimary(zoneID)
+	return err
 }
 
 // PruneZoneChangeHistory removes change rows older than the given number of
@@ -848,70 +1103,136 @@ func (m *RecordManager) PruneZoneChangeHistory(days int) {
 // CleanupExpiredRecords deletes records whose expiry has passed and returns
 // how many were removed. Intended to run periodically (record aging).
 func (m *RecordManager) CleanupExpiredRecords() (int64, error) {
-	res, err := m.db.Exec(
-		"DELETE FROM dns_records WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')",
-	)
+	tx, err := m.db.Begin()
 	if err != nil {
-		return 0, fmt.Errorf("deleting expired records: %w", err)
+		return 0, fmt.Errorf("begin expired record cleanup transaction: %w", err)
 	}
-	deleted, _ := res.RowsAffected()
-	if deleted > 0 {
-		slog.Info("record: expired records cleaned up", "deleted", deleted)
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id, zone_id, name, type, value, ttl,
+		COALESCE(priority, 0), COALESCE(weight, 0), COALESCE(port, 0)
+		FROM dns_records WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')`)
+	if err != nil {
+		return 0, fmt.Errorf("querying expired records: %w", err)
 	}
+	type expiredRecord struct {
+		id string
+		Record
+	}
+	var expired []expiredRecord
+	for rows.Next() {
+		var rec expiredRecord
+		if err := rows.Scan(&rec.id, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL,
+			&rec.Priority, &rec.Weight, &rec.Port); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scanning expired record: %w", err)
+		}
+		expired = append(expired, rec)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterating expired records: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("closing expired records: %w", err)
+	}
+	if len(expired) == 0 {
+		return 0, nil
+	}
+	for _, rec := range expired {
+		if _, err := tx.Exec("DELETE FROM dns_records WHERE id = ?", rec.id); err != nil {
+			return 0, fmt.Errorf("deleting expired record %s: %w", rec.id, err)
+		}
+	}
+	zoneSerial := make(map[string]uint32)
+	for _, rec := range expired {
+		serial, ok := zoneSerial[rec.ZoneID]
+		if !ok {
+			serial, err = bumpZoneSerialTx(tx, rec.ZoneID)
+			if err != nil {
+				return 0, fmt.Errorf("bumping zone serial for expired records: %w", err)
+			}
+			zoneSerial[rec.ZoneID] = serial
+		}
+		if err := logChangeTx(tx, rec.ZoneID, serial, "delete", rec.Name, rec.Type, rec.Value,
+			rec.TTL, rec.Priority, rec.Weight, rec.Port); err != nil {
+			return 0, fmt.Errorf("journaling expired record %s: %w", rec.id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit expired record cleanup: %w", err)
+	}
+	for zoneID := range zoneSerial {
+		m.notifyPrimary(zoneID)
+	}
+	deleted := int64(len(expired))
+	slog.Info("record: expired records cleaned up", "deleted", deleted)
 	return deleted, nil
 }
 
-// autoCreatePTR automatically creates a PTR record in the reverse zone for an A/AAAA record.
-func (m *RecordManager) autoCreatePTR(zoneID string, name string, recordType string, value string, ttl int) error {
+// findReverseZone resolves the reverse zone and relative owner for an address.
+// It runs before the caller's write transaction to avoid a nested query on
+// SQLite's single connection.
+func (m *RecordManager) findReverseZone(recordType, value string) (*Zone, string, error) {
 	var ptrName string
 	var err error
 
-	if recordType == "A" {
+	switch recordType {
+	case "A":
 		ptrName, err = ipv4ToPTR(value)
-		if err != nil {
-			return err
-		}
-	} else {
+	case "AAAA":
 		ptrName, err = ipv6ToPTR(value)
-		if err != nil {
-			return err
-		}
+	default:
+		return nil, "", fmt.Errorf("PTR creation is unsupported for record type %s", recordType)
+	}
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Find the reverse zone that contains this PTR name.
 	reverseZones, _, err := m.zoneMgr.ListZones(ZoneFilter{Type: "reverse", PageSize: 100})
 	if err != nil {
-		return fmt.Errorf("finding reverse zones: %w", err)
+		return nil, "", fmt.Errorf("listing reverse zones: %w", err)
 	}
 
 	for _, rz := range reverseZones {
-		if strings.HasSuffix(ptrName, rz.Name) {
-			// Found the reverse zone. Create PTR record.
-			relativeName := strings.TrimSuffix(ptrName, rz.Name)
+		if strings.HasSuffix(strings.ToLower(ptrName), strings.ToLower(rz.Name)) {
+			relativeName := ptrName[:len(ptrName)-len(rz.Name)]
 			if relativeName == "" {
 				relativeName = "@"
 			}
-
-			id := uuid.New().String()
-			_, err = m.db.Exec(`
-				INSERT OR IGNORE INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
-				VALUES (?, ?, ?, 'PTR', ?, ?, 1)
-			`, id, rz.ID, relativeName, name, ttl)
-			if err != nil {
-				return fmt.Errorf("creating PTR record: %w", err)
-			}
-
-			// Increment reverse zone serial.
-			if _, err := m.zoneMgr.IncrementSerial(rz.ID); err != nil {
-				_ = err
-			}
-
-			return nil
+			return &rz, relativeName, nil
 		}
 	}
 
-	// No reverse zone found; skip PTR creation silently.
-	return nil
+	// No reverse zone is configured for this address.
+	return nil, "", nil
+}
+
+// createPTRTx inserts a PTR and journals its serial in the caller's
+// transaction. It reports whether a new PTR was created.
+func (m *RecordManager) createPTRTx(tx *sql.Tx, reverseZone *Zone, owner, target string, ttl int) (bool, error) {
+	res, err := tx.Exec(`
+		INSERT OR IGNORE INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
+		VALUES (?, ?, ?, 'PTR', ?, ?, 1)
+	`, uuid.New().String(), reverseZone.ID, owner, target, ttl)
+	if err != nil {
+		return false, fmt.Errorf("inserting PTR record: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking PTR insertion: %w", err)
+	}
+	if affected == 0 {
+		return false, nil
+	}
+	serial, err := bumpZoneSerialTx(tx, reverseZone.ID)
+	if err != nil {
+		return false, fmt.Errorf("bumping reverse zone serial: %w", err)
+	}
+	if err := logChangeTx(tx, reverseZone.ID, serial, "add", owner, "PTR", target, ttl, 0, 0, 0); err != nil {
+		return false, fmt.Errorf("journaling PTR record: %w", err)
+	}
+	return true, nil
 }
 
 // ipv4ToPTR converts an IPv4 address to a PTR record name.

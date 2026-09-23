@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -194,6 +195,10 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 	if err != nil {
 		return fmt.Errorf("read zone: %w", err)
 	}
+	before, err := snapshotServedRRs(tx, id)
+	if err != nil {
+		return fmt.Errorf("snapshot zone records before release: %w", err)
+	}
 
 	if _, err := tx.Exec(
 		`DELETE FROM dns_records WHERE zone_id = ? AND authored_locally = 0`, id); err != nil {
@@ -226,6 +231,104 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 		); err != nil {
 			return fmt.Errorf("insert record %s %s: %w", rec.Name, rec.Type, err)
 		}
+	}
+	after, err := snapshotServedRRs(tx, id)
+	if err != nil {
+		return fmt.Errorf("snapshot zone records after release: %w", err)
+	}
+	if !sameServedRRs(before, after) {
+		if err := bumpZoneSerialForRelease(tx, id); err != nil {
+			return fmt.Errorf("bump zone serial after record release: %w", err)
+		}
+	}
+	return nil
+}
+
+type servedRR struct {
+	name, rtype, value string
+	ttl                int
+	priority, weight   int64
+	port, flag         int64
+	tag                string
+}
+
+func snapshotServedRRs(tx *sql.Tx, zoneID string) ([]servedRR, error) {
+	rows, err := tx.Query(`
+		SELECT name, type, value, ttl, COALESCE(priority, 0), COALESCE(weight, 0),
+			COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
+		FROM dns_records WHERE zone_id = ? AND enabled = 1`, zoneID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []servedRR
+	for rows.Next() {
+		var rr servedRR
+		if err := rows.Scan(&rr.name, &rr.rtype, &rr.value, &rr.ttl, &rr.priority, &rr.weight,
+			&rr.port, &rr.flag, &rr.tag); err != nil {
+			return nil, err
+		}
+		records = append(records, rr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].name != records[j].name {
+			return records[i].name < records[j].name
+		}
+		if records[i].rtype != records[j].rtype {
+			return records[i].rtype < records[j].rtype
+		}
+		if records[i].value != records[j].value {
+			return records[i].value < records[j].value
+		}
+		if records[i].ttl != records[j].ttl {
+			return records[i].ttl < records[j].ttl
+		}
+		if records[i].priority != records[j].priority {
+			return records[i].priority < records[j].priority
+		}
+		if records[i].weight != records[j].weight {
+			return records[i].weight < records[j].weight
+		}
+		if records[i].port != records[j].port {
+			return records[i].port < records[j].port
+		}
+		if records[i].flag != records[j].flag {
+			return records[i].flag < records[j].flag
+		}
+		return records[i].tag < records[j].tag
+	})
+	return records, nil
+}
+
+func sameServedRRs(a, b []servedRR) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) error {
+	var current uint32
+	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+		return err
+	}
+	next := zone.NextSerial(current)
+	res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)
+	if err != nil {
+		return err
+	}
+	if affected, err := res.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("zone serial changed concurrently")
 	}
 	return nil
 }

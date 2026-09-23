@@ -160,19 +160,23 @@ func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Ms
 	before := h.snapshotRecords(z.ID, ops)
 
 	// Apply prerequisites, changes and the SOA serial bump as one unit.
-	rcode = h.applyAtomic(z.ID, msg, ops)
+	var changed bool
+	rcode, changed = h.applyAtomic(z.ID, msg, ops)
 	if rcode != dns.RcodeSuccess {
 		slog.Warn("dynamic_update: update rejected",
 			"zone", zoneName, "rcode", dns.RcodeToString[rcode], "ops", len(ops))
 		return h.makeResponse(msg, rcode), nil
 	}
 
-	if len(ops) > 0 {
+	if changed {
 		// Only publish the new data after the durable commit: reloading the
 		// in-memory store first could serve records that a later rollback
 		// erased.
 		if h.zoneStore != nil {
-			h.zoneStore.Reload()
+			h.zoneStore.ReloadNow()
+		}
+		if h.recordMgr != nil {
+			h.recordMgr.NotifyPrimaryZone(z.ID)
 		}
 		h.auditLog(z.ID, zoneName, tsig.Hdr.Name, before, h.snapshotRecords(z.ID, ops), len(ops))
 	}
@@ -315,8 +319,13 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 				return nil, dns.RcodeFormatError
 			}
 			value := rrValue(rr)
+			if txt, ok := rr.(*dns.TXT); ok && !zone.TXTStringsRepresentable(txt.Txt) {
+				return nil, dns.RcodeNotImplemented
+			}
 			if value == "" {
-				return nil, dns.RcodeFormatError
+				if hdr.Rrtype != dns.TypeTXT {
+					return nil, dns.RcodeFormatError
+				}
 			}
 			ops = append(ops, updateOp{kind: opDeleteRR, name: hdr.Name, rtype: rtype, value: value})
 
@@ -328,6 +337,11 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 				return nil, dns.RcodeNotImplemented
 			}
 			value := rrValue(rr)
+			if txt, ok := rr.(*dns.TXT); ok && !zone.TXTStringsRepresentable(txt.Txt) {
+				// The value column concatenates character strings. Refuse a
+				// message when splitting the stored value would alter its RDATA.
+				return nil, dns.RcodeNotImplemented
+			}
 			if err := validateRecordValue(rtype, value); err != nil {
 				return nil, dns.RcodeFormatError
 			}
@@ -352,54 +366,54 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 // Every statement goes through tx and never through h.db: the SQLite pool is
 // capped at a single connection, so a nested query on h.db while this
 // transaction holds that connection would block forever rather than error.
-func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp) int {
+func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp) (int, bool) {
 	tx, err := h.db.Begin()
 	if err != nil {
 		slog.Error("dynamic_update: begin transaction failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 	// Rollback is a no-op once the transaction has been committed.
 	defer func() { _ = tx.Rollback() }()
 
 	if rc := h.checkPrerequisites(tx, zoneID, msg); rc != dns.RcodeSuccess {
-		return rc
+		return rc, false
 	}
 
 	// A prerequisite-only update is legal and must not bump the serial.
 	if len(ops) == 0 {
-		return dns.RcodeSuccess
+		return dns.RcodeSuccess, false
 	}
 
 	changes, rc, err := applyOps(tx, zoneID, ops)
 	if err != nil {
 		slog.Error("dynamic_update: applying update section failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 	if rc != dns.RcodeSuccess {
-		return rc
+		return rc, false
 	}
 	if len(changes) == 0 {
 		// Every operation was a no-op (e.g. re-adding an identical RR);
 		// leave the serial alone so secondaries are not woken for nothing.
-		return dns.RcodeSuccess
+		return dns.RcodeSuccess, false
 	}
 
 	newSerial, err := nextZoneSerial(tx, zoneID)
 	if err != nil {
 		slog.Error("dynamic_update: serial bump failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 
 	if err := logChanges(tx, zoneID, newSerial, changes); err != nil {
 		slog.Error("dynamic_update: zone change journal write failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 
 	if err := tx.Commit(); err != nil {
 		slog.Error("dynamic_update: commit failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
-	return dns.RcodeSuccess
+	return dns.RcodeSuccess, true
 }
 
 // change is one journal entry destined for dns_zone_changes, used to answer

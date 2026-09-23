@@ -67,8 +67,9 @@ func (s *Store) DSN() string { return s.dsn }
 // lease must be on disk before the client is told it has one. SQLite's default
 // synchronous=NORMAL in WAL mode acknowledges a commit before the write is
 // durable, which turns a power loss into "the client believes it holds an
-// address the server has never heard of". FULL is slower per commit and is the
-// only setting that makes the ACK honest.
+// address the server has never heard of". FULL requests a WAL sync before a
+// successful commit is returned. The target filesystem and storage device
+// still determine whether that sync survives physical power loss.
 func Open(role config.DataPlaneRole, dsn string) (*Store, error) {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {

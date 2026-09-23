@@ -47,8 +47,9 @@ type RunnerConfig struct {
 	// it before the disk does. See Quota.
 	Quota Quota
 	// OnApplied is called after a domain's replica is replaced, for the work
-	// the store cannot do for itself (reloading an in-memory zone table).
-	OnApplied func(d Domain)
+	// the store cannot do for itself (reloading its in-memory view and notifying
+	// secondaries for changed primary zones).
+	OnApplied func(d Domain, changedPrimaryZones []string)
 }
 
 // Runner keeps a data plane's copy of the control-plane configuration current.
@@ -175,7 +176,7 @@ func (r *Runner) Prime(ctx context.Context) error {
 			slog.Info("dataplane: configuration loaded from the control database",
 				"domain", d, "revision", res.Revision, "rows", res.Rows,
 				"retained_scopes", len(res.RetainedScopes), "dropped_leases", res.DroppedLeases)
-			r.notify(d)
+			r.notify(d, res.ChangedPrimaryZones)
 		} else {
 			slog.Info("dataplane: local configuration already current",
 				"domain", d, "revision", res.Revision)
@@ -340,16 +341,16 @@ func (r *Runner) Once(ctx context.Context) {
 		}
 		slog.Info("dataplane: configuration updated", "domain", d,
 			"revision", res.Revision, "rows", res.Rows)
-		r.notify(d)
+		r.notify(d, res.ChangedPrimaryZones)
 	}
 
 	r.pushUp(ctx)
 	r.refreshProbe()
 }
 
-func (r *Runner) notify(d Domain) {
+func (r *Runner) notify(d Domain, changedPrimaryZones []string) {
 	if r.cfg.OnApplied != nil {
-		r.cfg.OnApplied(d)
+		r.cfg.OnApplied(d, changedPrimaryZones)
 	}
 }
 

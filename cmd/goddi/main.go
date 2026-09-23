@@ -636,6 +636,7 @@ func runServer(configPath string) error {
 	// DNS Zone Store - load authoritative zones from the database the DNS plane
 	// serves from.
 	zoneStore := zone.NewStore(dnsDataDB)
+	defer zoneStore.Close()
 	slog.Info("DNS zone store initialized", "zones", len(zoneStore.ZoneNames()))
 
 	// Zone / record managers (dynamic updates + record aging + IXFR history).
@@ -733,9 +734,17 @@ func runServer(configPath string) error {
 				// to look.
 				PushRecords: true,
 				Quota:       dataPlaneQuota(cfg),
-				OnApplied: func(d dataplane.Domain) {
+				OnApplied: func(d dataplane.Domain, changedPrimaryZones []string) {
 					if d == dataplane.DomainDNS {
 						zoneStore.ReloadNow()
+						if len(changedPrimaryZones) > 0 {
+							zonesToNotify := append([]string(nil), changedPrimaryZones...)
+							go func() {
+								for _, zoneName := range zonesToNotify {
+									transfer.SendNotifyForZone(dnsDataDB, zoneName)
+								}
+							}()
+						}
 					}
 				},
 			})
@@ -755,6 +764,9 @@ func runServer(configPath string) error {
 	var dnsConsumer *dhcpinternal.DNSConsumer
 	if servesDNS {
 		link := dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
+		link.SetNotifyHook(func(zoneName string) {
+			transfer.SendNotifyForZone(dnsDataDB, zoneName)
+		})
 		dnsConsumer = dhcpinternal.NewDNSConsumer(dnsStore.DB, link)
 	}
 
@@ -1326,10 +1338,11 @@ func runServer(configPath string) error {
 		go fwdGroup.RunHealthChecks(backgroundCtx, interval)
 	}
 
-	// Record aging: delete expired records every 10 minutes.
+	// Record aging: expire served snapshots at the exact record deadline and
+	// persist the deletion/serial change promptly afterward.
 	if servesDNS {
 		go func() {
-			ticker := time.NewTicker(10 * time.Minute)
+			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {
 				select {
