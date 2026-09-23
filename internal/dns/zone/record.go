@@ -280,6 +280,9 @@ func (m *RecordManager) CreateRecord(zoneID string, opts RecordOptions) (*Record
 			return nil, fmt.Errorf("creating automatic PTR record: %w", err)
 		}
 	}
+	if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+		return nil, fmt.Errorf("journaling updated SOA: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit record create transaction: %w", err)
 	}
@@ -783,6 +786,9 @@ func (m *RecordManager) UpdateRecord(id string, opts RecordOptions) (*Record, er
 		updated.TTL, updated.Priority, updated.Weight, updated.Port, updated.Flag, updated.Tag); err != nil {
 		return nil, fmt.Errorf("journaling updated record: %w", err)
 	}
+	if err := logCurrentSOAStateTx(tx, existing.ZoneID, serial); err != nil {
+		return nil, fmt.Errorf("journaling updated SOA: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit record update transaction: %w", err)
 	}
@@ -834,6 +840,9 @@ func (m *RecordManager) DeleteRecord(id string) error {
 	if err := logChangeTx(tx, record.ZoneID, serial, "delete", record.Name, record.Type,
 		record.Value, record.TTL, record.Priority, record.Weight, record.Port, record.Flag, record.Tag); err != nil {
 		return fmt.Errorf("journaling deleted record: %w", err)
+	}
+	if err := logCurrentSOAStateTx(tx, record.ZoneID, serial); err != nil {
+		return fmt.Errorf("journaling updated SOA: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit record delete transaction: %w", err)
@@ -894,6 +903,9 @@ func (m *RecordManager) BatchCreateRecords(zoneID string, records []RecordOption
 			rec.TTL, rec.Priority, rec.Weight, rec.Port, rec.Flag, rec.Tag); err != nil {
 			return nil, fmt.Errorf("journaling created record: %w", err)
 		}
+	}
+	if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+		return nil, fmt.Errorf("journaling updated SOA: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -969,10 +981,11 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 		}
 		zoneBumped[rec.ZoneID] = struct{}{}
 
-		var currentSerial uint32
-		if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", rec.ZoneID).Scan(&currentSerial); err != nil {
-			return fmt.Errorf("querying serial for zone %s: %w", rec.ZoneID, err)
+		beforeSOA, err := ReadSOAHistoryStateTx(tx, rec.ZoneID)
+		if err != nil {
+			return fmt.Errorf("querying SOA for zone %s: %w", rec.ZoneID, err)
 		}
+		currentSerial := beforeSOA.Serial
 		newSerial := m.zoneMgr.generateSerialForZone(currentSerial)
 		if newSerial <= currentSerial {
 			newSerial = currentSerial + 1
@@ -983,6 +996,9 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 		); err != nil {
 			return fmt.Errorf("updating serial for zone %s: %w", rec.ZoneID, err)
 		}
+		if err := LogSOARecordTx(tx, rec.ZoneID, newSerial, "delete", beforeSOA); err != nil {
+			return fmt.Errorf("journaling prior SOA for zone %s: %w", rec.ZoneID, err)
+		}
 		for _, deletedRec := range deleted {
 			if deletedRec.ZoneID != rec.ZoneID {
 				continue
@@ -991,6 +1007,10 @@ func (m *RecordManager) BatchDeleteRecords(ids []string) error {
 				deletedRec.Value, deletedRec.TTL, deletedRec.Priority, deletedRec.Weight, deletedRec.Port, deletedRec.Flag, deletedRec.Tag); err != nil {
 				return fmt.Errorf("journaling deleted record %s: %w", deletedRec.ID, err)
 			}
+		}
+		beforeSOA.Serial = newSerial
+		if err := LogSOARecordTx(tx, rec.ZoneID, newSerial, "add", beforeSOA); err != nil {
+			return fmt.Errorf("journaling updated SOA for zone %s: %w", rec.ZoneID, err)
 		}
 	}
 
@@ -1215,10 +1235,11 @@ func LogSOAChangeTx(tx *sql.Tx, zoneID string, serial uint32, before, after SOAH
 // bumpZoneSerialTx advances a zone serial within the caller's mutation
 // transaction, so records, SOA serial, and history either all commit or none do.
 func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {
-	var current uint32
-	if err := tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&current); err != nil {
+	before, err := ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
 		return 0, fmt.Errorf("querying serial: %w", err)
 	}
+	current := before.Serial
 	next := NextSerial(current)
 	result, err := tx.Exec("UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?", next, zoneID, current)
 	if err != nil {
@@ -1231,7 +1252,19 @@ func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {
 	if rows != 1 {
 		return 0, fmt.Errorf("serial changed concurrently")
 	}
+	if err := LogSOARecordTx(tx, zoneID, next, "delete", before); err != nil {
+		return 0, fmt.Errorf("journaling prior SOA: %w", err)
+	}
 	return next, nil
+}
+
+func logCurrentSOAStateTx(tx *sql.Tx, zoneID string, serial uint32) error {
+	state, err := ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		return err
+	}
+	state.Serial = serial
+	return LogSOARecordTx(tx, zoneID, serial, "add", state)
 }
 
 func logChangeTx(tx *sql.Tx, zoneID string, serial uint32, changeType, name, rtype, value string, ttl, priority, weight, port, flag int, tag string) error {
@@ -1323,6 +1356,11 @@ func (m *RecordManager) CleanupExpiredRecords() (int64, error) {
 			return 0, fmt.Errorf("journaling expired record %s: %w", rec.id, err)
 		}
 	}
+	for zoneID, serial := range zoneSerial {
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+			return 0, fmt.Errorf("journaling updated SOA for expired records: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit expired record cleanup: %w", err)
 	}
@@ -1403,6 +1441,9 @@ func (m *RecordManager) createPTRTx(tx *sql.Tx, reverseZone *Zone, owner, target
 	}
 	if err := logChangeTx(tx, reverseZone.ID, serial, "add", owner, "PTR", target, ttl, 0, 0, 0, 0, ""); err != nil {
 		return false, fmt.Errorf("journaling PTR record: %w", err)
+	}
+	if err := logCurrentSOAStateTx(tx, reverseZone.ID, serial); err != nil {
+		return false, fmt.Errorf("journaling updated reverse SOA: %w", err)
 	}
 	return true, nil
 }

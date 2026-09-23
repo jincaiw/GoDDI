@@ -1207,7 +1207,7 @@ func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
 	}
 	afterSOA := beforeSOA
 	afterSOA.Serial = serial
-	if err := LogSOAChangeTx(tx, id, serial, beforeSOA, afterSOA); err != nil {
+	if err := LogSOARecordTx(tx, id, serial, "add", afterSOA); err != nil {
 		return nil, fmt.Errorf("journaling SOA after zone type conversion: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

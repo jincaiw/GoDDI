@@ -228,6 +228,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - SOA 配置/serial 变更（管理 API、配置发布、显式 serial increment 与 zone type conversion）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。该 journal 还缺少所有 RR 写入者共享的有序 SOA 分界，IXFR 继续回退 AXFR。
 - RFC 2136 动态 UPDATE 现在在变更事务内读取旧 synthesized SOA，按旧 SOA 删除、RR 删除/新增、更新后 SOA 添加的顺序写 journal；新 SOA serial、RR、serial 更新与 history 同事务提交。回归验证了四行顺序及更新后 SOA serial，动态 UPDATE、zone 与 transfer 包测试通过。该入口已补齐 SOA 分界，但其它 RR 写入者的分界、journal 读取排序和完整 IXFR 协议测试仍未闭合。
 - DHCP DDNS 正向与反向区域写入也在其共享 DNS 事务中记录旧 SOA、RR 多重集差异及新 SOA；每个有变化的区域各推进一次 serial。回归确认两区各包含 SOA 删除/添加和对应 A/PTR 差异，DHCP、dataplane、dynamic_update、zone 与 transfer 包测试通过。其它 RR 写入入口和协议级 IXFR 仍未完成。
+- Record API 单条创建/更新/删除、批量创建/删除、自动 PTR 和过期记录清理均通过事务 serial helper 写入旧 SOA 分界，并在该 serial 的 RR journal 完成后写入新 SOA；serial、RR 数据和 history 同事务提交。zone type conversion 调整为复用旧 SOA 分界，避免重复写旧 SOA。相关 DNS、DHCP、configver 与 transfer 包测试通过。catalog、导入和配置发布等其它 serial 写入入口以及全局 journal 顺序读取/IXFR 协议验收仍需继续处理。
 
 ### W04 跨库事实传输实施中（2026-09-24，尚未发布）
 
