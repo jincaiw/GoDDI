@@ -11,7 +11,8 @@ import (
 // ExpireFactsBatch is the explicit migration seam for the existing batch
 // expiry operation. It preserves candidate selection and the single
 // transaction boundary of Manager.ExpireLeases while adding one fact per
-// changed lease. It is not used by the default expiry sweep.
+// changed lease. Unmapped leases still expire, but cannot produce a space-scoped
+// fact until their local IPAM mapping is available.
 func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source string, spaceIDFor func(*Lease) (string, error)) ([]*Lease, error) {
 	if w == nil || w.manager == nil || w.allocator == nil || w.outbox == nil {
 		return nil, errors.New("lease facts expiry: nil writer")
@@ -54,6 +55,9 @@ func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source strin
 		after.Status = LeaseStatusExpired
 		spaceID, err := spaceIDFor(before)
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
 			return nil, fmt.Errorf("lease facts expiry: resolve space for %s: %w", before.ID, err)
 		}
 		if strings.TrimSpace(spaceID) == "" {

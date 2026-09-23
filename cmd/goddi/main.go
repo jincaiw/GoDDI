@@ -44,6 +44,7 @@ import (
 	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
 	"github.com/jasonwa/goddi/internal/ipam/address"
 	"github.com/jasonwa/goddi/internal/ipam/space"
@@ -1060,6 +1061,35 @@ func runServer(configPath string) error {
 	// drift apart until neither is trusted.
 	if dhcpSrv != nil {
 		dhcpSrv.SetLeaseObserver(ipamLinkage)
+		allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
+		if err != nil {
+			return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)
+		}
+		outbox, err := facts.NewObservationOutbox(dhcpStore.DB)
+		if err != nil {
+			return fmt.Errorf("initializing DHCP fact outbox: %w", err)
+		}
+		writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
+		if err != nil {
+			return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)
+		}
+		writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(dhcpStore.DB))
+		if dhcpRunner != nil {
+			writer.WithPostCommitWake(dhcpRunner.Wake)
+		}
+		source := strings.TrimSpace(cfg.DHCPHA.NodeID)
+		if source == "" {
+			source, err = os.Hostname()
+			if err != nil || strings.TrimSpace(source) == "" {
+				source = "dhcp-node"
+			}
+		}
+		dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
+			Caller: writer, Source: source, DNSOutboxAtomic: true,
+			ResolveSpaceID: func(_ string, ip string) (string, error) {
+				return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+			},
+		})
 		slog.Info("IPAM: DHCP lease observation enabled")
 	}
 

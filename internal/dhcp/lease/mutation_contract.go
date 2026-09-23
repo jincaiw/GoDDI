@@ -12,6 +12,7 @@ type MutationKind string
 
 const (
 	MutationOffer    MutationKind = "discover_offer"
+	MutationBind     MutationKind = "request_bind"
 	MutationActivate MutationKind = "request_activate"
 	MutationRenew    MutationKind = "request_renew"
 	MutationRelease  MutationKind = "release"
@@ -133,6 +134,12 @@ func ContractFor(kind MutationKind) (MutationContract, error) {
 			DNSAction: DNSActionNone, IPAMAction: IPAMActionNone,
 			Generation: GenerationKeep, RequiresDurable: false, Replay: ReplayUpsert,
 		}
+	case MutationBind:
+		contract = MutationContract{
+			Kind: kind, To: LeaseStatusActive, WALOp: WALEventUpsert,
+			DNSAction: DNSActionUpsert, IPAMAction: IPAMActionObserve,
+			Generation: GenerationStart, RequiresDurable: true, Replay: ReplayUpsert,
+		}
 	case MutationActivate:
 		contract = MutationContract{
 			Kind: kind, From: []LeaseStatus{LeaseStatusOffered},
@@ -181,7 +188,7 @@ func (c MutationContract) Validate() error {
 	if c.Kind == "" || c.To == "" || c.WALOp == "" || c.Replay == "" {
 		return ErrInvalidMutation
 	}
-	if len(c.From) == 0 {
+	if len(c.From) == 0 && c.Kind != MutationBind {
 		return ErrInvalidMutation
 	}
 	for _, status := range c.From {
@@ -279,7 +286,7 @@ func ValidateTransition(kind MutationKind, before *Lease) (MutationContract, err
 		return MutationContract{}, err
 	}
 	if before == nil {
-		if kind == MutationOffer || kind == MutationDecline {
+		if kind == MutationOffer || kind == MutationBind || kind == MutationDecline {
 			return contract, nil
 		}
 		return MutationContract{}, fmt.Errorf("%w: %s requires an existing lease", ErrInvalidMutationState, kind)

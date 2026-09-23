@@ -229,8 +229,10 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 数据面 Runner 在已有 lease 上行循环中异步投递事实。控制库提交成功后 producer 才确认本地事件和 marker；崩溃窗口可重放。event ID 重复按完整 envelope 校验，sequence 冲突留在有界退避队列中并计入拒绝数。
 - 为避免 ACK 在控制库故障时查询 IPAM，DHCP 配置副本增加最小化的 subnet→space 投影；控制库 IPAM 子网新增/修改/删除会推进 DHCP 配置 revision，lease store 可按地址匹配最具体的本地 CIDR。
 - IPAM consumer 明确使用控制库 inbox，使 inbox 完成、水位推进和 IPAM 投影在同一控制库事务内完成；传输与投影之间采用至少一次投递及幂等消费。
-- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试，以及 IPAM 映射同步、更新和最具体网段选择；上一批全量 Go 测试通过，本批 `internal/dataplane`、`cmd/goddi`、`internal/ipam` 测试通过。
-- 这仍不是 W04 完成：默认 DHCP lease lifecycle 尚未全部迁移到 FactsMutationWriter，HA 领导权 fencing 与跨数据库故障恢复/端到端运行态演练待办；不据此宣称生产链路已经启用。
+- 默认 DHCP 主节点已初始化 sequence allocator 与 observation outbox，并把 REQUEST 绑定/激活/续租、释放、拒绝、管理界面释放及到期清理接到 FactsMutationWriter。租约、事实 envelope 和兼容 DNS outbox 同事务提交；scope 已关闭 DNS 更新时仍允许删除旧记录。facts 投递由 Runner 唤醒，但不阻塞 DHCP ACK。
+- 地址无法映射到本地 IPAM space 时，DHCP 操作沿用现有 lease 路径，到期仍会清理租约；不会伪造 facts。映射数据库出现其他错误时，单次 facts mutation 回滚并返回错误。
+- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交及 unmapped expiry。当前 `go test ./...` 全量通过。
+- 这仍不是 W04 完成：默认 facts consumer 和 IPAM 投影消费尚未启用；consumer 启用所需的同库原子边界、HA 领导权 fencing、跨库故障恢复及真实网络端到端演练待办。本次只提交可恢复的生产者链路，不发布版本。
 
 ## 范围与限制
 

@@ -79,8 +79,6 @@ func TestDefaultProcessKeepsLegacyDNSConsumerUntilFactsMigrationIsComplete(t *te
 		t.Fatal("default process no longer assembles the legacy DHCP-to-DNS consumer")
 	}
 	for _, forbidden := range []string{
-		"facts.NewObservationOutbox(",
-		"facts.NewSequenceAllocator(",
 		"facts.NewWatermarkStore(",
 		"NewFactsDNSConsumer(",
 		"FactsDNSConsumer",
@@ -117,7 +115,6 @@ func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
 		"factsConsumer.Stop(",
 		"FactsConsumerLifecycle",
 		"facts.ObservationOutbox",
-		"facts.NewSequenceAllocator(",
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("default process unexpectedly assembled opt-in facts consumer lifecycle hook %q", forbidden)
@@ -127,6 +124,9 @@ func TestDefaultProcessLeavesFactsConsumerLifecycleOptIn(t *testing.T) {
 	for _, required := range []string{
 		"ipam.NewLinkage(db.DB)",
 		"dhcpSrv.SetLeaseObserver(ipamLinkage)",
+		"facts.NewSequenceAllocator(dhcpStore.DB)",
+		"facts.NewObservationOutbox(dhcpStore.DB)",
+		"dhcpSrv.SetLeaseFactsMutation(",
 		"ipamLinkage.Reconcile(ipamReconcileLimit)",
 	} {
 		if !strings.Contains(source, required) {

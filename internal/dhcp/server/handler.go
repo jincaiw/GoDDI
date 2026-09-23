@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -465,21 +467,42 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	// Commit the binding BEFORE building the ACK: the client treats the ACK as
 	// authoritative, so the state it relies on must already be durable.
 	var bound *lease.Lease
+	factsCommitted := false
 	observed := LeaseObservedBind
+	factsCfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(sc.ID, requestedIP.String())
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case held == nil:
-		bound, err = s.leaseMgr.CreateLease(sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
+		if useFacts {
+			bound, err = factsCfg.Caller.BindLease(context.Background(), "", factsCfg.Source, spaceID,
+				sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
+			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+		} else {
+			bound, err = s.leaseMgr.CreateLease(sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to create lease: %w", err)
 		}
 	case held.Status == lease.LeaseStatusOffered:
 		// Promote the reservation made by the matching DISCOVER.
-		bound, err = s.leaseMgr.ActivateLease(held.ID, leaseDuration)
+		if useFacts {
+			bound, err = factsCfg.Caller.ActivateLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
+			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+		} else {
+			bound, err = s.leaseMgr.ActivateLease(held.ID, leaseDuration)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to activate lease: %w", err)
 		}
 	default:
-		bound, err = s.leaseMgr.RenewLease(held.ID, leaseDuration)
+		if useFacts {
+			bound, err = factsCfg.Caller.RenewLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
+			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+		} else {
+			bound, err = s.leaseMgr.RenewLease(held.ID, leaseDuration)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to renew lease: %w", err)
 		}
@@ -562,7 +585,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	// Queue the DNS publish. The binding is already durable at this point, so a
 	// failure to queue must not fail the request: the client is entitled to its
 	// ACK, and the reconciler will publish the record on its next pass.
-	if sc.DNSUpdates && bound != nil {
+	if sc.DNSUpdates && bound != nil && !factsCommitted {
 		if err := s.enqueueDNSEvent(bound, dhcpinternal.DNSEventCreate); err != nil {
 			slog.Error("DHCP: failed to queue DNS update",
 				"lease_id", bound.ID, "hostname", hostname, "error", err)
@@ -615,7 +638,19 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 	// RELEASE must use it; identity or facts failure is returned directly and
 	// never falls back to the legacy mutation.
 	var released *lease.Lease
-	if cfg := s.releaseFacts; cfg != nil {
+	factsCommitted := false
+	if cfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(l.ScopeID, l.IPAddress); err != nil {
+		return err
+	} else if useFacts {
+		released, err = cfg.Caller.ReleaseLease(context.Background(), "", cfg.Source, spaceID, l.ID)
+		if err != nil {
+			return fmt.Errorf("dhcp lease facts mutation: %w", err)
+		}
+		if released == nil {
+			return errors.New("dhcp lease facts mutation: caller returned no released lease")
+		}
+		factsCommitted = cfg.DNSOutboxAtomic
+	} else if cfg := s.releaseFacts; cfg != nil {
 		if cfg.Caller == nil || cfg.ResolveSpaceID == nil || strings.TrimSpace(cfg.Source) == "" {
 			return errors.New("dhcp release facts mutation: caller, source, and space resolver are required")
 		}
@@ -655,7 +690,7 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 	// carries the generation read before the release, which is the generation
 	// the published record was written at, so a renewal that lands before the
 	// consumer runs keeps its record.
-	if sc.DNSUpdates {
+	if sc.DNSUpdates && !factsCommitted {
 		if err := s.enqueueDNSEvent(l, dhcpinternal.DNSEventDelete); err != nil {
 			slog.Error("DHCP: failed to queue DNS teardown",
 				"lease_id", l.ID, "hostname", l.Hostname, "error", err)
@@ -714,7 +749,33 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 		return nil
 	}
 
-	quarantined, err := s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
+	var quarantined *lease.Lease
+	var err error
+	factsCommitted := false
+	if cfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(scopeID, requestedIP.String()); err != nil {
+		return err
+	} else if useFacts {
+		existing, lookupErr := s.leaseMgr.GetHeldLeaseByIP(requestedIP.String())
+		if lookupErr != nil {
+			return lookupErr
+		}
+		switch {
+		case existing != nil && (existing.Status == lease.LeaseStatusActive || existing.Status == lease.LeaseStatusOffered):
+			quarantined, err = cfg.Caller.DeclineLease(context.Background(), "", cfg.Source, spaceID, existing.ID, time.Hour)
+		case existing == nil:
+			tombstoneID := stableDeclineTombstoneID(cfg.Source, scopeID, requestedIP.String(), mac)
+			quarantined, err = cfg.Caller.DeclineTombstone(context.Background(), "", cfg.Source, spaceID,
+				tombstoneID, scopeID, requestedIP.String(), mac, time.Hour)
+		default:
+			// Repeated reports for an address already quarantined remain
+			// idempotent in the legacy state machine; they do not create a second
+			// facts transition for the same generation.
+			quarantined, err = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
+		}
+		factsCommitted = err == nil && cfg.DNSOutboxAtomic && existing != nil && existing.Status != lease.LeaseStatusConflict
+	} else {
+		quarantined, err = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
+	}
 	if err != nil {
 		return err
 	}
@@ -727,7 +788,7 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 	// told us the binding is wrong, so continuing to publish the name would
 	// hand out an address something else is already using. Queued rather than
 	// written here so it is retried and survives a restart.
-	if quarantined != nil && quarantined.Hostname != "" {
+	if quarantined != nil && quarantined.Hostname != "" && !factsCommitted {
 		if sc, err := s.scopeMgr.GetScope(quarantined.ScopeID); err == nil && sc.DNSUpdates {
 			if err := s.enqueueDNSEvent(quarantined, dhcpinternal.DNSEventDelete); err != nil {
 				slog.Error("DHCP: failed to queue DNS teardown for declined address",
@@ -748,6 +809,12 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 	}
 
 	return nil
+}
+
+func stableDeclineTombstoneID(source, scopeID, ip, mac string) string {
+	bucket := time.Now().UTC().Truncate(time.Hour).Format(time.RFC3339)
+	sum := sha256.Sum256([]byte(strings.Join([]string{source, scopeID, ip, mac, bucket}, "|")))
+	return "dhcp-decline-" + hex.EncodeToString(sum[:])
 }
 
 // HandleInform handles a DHCP INFORM message.

@@ -62,6 +62,33 @@ type DNSOutbox struct {
 	db *sql.DB
 }
 
+type scopeAwareDNSMutationSink struct {
+	outbox *DNSOutbox
+}
+
+// NewScopeAwareDNSMutationSink builds a transaction sink that mirrors the
+// legacy server's dns_updates scope policy while writing through the lease
+// mutation transaction.
+func NewScopeAwareDNSMutationSink(db *sql.DB) lease.DNSMutationSink {
+	return &scopeAwareDNSMutationSink{outbox: NewDNSOutbox(db)}
+}
+
+func (s *scopeAwareDNSMutationSink) EnqueueTx(tx *sql.Tx, l *lease.Lease, action lease.DNSMutationAction) error {
+	if tx == nil || l == nil {
+		return fmt.Errorf("dns outbox: transaction and lease are required")
+	}
+	var enabled bool
+	if err := tx.QueryRow(`SELECT dns_updates FROM dhcp_scopes WHERE id = ?`, l.ScopeID).Scan(&enabled); err != nil {
+		return fmt.Errorf("dns outbox: read DNS policy for scope %s: %w", l.ScopeID, err)
+	}
+	// Scope policy gates publication. A delete is cleanup for a name that may
+	// have been published earlier, so it remains owed after the setting is off.
+	if !enabled && action == lease.DNSActionUpsert {
+		return nil
+	}
+	return s.outbox.EnqueueTx(tx, l, action)
+}
+
 // NewDNSOutbox creates an outbox backed by the given database.
 func NewDNSOutbox(db *sql.DB) *DNSOutbox {
 	return &DNSOutbox{db: db}

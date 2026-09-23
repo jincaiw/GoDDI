@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
+	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
 	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
@@ -239,6 +240,68 @@ func newReleaseFactsServer(t *testing.T) (*Server, *sql.DB, *releaseFactsCallerP
 		},
 	})
 	return s, db, probe, resolver, spaceID
+}
+
+func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) {
+	s, db, _, _ := newIPAMLinkedServer(t)
+	allocator, err := facts.NewSequenceAllocator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := lease.NewFactsMutationWriter(lease.NewManager(db), allocator, outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
+	resolver, err := ipam.NewScopeIdentityResolver(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
+		Caller: writer, Source: "dhcp-node-a", DNSOutboxAtomic: true,
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+
+	mac := testMAC(24)
+	dhcpExchange(t, s, mac, "host24")
+	var factsCount, dnsCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
+		t.Fatal(err)
+	}
+	if factsCount != 1 || dnsCount != 1 {
+		t.Fatalf("after REQUEST: facts=%d DNS events=%d, want 1/1", factsCount, dnsCount)
+	}
+
+	release, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP(ipamLinkageIP)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleRelease(release); err != nil {
+		t.Fatalf("HandleRelease: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
+		t.Fatal(err)
+	}
+	if factsCount != 2 || dnsCount != 2 {
+		t.Fatalf("after RELEASE: facts=%d DNS events=%d, want 2/2", factsCount, dnsCount)
+	}
 }
 
 func TestHandleReleaseFactsOptInCommitsLeaseAndFactBeforePostCommitSideEffects(t *testing.T) {
