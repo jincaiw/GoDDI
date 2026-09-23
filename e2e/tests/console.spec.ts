@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { request as playwrightRequest, test, expect, type Locator, type Page } from '@playwright/test'
 
 // The language switch is a hover-triggered dropdown. The test body reloads
 // the dashboard between the route loop and the switches so the menu's hide
@@ -76,46 +76,49 @@ test('mobile login fits viewport', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
 })
 
-test('DNS read-only role cannot open DNS write actions', async ({ page, request }) => {
+test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
   const stamp = Date.now()
   const username = `dns_reader_${stamp}`
   const roleName = `dns_reader_role_${stamp}`
   const zoneName = `dns-reader-${stamp}.example`
   const password = 'OnlyForUi-Test-123!'
-  const login = await request.post('/api/v1/auth/login', {
-    data: {
-      username: process.env.GODDI_TEST_USERNAME || 'admin',
-      password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
-    }
-  })
-  expect(login.ok()).toBe(true)
-  const admin = (await login.json()).data
-  const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+  const api = await playwrightRequest.newContext({ baseURL: process.env.GODDI_TEST_BASE_URL || 'http://127.0.0.1:16090' })
+  test.setTimeout(60000)
   let roleID = ''
   let userID = ''
   let zoneID = ''
 
   try {
-    const permissionsResponse = await request.get('/api/v1/permissions', { headers })
+    const login = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    })
+    expect(login.ok()).toBe(true)
+    const admin = (await login.json()).data
+    const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+
+    const permissionsResponse = await api.get('/api/v1/permissions', { headers })
     expect(permissionsResponse.ok()).toBe(true)
     const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
     const dnsRead = permissions.find(permission => permission.resource === 'dns' && permission.action === 'read')
     expect(dnsRead, 'the DNS read permission must exist').toBeDefined()
 
-    const roleResponse = await request.post('/api/v1/roles', {
+    const roleResponse = await api.post('/api/v1/roles', {
       headers,
       data: { name: roleName, description: 'Read-only browser permission regression' }
     })
     expect(roleResponse.status()).toBe(201)
     roleID = (await roleResponse.json()).data.id
 
-    const grantResponse = await request.put(`/api/v1/roles/${roleID}/permissions`, {
+    const grantResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
       headers,
       data: { permission_ids: [dnsRead!.id] }
     })
     expect(grantResponse.ok()).toBe(true)
 
-    const userResponse = await request.post('/api/v1/users', {
+    const userResponse = await api.post('/api/v1/users', {
       headers,
       data: {
         username,
@@ -128,34 +131,50 @@ test('DNS read-only role cannot open DNS write actions', async ({ page, request 
     expect(userResponse.status()).toBe(201)
     userID = (await userResponse.json()).data.id
 
-    const assignResponse = await request.post(`/api/v1/users/${userID}/roles`, {
+    const assignResponse = await api.post(`/api/v1/users/${userID}/roles`, {
       headers,
       data: { role_ids: [roleID] }
     })
     expect(assignResponse.ok()).toBe(true)
 
-    const zoneResponse = await request.post('/api/v1/dns/zones', {
+    const zoneResponse = await api.post('/api/v1/dns/zones', {
       headers,
       data: { name: zoneName, type: 'primary', enabled: true }
     })
     expect(zoneResponse.status()).toBe(201)
     zoneID = (await zoneResponse.json()).data.id
 
-    await page.goto('/login')
-    await page.getByRole('textbox').nth(0).fill(username)
-    await page.getByRole('textbox').nth(1).fill(password)
-    await page.getByRole('button', { name: 'Login', exact: true }).click()
-    await expect(page).toHaveURL(/dashboard$/)
+    await test.step('sign in as the DNS reader', async () => {
+      await page.addInitScript(() => { localStorage.setItem('GODDI_lang', JSON.stringify('en-US')) })
+      await page.goto('/login')
+      await page.getByRole('textbox').nth(0).fill(username)
+      await page.getByRole('textbox').nth(1).fill(password)
+      await page.getByRole('button', { name: 'Login', exact: true }).click()
+      await expect(page).toHaveURL(/dashboard$/)
+    })
 
-    await page.goto('/dns/zones')
-    await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Create Zone', exact: true })).toHaveCount(0)
-    const zoneRow = page.locator('tbody tr').filter({ hasText: zoneName })
-    await expect(zoneRow).toBeVisible()
-    await expect(zoneRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+    await test.step('hide write actions on the DNS zones page', async () => {
+      await page.goto('/dns/zones', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('button', { name: 'Create Zone', exact: true })).toHaveCount(0)
+      const zoneRow = page.locator('tbody tr').filter({ hasText: zoneName })
+      await expect(zoneRow).toBeVisible({ timeout: 10000 })
+      await expect(zoneRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled({ timeout: 10000 })
+    })
   } finally {
-    if (userID) await request.delete(`/api/v1/users/${userID}`, { headers })
-    if (roleID) await request.delete(`/api/v1/roles/${roleID}`, { headers })
-    if (zoneID) await request.delete(`/api/v1/dns/zones/${zoneID}`, { headers })
+    const login = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    }).catch(() => null)
+    const admin = login?.ok() ? (await login.json()).data : null
+    if (admin) {
+      const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+      if (userID) await api.delete(`/api/v1/users/${userID}`, { headers }).catch(() => {})
+      if (roleID) await api.delete(`/api/v1/roles/${roleID}`, { headers }).catch(() => {})
+      if (zoneID) await api.delete(`/api/v1/dns/zones/${zoneID}`, { headers }).catch(() => {})
+    }
+    await api.dispose()
   }
 })
