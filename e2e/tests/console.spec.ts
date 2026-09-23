@@ -76,7 +76,7 @@ test('mobile login fits viewport', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
 })
 
-test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
+test('read-only DNS, DHCP, and IPAM role cannot open module write actions', async ({ page }) => {
   const stamp = Date.now()
   const username = `dns_reader_${stamp}`
   const roleName = `dns_reader_role_${stamp}`
@@ -102,8 +102,11 @@ test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
     const permissionsResponse = await api.get('/api/v1/permissions', { headers })
     expect(permissionsResponse.ok()).toBe(true)
     const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
-    const dnsRead = permissions.find(permission => permission.resource === 'dns' && permission.action === 'read')
-    expect(dnsRead, 'the DNS read permission must exist').toBeDefined()
+    const readPermissions = ['dns', 'dhcp', 'ipam'].map(resource => {
+      const permission = permissions.find(item => item.resource === resource && item.action === 'read')
+      expect(permission, `the ${resource} read permission must exist`).toBeDefined()
+      return permission!.id
+    })
 
     const roleResponse = await api.post('/api/v1/roles', {
       headers,
@@ -114,7 +117,7 @@ test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
 
     const grantResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
       headers,
-      data: { permission_ids: [dnsRead!.id] }
+      data: { permission_ids: readPermissions }
     })
     expect(grantResponse.ok()).toBe(true)
 
@@ -144,7 +147,7 @@ test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
     expect(zoneResponse.status()).toBe(201)
     zoneID = (await zoneResponse.json()).data.id
 
-    await test.step('sign in as the DNS reader', async () => {
+    await test.step('sign in as the read-only user', async () => {
       await page.addInitScript(() => { localStorage.setItem('GODDI_lang', JSON.stringify('en-US')) })
       await page.goto('/login')
       await page.getByRole('textbox').nth(0).fill(username)
@@ -153,10 +156,20 @@ test('DNS read-only role cannot open DNS write actions', async ({ page }) => {
       await expect(page).toHaveURL(/dashboard$/)
     })
 
-    await test.step('hide write actions on the DNS zones page', async () => {
+    await test.step('read module pages while write actions stay hidden', async () => {
+      const readOnlyPages = [
+        { path: '/dns/zones', createButton: 'Create Zone' },
+        { path: '/dhcp/scopes', createButton: 'Create Scope' },
+        { path: '/ipam/spaces', createButton: 'Create Space' }
+      ]
+      for (const item of readOnlyPages) {
+        await page.goto(item.path, { waitUntil: 'domcontentloaded', timeout: 15000 })
+        await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+        await expect(page.getByRole('button', { name: item.createButton, exact: true })).toHaveCount(0)
+      }
+
       await page.goto('/dns/zones', { waitUntil: 'domcontentloaded', timeout: 15000 })
       await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
-      await expect(page.getByRole('button', { name: 'Create Zone', exact: true })).toHaveCount(0)
       const zoneRow = page.locator('tbody tr').filter({ hasText: zoneName })
       await expect(zoneRow).toBeVisible({ timeout: 10000 })
       await expect(zoneRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled({ timeout: 10000 })
