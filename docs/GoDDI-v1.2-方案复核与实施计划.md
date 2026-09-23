@@ -276,6 +276,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 盘点 catalog PTR 写入时发现 owner 以不带末尾点的相对存储形式写入；普通 DNS API 输入会正规化为带末尾点的 FQDN。原 CNAME 排他查询直接比较字符串，未将两者识别为同一 DNS owner，catalog 成员加入可与已有 CNAME 共存。
 - CNAME 冲突验证改为大小写不敏感并忽略末尾点；catalog 加入前显式复用该验证，冲突时整个创建事务回滚。
 - 新回归以合法 CNAME 与自动 catalog membership PTR 覆盖该冲突，并确认失败后没有残留 PTR。zone、DHCP、transfer、dynamic_update 定向回归及 zone lint 通过。
+- 继续核对区域改名批量移动 owner 的写入，发现 owner 移入已有 RR 名称时同样可能产生 CNAME 共存。现改名后在原事务内检查最终 owner 集合；冲突时区域名、记录和 serial/journal 一并回滚。回归覆盖 CNAME 移入已有 A owner；zone、transfer、dynamic_update 测试和 zone lint 通过。
 
 ## 范围与限制
 

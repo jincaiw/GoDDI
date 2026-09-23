@@ -866,6 +866,13 @@ func renameZoneRecordOwnersTx(tx *sql.Tx, zoneID, oldZoneName, newZoneName strin
 			return err
 		}
 	}
+	// Validate after every owner has moved so checks see the final name set,
+	// not transient collisions with another owner that is also being renamed.
+	for _, c := range changes {
+		if err := validateCNAMEExclusivityTx(tx, zoneID, c.newName, c.rtype, c.value, c.id); err != nil {
+			return fmt.Errorf("renamed owner %s violates CNAME exclusivity: %w", c.newName, err)
+		}
+	}
 	return nil
 }
 

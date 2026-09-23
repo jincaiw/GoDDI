@@ -161,3 +161,41 @@ func TestCatalogMembershipRejectsCNAMEOwnerConflict(t *testing.T) {
 		t.Fatalf("conflicting catalog membership left %d PTR records, want none", count)
 	}
 }
+
+func TestRenameZoneRejectsNewCNAMEOwnerConflictAtomically(t *testing.T) {
+	m := setupCatalogTest(t)
+	zone, err := m.CreateZone(ZoneOptions{Name: "old.example.test", Type: string(ZoneTypePrimary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := NewRecordManager(m.db, nil, m)
+	if _, err := records.CreateRecord(zone.ID, RecordOptions{
+		Name: "alias", Type: "CNAME", Value: "target.example.net.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateRecord(zone.ID, RecordOptions{
+		Name: "alias.new.example.test.", Type: "A", Value: "192.0.2.44",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.UpdateZone(zone.ID, ZoneOptions{Name: "new.example.test"}); err == nil {
+		t.Fatal("renaming the CNAME onto an existing A owner must fail")
+	}
+	got, err := m.GetZone(zone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "old.example.test." {
+		t.Fatalf("zone name = %q after rejected rename, want old.example.test.", got.Name)
+	}
+	var oldNameCount int
+	if err := m.db.QueryRow(`SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = 'CNAME'`,
+		zone.ID, "alias.old.example.test.").Scan(&oldNameCount); err != nil {
+		t.Fatal(err)
+	}
+	if oldNameCount != 1 {
+		t.Fatalf("original CNAME rows after rollback = %d, want 1", oldNameCount)
+	}
+}
