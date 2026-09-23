@@ -123,10 +123,9 @@ func (h *AXFRHandler) HandleAXFR(zoneName string, tsigKeyName string) ([]dns.RR,
 
 // HandleIXFR handles an incremental zone transfer (IXFR, RFC 1995) request.
 //
-// IXFR requests currently receive a standards-compliant full AXFR unless the
-// requester already has the current serial. This avoids serving a partial
-// delta while all zone mutation paths do not yet guarantee atomic, complete
-// change-history writes. Both paths require TSIG authentication.
+// IXFR serves a complete journal chain when it can prove that every serial
+// transition from the client's version to the current version is present.
+// Missing, malformed, or discontinuous history falls back to AXFR.
 func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName string) ([]dns.RR, error) {
 	if zoneName == "" {
 		return nil, fmt.Errorf("zone name is required")
@@ -180,20 +179,191 @@ func (h *AXFRHandler) HandleIXFR(zoneName string, serial uint32, tsigKeyName str
 	}
 	currentSerial := soa.Serial
 
-	// Client is already up to date: respond with just the current SOA.
-	if serial == currentSerial {
+	// RFC 1982 comparison: the half-range case is undefined, so it is handled
+	// by falling back to AXFR below rather than guessing which copy is newer.
+	distance := currentSerial - serial
+	if distance == 0 {
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit IXFR serial snapshot: %w", err)
 		}
 		return []dns.RR{currentSOA}, nil
 	}
+	if distance > 1<<31 && distance != 1<<31 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit IXFR serial snapshot: %w", err)
+		}
+		return []dns.RR{currentSOA}, nil
+	}
+	if distance == 1<<31 {
+		_ = tx.Rollback()
+		return h.HandleAXFR(zoneName, tsigKeyName)
+	}
+
+	ixfrRecords, complete, err := readIXFRJournalTx(tx, zoneID, zoneName, serial, currentSerial, currentSOA)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("reading IXFR journal: %w", err)
+	}
+	if complete {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit IXFR journal snapshot: %w", err)
+		}
+		return ixfrRecords, nil
+	}
 	if err := tx.Rollback(); err != nil {
 		return nil, fmt.Errorf("release IXFR serial snapshot: %w", err)
 	}
 
-	slog.Info("transfer: serving full AXFR response to IXFR request until journal writes are atomic",
+	slog.Info("transfer: serving full AXFR response because a complete IXFR journal chain is unavailable",
 		"zone", zoneName, "client_serial", serial, "current_serial", currentSerial)
 	return h.HandleAXFR(zoneName, tsigKeyName)
+}
+
+type ixfrJournalRow struct {
+	serial     uint32
+	changeType string
+	name       string
+	rtype      string
+	value      string
+	ttl        int
+	priority   sql.NullInt64
+	weight     sql.NullInt64
+	port       sql.NullInt64
+	flag       sql.NullInt64
+	tag        sql.NullString
+}
+
+type ixfrDelta struct {
+	serial      uint32
+	oldSOA      *dns.SOA
+	newSOA      *dns.SOA
+	oldSOAIndex int
+	newSOAIndex int
+	rowCount    int
+	delete      []dns.RR
+	add         []dns.RR
+	bad         bool
+}
+
+func readIXFRJournalTx(tx *sql.Tx, zoneID, zoneName string, clientSerial, currentSerial uint32, currentSOA dns.RR) ([]dns.RR, bool, error) {
+	rows, err := tx.Query(`SELECT serial, change_type, name, type, value, COALESCE(ttl, 300),
+		priority, weight, port, flag, tag FROM dns_zone_changes
+		WHERE zone_id = ? ORDER BY rowid LIMIT 100001`, zoneID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var deltas []*ixfrDelta
+	var active *ixfrDelta
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		if rowCount > 100000 {
+			return nil, false, nil
+		}
+		var row ixfrJournalRow
+		if err := rows.Scan(&row.serial, &row.changeType, &row.name, &row.rtype, &row.value, &row.ttl,
+			&row.priority, &row.weight, &row.port, &row.flag, &row.tag); err != nil {
+			return nil, false, err
+		}
+		if active == nil || active.serial != row.serial {
+			active = &ixfrDelta{serial: row.serial}
+			deltas = append(deltas, active)
+		}
+		active.rowCount++
+		if strings.EqualFold(row.rtype, "SOA") {
+			rr, err := dns.NewRR(fmt.Sprintf("%s %d IN SOA %s", dns.Fqdn(row.name), row.ttl, row.value))
+			if err != nil {
+				active.bad = true
+				continue
+			}
+			soa, ok := rr.(*dns.SOA)
+			if !ok {
+				active.bad = true
+				continue
+			}
+			switch row.changeType {
+			case "delete":
+				if active.oldSOA != nil {
+					active.bad = true
+				}
+				active.oldSOA = soa
+				active.oldSOAIndex = active.rowCount
+			case "add":
+				if active.newSOA != nil {
+					active.bad = true
+				}
+				active.newSOA = soa
+				active.newSOAIndex = active.rowCount
+			default:
+				active.bad = true
+			}
+			continue
+		}
+		rr := buildTransferRR(row.name, row.rtype, row.ttl, row.value,
+			row.priority, row.weight, row.port, row.tag, row.flag, zoneName)
+		if rr == nil {
+			active.bad = true
+			continue
+		}
+		switch row.changeType {
+		case "delete":
+			active.delete = append(active.delete, rr)
+		case "add":
+			active.add = append(active.add, rr)
+		default:
+			active.bad = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(deltas) == 0 || len(deltas) > 100000 {
+		return nil, false, nil
+	}
+	// A delta group is usable only when its delimiters agree with both the
+	// group's serial and the serial at the end of the preceding transition.
+	for _, delta := range deltas {
+		if delta.bad || delta.oldSOA == nil || delta.newSOA == nil ||
+			delta.newSOA.Serial != delta.serial ||
+			delta.oldSOAIndex != 1 || delta.newSOAIndex != delta.rowCount ||
+			!strings.EqualFold(delta.oldSOA.Hdr.Name, zoneName) || !strings.EqualFold(delta.newSOA.Hdr.Name, zoneName) {
+			delta.bad = true
+		}
+	}
+
+	for start, delta := range deltas {
+		if delta.bad || delta.oldSOA.Serial != clientSerial {
+			continue
+		}
+		chain := []*ixfrDelta{delta}
+		expected := delta.newSOA.Serial
+		for i := start + 1; i < len(deltas) && expected != currentSerial; i++ {
+			next := deltas[i]
+			if next.bad || next.oldSOA.Serial != expected {
+				break
+			}
+			chain = append(chain, next)
+			expected = next.newSOA.Serial
+		}
+		if expected != currentSerial {
+			continue
+		}
+		lastSOA := chain[len(chain)-1].newSOA
+		if lastSOA.String() != currentSOA.String() {
+			continue
+		}
+		answer := []dns.RR{currentSOA}
+		for _, change := range chain {
+			answer = append(answer, change.oldSOA)
+			answer = append(answer, change.delete...)
+			answer = append(answer, change.newSOA)
+			answer = append(answer, change.add...)
+		}
+		answer = append(answer, currentSOA)
+		return answer, true, nil
+	}
+	return nil, false, nil
 }
 
 // SendNotify sends a DNS NOTIFY message to the specified targets.

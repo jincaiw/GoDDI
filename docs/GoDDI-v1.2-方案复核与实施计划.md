@@ -8,7 +8,7 @@
 
 v1.1 的总体架构判断仍然成立：继续演进 GoDDI；先保证 DHCP 租约、DNS 写入、IPAM 地址所有权和灾备恢复正确；以持久化、单写边界和故障行为作为 GA 门槛。它对双节点分区、备份完整性、ACK 前持久化和“拆池不等于 HA”的限定尤其重要，建议保留。
 
-v1.1 不宜原样作为当前版本的实施清单。它的代码证据锁定在 `d5b5fe3 / v0.5.2`。本次复核起点为最新已发布基线 `v0.22.0 / 29e0e6c`；当前实现分支 `codex/ddi-review-implementation-20260923` 已推送至 `ccf6121`，包含 W04 非 HA 事实生产、控制端消费与跨库端到端回归。该分支没有发布新版本，代码存在不等于生产验收完成。
+v1.1 不宜原样作为当前版本的实施清单。它的代码证据锁定在 `d5b5fe3 / v0.5.2`。本次复核起点为最新已发布基线 `v0.22.0 / 29e0e6c`；当前实现分支 `codex/ddi-review-implementation-20260923` 已推送多轮 W01/W04 改动，包含 W04 非 HA 事实生产、控制端消费与跨库端到端回归。该分支没有发布新版本，代码存在不等于生产验收完成。
 
 ## 合理之处
 
@@ -46,7 +46,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 
 | v1.1 主题 | 最新代码观察 | 当前评审状态 | 接下来要确认 |
 |---|---|---|---|
-| IXFR 单连接下嵌套查询 | v0.10.0 已先查 zone name 再打开 change rows；本分支把 zone journal schema 纳入 zone 数据面迁移，并保证已覆盖写路径的 RRset、serial、history 同事务 | 死锁路径已修复；IXFR 仍停用并回退 AXFR | 仍需审计全部 zone mutation 入口、history 对全部 RR 元数据的表达能力，并通过 RFC 1995/1982 差异传送用例后再恢复 IXFR |
+| IXFR 单连接下嵌套查询与历史差异 | primary 写入者现同事务写旧/新 SOA 分界及 RR delta；transfer 按 rowid 验证连续历史链，覆盖 serial 回绕，缺口/坏数据回退 AXFR | IXFR 增量路径已接通，协议包测试与单连接测试通过；未做真实 secondary 互操作 | 验证 IXFR 多消息 TCP framing、删除/新增顺序、journal pruning 边界，并在真实 secondary 上演练；任何不完整链必须继续回退 AXFR |
 | DHCP REQUEST/OFFER/DECLINE/relay | 最新已发布代码与当前工作计划记录 REQUEST 分类、server-id、OFFER/DECLINE 隔离、Option 82 allowlist、有界队列和 HA 状态机已有仓内实现与负向用例 | 已有实现，外部互操作待验收 | 真实 relay、不同 client-id/MAC 客户端、多网卡和真实 ACK 仍需网络环境证据；不重复开发已覆盖状态机 |
 | 配置 revision 与发布 | 最新工作计划记录 expected revision、幂等变更、发布 outbox、rollback-as-new-revision、首条 diff 和显式 pruning 已完成 | 单节点实现已具备 | 多节点发布协调仍属实验/未实现；发布中断和逐节点 applied 水位需要真实执行器与验收 |
 | DHCP→DNS durable outbox | 最新工作计划记录 generation、consumer、retry/reconciliation 和进程级追平演练已经存在 | 范围内已实现，统一事实源仍未完成 | DHCP-DNS-IPAM 统一 sequence、producer 真实接入、跨库 replay 和完整 lag/gap 监测继续单独跟踪 |
@@ -67,7 +67,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 固定对照基线：最新已发布版本 `v0.22.0 / 29e0e6c`；实现分支 `codex/ddi-review-implementation-20260923` 的后续提交单独列示，不混称为已发布版本。
 - 建立 W01—W14 的当前状态台账，更新文件、迁移、接口和验收证据。
 - 复核现有事实 outbox 开发：持久顺序、水位原子性、失败阻塞、重试权限、启动 readiness 和重复投递。
-- 修复发现的“部分数据仍返回成功”类协议问题。IXFR 暂回退 AXFR，AXFR fail-closed 并在单一 SQLite 读快照中读取记录和 SOA；主要 RecordManager CRUD、批量操作、导入、catalog PTR 和过期清理写路径已把 serial/journal 与记录变更合并。其他 zone mutation 入口仍未闭合，IXFR 继续保持禁用。
+- 修复发现的“部分数据仍返回成功”类协议问题。AXFR fail-closed 并在单一 SQLite 读快照中读取记录和 SOA；primary 侧 Record API、导入、catalog、DHCP DDNS、动态更新及配置/元数据发布现均同事务写 SOA 分界与 journal。IXFR 只在找到从客户端 serial 到当前 serial 的完整连续链时返回差异，历史缺失或不合法时返回 AXFR。
 - 本阶段代码变更需附带针对性回归用例；当前实现分支 `go test ./...` 已全量通过，但网络、掉电、长稳与容量场景仍未验收。
 
 退出条件：基线台账逐项指向最新版代码；安全正确性缺陷有修复或明确阻断记录；对正在开发的事实投递代码完成审查。当前分支 Go 全量测试已通过；物理断电、跨主机网络和真实客户端验收仍未完成。
@@ -75,7 +75,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 ### 第 1 阶段：冻结安全边界并补齐核心协议
 
 - W02 以已接受的 ADR-0001/0003 为约束复核最新版装配；保持 primary 单写、未围栏不自动接管、双副本 durable ACK、显式单副本降级。
-- W01 暂以 AXFR 回应非当前 serial 的 IXFR 请求；再重构所有区域 mutation，使记录、SOA serial 与完整 journal 原子提交，完成差异集格式和 RFC 1982 序列号算术后才重新启用 IXFR。
+- W01 完成 primary 写入分界后接通完整 journal 链传送和 RFC 1982 serial 回绕处理；继续验证 TCP 分帧、历史清理边界及真实 secondary 互操作。缺历史时始终回退 AXFR。
 - W03 不重复实现已有 REQUEST 分类、server identifier、OFFER/DECLINE、Option 82 allowlist 和有界队列；补齐最新版差异对账与真实 relay/客户端外部验收。
 - W04 复核租约 generation 与持久事实事件，闭合 A/PTR 生命周期。DHCP ACK 不等待控制库投影，但投影失败可见且可重放。
 - W10 提前处理安全默认、关键审计和“全状态备份能否在新路径恢复”的最小演练。
@@ -112,7 +112,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | 首发网络画像 | IPv4 DHCP 首发；IPv6 DHCP/IPv6-only 不纳入本轮 GA 保证 | 每项 DNS/IPAM IPv6 能力单独据实声明 |
 | 双节点分区 | 沿用 ADR-0003：无围栏时不自动接管；严格双副本确认后 ACK | 网络分区期间暂停新承诺，不宣称持续发租约 |
 | 单副本降级 | 默认严格双副本；单副本模式必须显式运维批准并持续告警 | 复制追平后才恢复完整保护状态 |
-| IXFR | journal 未证明完整前，IXFR 请求回退到 AXFR | 所有 zone 写路径原子化并通过协议用例前不恢复增量传送 |
+| IXFR | 完整连续 journal 链可增量传送；历史缺口、无效 RDATA、serial 歧义回退 AXFR | 仍需验证 TCP 分帧、历史清理边界和真实 secondary 互操作 |
 | 管理与密钥恢复 | 完整列出证书、TSIG、JWT、TOTP 等备份和恢复责任 | 数据库文件备份不等于灾备完成 |
 | 容量与 SLO | 固定真实硬件和站点负载后测量 | 不采用通用 QPS、利用率或切换秒数作为发布承诺 |
 
@@ -120,7 +120,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 
 - 工作树：`/Volumes/My-Data/jason.wa/WorkBuddy/Worktrees/GoDDI/ddi-review-implementation-20260923`
 - 基线：`d3ddb16 / v0.10.0`，独立分支 `codex/ddi-review-implementation-20260923`。
-- 修改：`internal/dns/transfer/transfer.go` 暂停使用尚不完整的 IXFR journal，非当前 serial 的 IXFR 请求回退 AXFR；AXFR 遇到扫描失败、无效/不支持 RR 或缺少 SOA 时 fail-closed。
+- 修改：`internal/dns/transfer/transfer.go` 初期暂停使用尚不完整的 IXFR journal，非当前 serial 请求回退 AXFR；该阶段状态已由下方最新 W01 记录更新。AXFR 遇到扫描失败、无效/不支持 RR 或缺少 SOA 时 fail-closed。
 - AXFR 的记录和 SOA 现在在同一数据库读快照中取得；IXFR 的“客户端已最新”判断也从同一 SOA 快照读取 serial，避免版本检查本身读到互不一致的数据。
 - 修改：`internal/dns/zone/record.go` 将 Create/Update/Delete、BatchCreate/BatchDelete 和过期清理的记录变更、SOA serial 与 journal 写入纳入同一 SQL 事务；serial 或 history 写入失败会回滚记录变更。
 - 修改：`internal/dns/zone/import_export.go` 将 CSV/zone-file 导入记录、serial 和 journal 纳入同一事务。
@@ -133,7 +133,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 自动 PTR 创建现与正向 A/AAAA 创建共用同一 SQL 事务；提交后分别通知发生变更的 primary 区域，避免只写入一侧或出现孤立 PTR。
 - 修改：`internal/dataplane/sync.go`、`runner.go` 与 `cmd/goddi/main.go` 在数据面配置同步事务内比较同步前后的 primary SOA/可见 RRset，计算实际变化区域；事务完成后刷新内存 Store，并只对变化的 primary 区域发送 NOTIFY。删除区域已无法从当前配置查询并发送通知，secondary 将按既有刷新/EXPIRE 机制处理，此边界仍需运行态验收。
 - 修改：`internal/dns/zone/zone.go` 将管理 API 修改 SOA 相关参数和 zone 类型转换与 serial 推进纳入同一事务。
-- 修改：`internal/configver/adapters_records.go` 在配置发布改变应答 RRset 时，同事务推进 zone serial 并记录实际删除/新增记录；`adapters_dns.go`、`ZoneManager.UpdateZone`、`IncrementSerial` 和 zone type conversion 对 serial/SOA 变化同事务记录旧/新 SOA RDATA。history 目前没有跨所有写入者统一、有序的 SOA 分界，传输端也未证明可无损表达所有支持的 RR 类型；因此不代表 IXFR 可用。
+- 修改：`internal/configver/adapters_records.go` 在配置发布改变应答 RRset 时，同事务推进 zone serial 并记录实际删除/新增记录；`adapters_dns.go`、`ZoneManager.UpdateZone`、`IncrementSerial` 和 zone type conversion 对 serial/SOA 变化同事务记录旧/新 SOA RDATA。初期 journal 覆盖不足的问题已由后续 W01 工作收敛；仍需真实 secondary 互操作验收。
 - 修改：`internal/dns/transfer/secondary.go` 校验 AXFR 首尾 SOA、SOA 数据一致性、IN 类和 owner 区域范围；缺少闭合 SOA、存储模型不支持/不能无损表示的 RR（包括无法保留字符串边界的 TXT）或任一插入失败均不提交新快照。
 - AXFR 校验进一步要求 SOA 位于响应第一条和最后一条，类别为 IN，并比较首尾 TTL 与其余 SOA 数据；仅“响应中恰好出现两个 SOA”不再视为完整帧。
 - 修改：`internal/dns/zone/store.go` 和 `internal/dns/transfer/transfer.go` 保留显式 TTL=0，不再改写为 3600；RecordManager 限制 TTL 在 DNS 有效范围内，非法数据库记录会阻止不完整的内存快照替换，AXFR 则失败关闭。
@@ -143,9 +143,9 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - `zone.Store.Close()` 会停止 debounce/expiry 定时器并等待正在执行的数据库快照读取；主服务在关闭数据面数据库前关闭 Store，避免退出后定时回调继续触碰连接。
 - 内存 Store 合成 SOA 的 TTL 已与 AXFR/zone metadata 统一使用 `default_ttl`，避免同一区域的查询与传送视图不一致。
 - 修改：`internal/dns/zone/zone.go` 改名区域时，在同一事务中将区内 owner 从旧 apex 迁到新 apex，并写入 delete/add history；`catalog.go` 同事务更新成员 PTR RDATA 及 catalog serial/history。
-- 以上 secondary 和改名修复仍需协议回归与运行态验收。控制/数据面变更的跨库原子传播和其他 zone mutation 写入口仍未闭合。DNSSEC 当前明确未实现签名与 DNSKEY/RRSIG/NSEC 应答，因此现有开关和 NSEC3 参数不改变权威 RRset；真正接入签名时必须将签名材料发布和 serial 更新作为同一变更审查。IXFR 不得据此重新启用。
+- 以上 secondary 和改名修复仍需协议回归与运行态验收。控制/数据面变更的跨库原子传播需按工作包继续验收。DNSSEC 当前明确未实现签名与 DNSKEY/RRSIG/NSEC 应答，因此现有开关和 NSEC3 参数不改变权威 RRset；真正接入签名时必须将签名材料发布和 serial 更新作为同一变更审查。
 - 2026-09-23 验证：`go test ./...`、`go build ./...`、`go vet ./...` 及 DHCP/DNS/dataplane/configver 关键包 `go test -race` 通过；前端 typecheck 和生产构建通过。单独重跑了拆分数据面 DHCP→DNS 发布与 ACK 到可解析延迟回归。前端 lint 被仓库已有的 14 条规则错误阻断（未改动对应业务源码）。首次全量 Go 测试揭示旧测试 schema 缺列/缺表及同步回调签名过期，已修复夹具；另发现 zone plane 缺少 journal 迁移，已补迁移并复跑通过。
-- W01 仍为局部收敛而非关闭：管理 API、配置发布、DHCP 投影、动态更新、导入和部分 catalog 操作已有事务保护；其他 zone mutation、完整 IXFR 差异表示与 RFC 协议场景仍须审计。IXFR 保持禁用，现有不安全请求回退 AXFR。
+- 当日早期 W01 仍为局部收敛的状态记录，已被本文件后续 `W01 IXFR journal chain` 进展更新；外部 secondary 互操作仍属于未验收项目。
 - 仓内验证通过不代表完成真实现场验收：断电持久性、relay/客户端互操作、跨主机分区/围栏、目标硬件容量与长期稳定性仍是后续门槛。
 
 ### v0.12.0 后续修复（2026-09-23）
@@ -243,12 +243,20 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
 - HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管：现有 HA 复制只镜像 lease rows，不复制 facts 序列和 outbox；启用后会在接管时造成序列断档。W04 仍需补齐 HA 故障转移时的事实复制语义、控制库与 DHCP 数据库分离时的故障恢复及真实网络端到端演练。本批接通非 HA 默认生产者和消费者，但不发布版本。
 
-### W01 配置发布写路径补齐（2026-09-24，IXFR 仍禁用）
+### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 
 - 配置版本发布替换 DNS 控制面记录后，对 before/after 的应答 RR 集合做多重集差分；删除旧 RR、添加新 RR 和推进 serial 后，将差异 journal 写入同一个数据库事务。
 - journal 保留 wire 记录字段（owner、type、RDATA、TTL 及 priority/weight/port/CAA 字段），未变化记录不重复写入；同一内容的重复发布不推进 serial。
 - 回归确认替换一个 A 记录并增加另一个时，当前 serial 下记录一条删除和两条新增。`go test ./internal/configver` 通过。
-- 尚未解决：zone 配置发布中的 SOA 元数据变更没有旧/新 SOA journal；其他 RR 类型的无损表达、跨库传播与 IXFR 协议差异集仍需审计。因此 IXFR 保持回退 AXFR。
+- 本节记录当时阶段状态；SOA 分界与完整 journal 链服务已由下方最新进展更新。
+
+### W01 IXFR journal 链传送（2026-09-24，代码完成，现场验收待做）
+
+- primary 侧已审计的作者写入者均在同一事务中写入旧 SOA 删除、RR 删除/新增及新 SOA 添加：Record API、批量/过期清理、自动 PTR、CSV/zonefile 导入、catalog 成员变更、DHCP DDNS、RFC 2136 动态 UPDATE、配置版本记录发布、区域元数据变更和显式 serial 操作。secondary 快照应用及 dataplane serial 同步属于复制侧，不作为新的 primary history 来源。
+- `HandleIXFR` 先在单一 SQLite 读事务中读取当前 SOA 和 history；只在每个 delta 均有合法 SOA 分界、历史从请求 serial 连续到当前 serial、最终 SOA 与当前权威 SOA 一致时返回 IXFR。响应按 RFC 1995 组织为当前 SOA、旧 SOA/删除集、新 SOA/新增集，并以当前 SOA结束；同 serial 请求及 RFC 1982 判定为更新的客户端返回当前 SOA。
+- 历史缺口、格式错误、不支持或无法解码的 RR、超大 history 扫描及 RFC 1982 半区间歧义均 fail-safe 回退完整 AXFR。旧的无 SOA delimiter history 无法被误当成可用 delta。
+- 回归覆盖多 serial 差异顺序、缺口回退 AXFR、相同/更新 serial 请求、32 位 serial 回绕和单连接无嵌套查询死锁。`go test ./...`、`go vet ./...` 及 transfer/zone/DHCP/configver 关键包 race 检查通过。
+- W01 仓内代码门槛已闭合；还需在真实 secondary 上验证 IXFR TCP 多消息 framing、历史 pruning 边界和互操作恢复。未完成现场验证前，任何缺链仍会返回 AXFR；本分支尚不构成整体 GA 发布。
 
 ## 范围与限制
 

@@ -60,6 +60,8 @@ func newSingleConnDB(t *testing.T) *sql.DB {
 		priority INTEGER,
 		weight INTEGER,
 		port INTEGER,
+		flag INTEGER,
+		tag TEXT,
 		created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE TABLE dns_zone_transfer (
