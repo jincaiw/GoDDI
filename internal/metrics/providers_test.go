@@ -48,6 +48,7 @@ func withProviders(t *testing.T) {
 	t.Cleanup(func() {
 		dhcpScopeStatsFn = nil
 		dhcpScopeLabels = make(map[string]struct{})
+		dhcpHAStatsFn = nil
 		backupStatsFn = nil
 		secondaryZoneStatsFn = nil
 		dataPlaneStatsFn = nil
@@ -58,7 +59,33 @@ func withProviders(t *testing.T) {
 		DHCPScopeUsageRatio.Reset()
 		DHCPScopeUtilizationScrapeError.Set(0)
 		DHCPScopeUtilizationLastSuccessTimestampSeconds.Reset()
+		DHCPHARedundant.Reset()
+		DHCPHAPromising.Reset()
+		DHCPHASequence.Reset()
+		DHCPHAAcknowledgedSequence.Reset()
+		DHCPHAPeerAppliedSequence.Reset()
 	})
+}
+
+func TestSampleProvidersPublishesDHCPHAWatermarks(t *testing.T) {
+	withProviders(t)
+	dhcpHAStatsFn = func() []DHCPHASample {
+		return []DHCPHASample{{
+			NodeID: "primary-a", Redundant: true, Promising: true,
+			Sequence: 18, AcknowledgedSequence: 17, PeerAppliedSequence: 18,
+		}}
+	}
+	sampleProviders()
+	text := expose(t, DHCPHASequence, DHCPHAAcknowledgedSequence, DHCPHAPeerAppliedSequence)
+	for _, want := range []string{
+		`goddi_dhcp_ha_sequence{node_id="primary-a"} 18`,
+		`goddi_dhcp_ha_acknowledged_sequence{node_id="primary-a"} 17`,
+		`goddi_dhcp_ha_peer_applied_sequence{node_id="primary-a"} 18`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\n%s", want, text)
+		}
+	}
 }
 
 func TestSampleProvidersPublishesFactsProducerStatus(t *testing.T) {

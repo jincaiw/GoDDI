@@ -1607,11 +1607,17 @@ func runServer(configPath string) error {
 	if haEnabled && haRole != config.HARoleStandby {
 		metrics.RegisterDHCPHAStatsProvider(func() []metrics.DHCPHASample {
 			state := currentHAState(haRole, haRepl, haMirror)
-			return []metrics.DHCPHASample{{
+			sample := metrics.DHCPHASample{
 				NodeID:    haCfg.NodeID,
 				Redundant: state.Redundant(),
 				Promising: state.MayBind(),
-			}}
+			}
+			if haRepl != nil {
+				sample.Sequence = haRepl.Seq()
+				sample.AcknowledgedSequence = haRepl.AckedSeq()
+				sample.PeerAppliedSequence = haRepl.PeerWatermarks().AppliedSeq
+			}
+			return []metrics.DHCPHASample{sample}
 		})
 	}
 

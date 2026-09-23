@@ -87,7 +87,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - W05 复核最新版已有的 revision、expected version、幂等和发布 outbox；仅补仍缺失的多节点 applied 确认和失败保留 LKG。
 - W06 逐项核对 space 唯一性、CAS、导入预检与多 DNS 关联，按代码/回归证据补缺，不重建已有能力。
 - W07 审查三角色和启动恢复实现；验证坏快照、旧 schema、磁盘故障、控制进程退出及 DHCP 本地租约库恢复。
-- W11 对账现有 metrics/ready，再补事实事件 gap、失败首事件、复制水位和备份年龄等尚缺低基数告警。
+- W11 对账现有 metrics/ready，再补 facts producer outstanding、HA 复制确认/peer applied 水位和真实告警阈值；consumer gap/失败、备份年龄已有对应系列，仍需核对部署抓取与告警规则。
 
 退出条件：并发分配唯一；配置失败保留最后有效版本；控制面退出不改变健康数据面状态；租约库异常时不发送无持久保护的新成功 ACK。
 
@@ -269,7 +269,8 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 
 - DHCP 非 HA 事实 outbox 增加低基数 Prometheus 样本：pending/failed 数、已分配最高 sequence、首个未完成 sequence。查询带 2 秒超时；读取失败只记告警，不伪造零水位。
 - 指标能区分“控制端 consumer 已追平”与“DHCP 生产 outbox 尚未送达”，也能直接暴露失败事件阻塞点；事件 ID、错误文本不作为标签。
-- `internal/metrics` 与 `cmd/goddi` 定向回归及 golangci-lint 通过。HA 生产者/复制水位仍未接通；备份年龄、HA 复制确认水位和真实告警阈值仍需另行补齐。
+- `internal/metrics` 与 `cmd/goddi` 定向回归及 golangci-lint 通过。HA facts 生产/复制尚未接通；备份年龄已有系列，但抓取配置、告警阈值和现场告警动作仍需验收。
+- 后续补充 primary HA replication gauges：本机已分配 sequence、mirror durable ACK sequence、最近观察到的 peer applied sequence，均只由 primary 采样并使用 node_id 标签。回归检查了 exposition；operator 可区分“发送序号”“备端确认”和“备端实际应用”水位。该观测不改变复制协议，也不代表 facts 已随 HA 镜像。
 
 ### W06 DNS owner 名规范化与 catalog 冲突修复（2026-09-24，代码完成）
 

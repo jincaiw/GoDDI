@@ -183,6 +183,19 @@ var (
 		Help: "1 when this DHCP node may acknowledge a binding or a renewal, 0 when it is withholding them. Absent when HA is disabled.",
 	}, []string{"node_id"})
 
+	DHCPHASequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_sequence",
+		Help: "Highest lease replication sequence assigned by this DHCP primary.",
+	}, []string{"node_id"})
+	DHCPHAAcknowledgedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_acknowledged_sequence",
+		Help: "Highest lease replication sequence durably acknowledged by the standby.",
+	}, []string{"node_id"})
+	DHCPHAPeerAppliedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_applied_sequence",
+		Help: "Highest lease replication sequence the primary most recently observed applied by its standby.",
+	}, []string{"node_id"})
+
 	DHCPRequestsInflight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_requests_inflight",
 		Help: "Current number of DHCP requests being processed by workers.",
@@ -522,6 +535,12 @@ type DHCPHASample struct {
 	// It is false while the node is withholding, which is a different fact
 	// from "this node is broken".
 	Promising bool
+	// Sequence is the primary's highest assigned replication sequence.
+	Sequence int64
+	// AcknowledgedSequence is the highest sequence confirmed durable by the standby.
+	AcknowledgedSequence int64
+	// PeerAppliedSequence is the last applied watermark reported by the standby.
+	PeerAppliedSequence int64
 }
 
 // SecondaryZoneSample is one secondary zone's refresh health.
@@ -839,6 +858,9 @@ func InitMetrics() {
 			FactsProducerFirstOutstandingSequence,
 			DHCPHARedundant,
 			DHCPHAPromising,
+			DHCPHASequence,
+			DHCPHAAcknowledgedSequence,
+			DHCPHAPeerAppliedSequence,
 			DHCPRequestsInflight,
 			DHCPRequestQueueDepth,
 			DHCPRequestQueueCapacity,
@@ -952,6 +974,9 @@ func sampleProviders() {
 		for _, s := range fn() {
 			DHCPHARedundant.WithLabelValues(s.NodeID).Set(boolGauge(s.Redundant))
 			DHCPHAPromising.WithLabelValues(s.NodeID).Set(boolGauge(s.Promising))
+			DHCPHASequence.WithLabelValues(s.NodeID).Set(float64(s.Sequence))
+			DHCPHAAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.AcknowledgedSequence))
+			DHCPHAPeerAppliedSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedSequence))
 		}
 	}
 	if fn := secondaryZoneStatsFn; fn != nil {
