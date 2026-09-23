@@ -172,12 +172,7 @@ const loadFailed = ref('')
 /** True when the create was refused because the plan no longer describes disk. */
 const stale = ref(false)
 
-/**
- * A plan with conflicts is a plan the operator should not approve, and the
- * refusal to offer "next" is the point of asking IPAM in the first place. The
- * backend would still accept the create -- it checks the fingerprint, not the
- * conflicts -- so nothing else stops this.
- */
+/** A conflicting plan cannot advance in the UI; the API enforces this too. */
 const hasBlockingErrors = computed(() => (plan.value?.conflicts.length ?? 0) > 0)
 
 const routerSourceText = computed(() => {
