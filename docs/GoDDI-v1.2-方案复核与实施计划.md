@@ -225,11 +225,11 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - BIND zonefile 导入现检查 TTL/RR 值并在同一事务中执行 CNAME 独占性验证，覆盖既有记录及本批此前已插入记录；发现冲突时整批回滚。回归确认同 owner 的 CNAME+A 不会留下部分写入。`go test ./internal/dns/zone ./internal/dns/transfer` 通过。其他记录入口的完整不变量、多 DNS 关联和 IXFR 解禁条件仍未完成。
 - Record API 单条/批量创建、更新、自动 PTR、配置发布和 DHCP DDNS 共用 DNS 大小写无关且忽略过期/禁用 RR 的 CNAME 独占性事务校验；拒绝同一 owner 下不同 CNAME 目标以及 CNAME 与其他类型共存。批量路径过去会吞掉 CNAME 检查的 SQL 错误，现已移除。更新路径排除当前记录。回归覆盖大小写不同的冲突创建/改名、批次原子回滚、zonefile 整批回滚、DHCP A 与现有 CNAME 冲突、自动 PTR 冲突、配置发布与 data-plane CNAME 冲突。相关包测试通过。
 - IPAM 的 DNS 辅助关联曾对跨 space 重叠 IP 使用 `LIMIT 2` 后任取第一条，可能关联错地址对象。现无 scope 的入口在存在多个 space 候选时 fail-closed，并提供显式 `space_id` 的关联方法；回归确认歧义不写入关联、显式 space 关联命中目标对象。
-- SOA 配置/serial 变更（管理 API、配置发布、显式 serial increment 与 zone type conversion）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。该 journal 还缺少所有 RR 写入者共享的有序 SOA 分界，IXFR 继续回退 AXFR。
+- SOA 配置/serial 变更（管理 API、配置发布、显式 serial increment 与 zone type conversion）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。当前 primary 侧已发现的 serial/RR journal 写入者均已加 SOA 分界，IXFR 仍需完成协议和历史序列端到端验收后再考虑启用。
 - RFC 2136 动态 UPDATE 现在在变更事务内读取旧 synthesized SOA，按旧 SOA 删除、RR 删除/新增、更新后 SOA 添加的顺序写 journal；新 SOA serial、RR、serial 更新与 history 同事务提交。回归验证了四行顺序及更新后 SOA serial，动态 UPDATE、zone 与 transfer 包测试通过。该入口已补齐 SOA 分界，但其它 RR 写入者的分界、journal 读取排序和完整 IXFR 协议测试仍未闭合。
 - DHCP DDNS 正向与反向区域写入也在其共享 DNS 事务中记录旧 SOA、RR 多重集差异及新 SOA；每个有变化的区域各推进一次 serial。回归确认两区各包含 SOA 删除/添加和对应 A/PTR 差异，DHCP、dataplane、dynamic_update、zone 与 transfer 包测试通过。其它 RR 写入入口和协议级 IXFR 仍未完成。
-- Record API 单条创建/更新/删除、批量创建/删除、自动 PTR 和过期记录清理均通过事务 serial helper 写入旧 SOA 分界，并在该 serial 的 RR journal 完成后写入新 SOA；serial、RR 数据和 history 同事务提交。zone type conversion 调整为复用旧 SOA 分界，避免重复写旧 SOA。相关 DNS、DHCP、configver 与 transfer 包测试通过。catalog、导入和配置发布等其它 serial 写入入口以及全局 journal 顺序读取/IXFR 协议验收仍需继续处理。
-- CSV/zonefile 导入、catalog 成员新增/删除/改名和 DNS 配置版本记录发布也已接上旧 SOA 删除与新 SOA 添加；配置发布仍按服务 RR 多重集写出真实删除/新增。回归检查配置发布每个 serial 下含两个 SOA 分界，相关 zone/configver 包测试通过。仍需审计 catalog 相关 zone 变更、所有 journal 消费者的顺序语义，并完成协议级 IXFR 测试。
+- Record API 单条创建/更新/删除、批量创建/删除、自动 PTR 和过期记录清理均通过事务 serial helper 写入旧 SOA 分界，并在该 serial 的 RR journal 完成后写入新 SOA；serial、RR 数据和 history 同事务提交。zone 元数据更新和类型转换也使用事务开始前捕获的旧状态，并只写一次每个 SOA 分界。
+- CSV/zonefile 导入、catalog 成员新增/删除/改名和 DNS 配置版本记录发布已接上旧 SOA 删除与新 SOA 添加；配置发布仍按服务 RR 多重集写出真实删除/新增。primary 写入清单的代码审计已覆盖 Record API、动态 UPDATE、DHCP DDNS、配置发布、区域元数据/serial 操作、catalog 和两种导入路径；secondary 载入及 dataplane 同步的 serial 写入属于复制侧。全量 Go 测试通过。IXFR 仍保持回退 AXFR，待增加完整 RFC 1995/1982 传输用例、验证历史范围/排序与缺口行为后再重新评估启用。
 
 ### W04 跨库事实传输实施中（2026-09-24，尚未发布）
 

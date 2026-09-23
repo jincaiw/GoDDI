@@ -1239,6 +1239,10 @@ func bumpZoneSerialTx(tx *sql.Tx, zoneID string) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("querying serial: %w", err)
 	}
+	return bumpZoneSerialWithSOAStateTx(tx, zoneID, before)
+}
+
+func bumpZoneSerialWithSOAStateTx(tx *sql.Tx, zoneID string, before SOAHistoryState) (uint32, error) {
 	current := before.Serial
 	next := NextSerial(current)
 	result, err := tx.Exec("UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?", next, zoneID, current)

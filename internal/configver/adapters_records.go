@@ -346,6 +346,10 @@ func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	return bumpZoneSerialForReleaseWithBefore(tx, zoneID, beforeSOA)
+}
+
+func bumpZoneSerialForReleaseWithBefore(tx *sql.Tx, zoneID string, beforeSOA zone.SOAHistoryState) (uint32, error) {
 	current := beforeSOA.Serial
 	next := zone.NextSerial(current)
 	res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)

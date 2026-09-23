@@ -149,14 +149,17 @@ func (*DNSZoneAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) err
 	if err := json.Unmarshal(content, &c); err != nil {
 		return fmt.Errorf("decode zone content: %w", err)
 	}
+	beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, id)
+	if err != nil {
+		return fmt.Errorf("read SOA before release: %w", err)
+	}
 	var oldName, oldType, oldMName, oldRName string
 	var oldDNSSEC bool
 	var oldTTL, oldRefresh, oldRetry, oldExpire, oldMinimum int
-	var oldSerial uint32
 	if err := tx.QueryRow(`SELECT name, type, dnssec_enabled, default_ttl, soa_mname, soa_rname,
-		refresh, retry, expire, minimum, serial FROM dns_zones WHERE id = ?`, id).Scan(
+		refresh, retry, expire, minimum FROM dns_zones WHERE id = ?`, id).Scan(
 		&oldName, &oldType, &oldDNSSEC, &oldTTL, &oldMName, &oldRName,
-		&oldRefresh, &oldRetry, &oldExpire, &oldMinimum, &oldSerial); err != nil {
+		&oldRefresh, &oldRetry, &oldExpire, &oldMinimum); err != nil {
 		return fmt.Errorf("read zone before release: %w", err)
 	}
 
@@ -180,19 +183,15 @@ func (*DNSZoneAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) err
 		oldMName != c.SOAMName || oldRName != c.SOARName ||
 		oldRefresh != c.Refresh || oldRetry != c.Retry || oldExpire != c.Expire || oldMinimum != c.Minimum
 	if serialRelevantChanged {
-		serial, err := bumpZoneSerialForRelease(tx, id)
+		serial, err := bumpZoneSerialForReleaseWithBefore(tx, id, beforeSOA)
 		if err != nil {
 			return fmt.Errorf("bump zone serial after SOA release: %w", err)
-		}
-		before := zone.SOAHistoryState{
-			Name: oldName, MName: oldMName, RName: oldRName, Serial: oldSerial, TTL: oldTTL,
-			Refresh: oldRefresh, Retry: oldRetry, Expire: oldExpire, Minimum: oldMinimum,
 		}
 		after := zone.SOAHistoryState{
 			Name: c.Name, MName: c.SOAMName, RName: c.SOARName, Serial: serial, TTL: c.DefaultTTL,
 			Refresh: c.Refresh, Retry: c.Retry, Expire: c.Expire, Minimum: c.Minimum,
 		}
-		if err := zone.LogSOAChangeTx(tx, id, serial, before, after); err != nil {
+		if err := zone.LogSOARecordTx(tx, id, serial, "add", after); err != nil {
 			return fmt.Errorf("journal SOA release: %w", err)
 		}
 	}

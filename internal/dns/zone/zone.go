@@ -572,11 +572,6 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		return nil, err
 	}
 	oldZoneName := existing.Name
-	beforeSOA := SOAHistoryState{
-		Name: existing.Name, MName: existing.SOA_MName, RName: existing.SOA_RName,
-		Serial: existing.Serial, TTL: existing.DefaultTTL,
-		Refresh: existing.Refresh, Retry: existing.Retry, Expire: existing.Expire, Minimum: existing.Minimum,
-	}
 
 	// Build update query dynamically.
 	var setClauses []string
@@ -741,6 +736,10 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		return nil, fmt.Errorf("begin zone update transaction: %w", err)
 	}
 	defer tx.Rollback()
+	beforeSOA, err := ReadSOAHistoryStateTx(tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading SOA before zone update: %w", err)
+	}
 	changedCatalogs := map[string]struct{}{}
 	if catalogChanged && oldCatalog != "" {
 		changed, err := removeCatalogMembershipTx(tx, oldZoneName)
@@ -767,7 +766,7 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		return nil, fmt.Errorf("updating zone: %w", err)
 	}
 	if serialRelevantChanged {
-		serial, err := bumpZoneSerialTx(tx, id)
+		serial, err := bumpZoneSerialWithSOAStateTx(tx, id, beforeSOA)
 		if err != nil {
 			return nil, fmt.Errorf("bumping zone serial: %w", err)
 		}
@@ -781,7 +780,7 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 			Serial: serial, TTL: existing.DefaultTTL,
 			Refresh: existing.Refresh, Retry: existing.Retry, Expire: existing.Expire, Minimum: existing.Minimum,
 		}
-		if err := LogSOAChangeTx(tx, id, serial, beforeSOA, afterSOA); err != nil {
+		if err := LogSOARecordTx(tx, id, serial, "add", afterSOA); err != nil {
 			return nil, fmt.Errorf("journaling SOA change: %w", err)
 		}
 	}
