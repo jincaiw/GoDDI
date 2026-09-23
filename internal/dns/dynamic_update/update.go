@@ -207,7 +207,6 @@ func (h *UpdateHandler) snapshotRecords(zoneID string, ops []updateOp) string {
 		return ""
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
 	args := make([]any, 0, len(names)+1)
 	args = append(args, zoneID)
 	for _, n := range names {
@@ -218,7 +217,7 @@ func (h *UpdateHandler) snapshotRecords(zoneID string, ops []updateOp) string {
 	// that follows on the same connection cannot find it still open.
 	rows, err := h.db.Query(
 		`SELECT name, type, value FROM dns_records
-		 WHERE zone_id = ? AND name IN (`+placeholders+`)
+		 WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) IN (`+strings.TrimSuffix(strings.Repeat("LOWER(RTRIM(?, '.')),", len(names)), ",")+`)
 		 ORDER BY name, type, value`, args...)
 	if err != nil {
 		slog.Error("dynamic_update: could not read records for the audit entry", "error", err)
@@ -299,18 +298,21 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 		if hdr.Name == "" {
 			return nil, dns.RcodeFormatError
 		}
+		// DNS owner names are case-insensitive. Canonicalise owners for storage
+		// and make operations differing only by case address the same name.
+		owner := strings.ToLower(hdr.Name)
 		rtype := dns.TypeToString[hdr.Rrtype]
 
 		switch hdr.Class {
 		case dns.ClassANY:
 			if hdr.Rrtype == dns.TypeANY {
-				ops = append(ops, updateOp{kind: opDeleteName, name: hdr.Name})
+				ops = append(ops, updateOp{kind: opDeleteName, name: owner})
 				continue
 			}
 			if rtype == "" {
 				return nil, dns.RcodeFormatError
 			}
-			ops = append(ops, updateOp{kind: opDeleteRRset, name: hdr.Name, rtype: rtype})
+			ops = append(ops, updateOp{kind: opDeleteRRset, name: owner, rtype: rtype})
 
 		case dns.ClassNONE:
 			// A value-dependent delete must name a concrete type; TYPE ANY
@@ -327,7 +329,7 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 					return nil, dns.RcodeFormatError
 				}
 			}
-			ops = append(ops, updateOp{kind: opDeleteRR, name: hdr.Name, rtype: rtype, value: value})
+			ops = append(ops, updateOp{kind: opDeleteRR, name: owner, rtype: rtype, value: value})
 
 		case dns.ClassINET:
 			if !dynamicUpdateTypes[rtype] {
@@ -346,7 +348,7 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 				return nil, dns.RcodeFormatError
 			}
 			ops = append(ops, updateOp{
-				kind: opAdd, name: hdr.Name, rtype: rtype,
+				kind: opAdd, name: owner, rtype: rtype,
 				value: value, ttl: int(hdr.Ttl),
 			})
 
@@ -456,7 +458,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				return nil, 0, err
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ?", zoneID, op.name); err != nil {
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))", zoneID, op.name); err != nil {
 				return nil, 0, err
 			}
 			changes = append(changes, existing...)
@@ -467,7 +469,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				return nil, 0, err
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?",
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ?",
 				zoneID, op.name, op.rtype); err != nil {
 				return nil, 0, err
 			}
@@ -485,7 +487,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				changes = append(changes, c)
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ?",
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND value = ?",
 				zoneID, op.name, op.rtype, op.value); err != nil {
 				return nil, 0, err
 			}
@@ -510,7 +512,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 // and closed before the caller issues its DELETE: the single-connection SQLite
 // pool deadlocks if a nested statement runs while a cursor is still open.
 func matchingRecords(tx *sql.Tx, zoneID, name, rtype string) ([]change, error) {
-	query := "SELECT name, type, value, ttl FROM dns_records WHERE zone_id = ? AND name = ?"
+	query := "SELECT name, type, value, ttl FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))"
 	args := []interface{}{zoneID, name}
 	if rtype != "" {
 		query += " AND type = ?"
@@ -605,7 +607,7 @@ func replaceRRsetTTL(tx *sql.Tx, zoneID, name, rtype string, rrset []change, ttl
 		return nil
 	}
 	if _, err := tx.Exec(`UPDATE dns_records SET ttl = ?
-		WHERE zone_id = ? AND name = ? AND type = ?`, ttl, zoneID, name, rtype); err != nil {
+		WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ?`, ttl, zoneID, name, rtype); err != nil {
 		return fmt.Errorf("updating %s RRset TTL: %w", rtype, err)
 	}
 	for _, member := range rrset {
@@ -627,7 +629,7 @@ func recordKindsAtName(tx *sql.Tx, zoneID, name string) (otherTypes, cnameCount 
 		SELECT
 			COALESCE(SUM(CASE WHEN type <> 'CNAME' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN type =  'CNAME' THEN 1 ELSE 0 END), 0)
-		FROM dns_records WHERE zone_id = ? AND name = ?`, zoneID, name,
+		FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))`, zoneID, name,
 	).Scan(&otherTypes, &cnameCount)
 	return otherTypes, cnameCount, err
 }
@@ -808,7 +810,7 @@ func (h *UpdateHandler) checkPrerequisites(tx *sql.Tx, zoneID string, msg *dns.M
 func nameInUse(tx *sql.Tx, zoneID, name string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND enabled = 1",
 		zoneID, name).Scan(&count); err != nil {
 		return false, err
 	}
@@ -819,7 +821,7 @@ func nameInUse(tx *sql.Tx, zoneID, name string) (bool, error) {
 func rrsetExists(tx *sql.Tx, zoneID, name, rtype string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND enabled = 1",
 		zoneID, name, rtype).Scan(&count); err != nil {
 		return false, err
 	}
@@ -830,7 +832,7 @@ func rrsetExists(tx *sql.Tx, zoneID, name, rtype string) (bool, error) {
 func rdataExists(tx *sql.Tx, zoneID, name, rtype, value string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND value = ? AND enabled = 1",
 		zoneID, name, rtype, value).Scan(&count); err != nil {
 		return false, err
 	}

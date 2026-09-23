@@ -309,6 +309,7 @@ W12-a/W12-c 隔离式 restore 演练通过。完整 `go test ./...` 与 `go vet 
 - BIND 导入改为使用共用的 CNAME owner 校验器；RRset TTL 与 CNAME 校验统一忽略 owner 的末尾点，防止 API FQDN 与导入相对名绕过冲突检查。zone 与 API handler 定向测试、lint 通过。
 - BIND 导入预检现在聚合文件内 RRset TTL/CNAME 冲突及对现有记录的冲突，返回记录序号、owner、类型、冲突代码与原因；有冲突时导入事务回滚，API dry-run 以结构化预检结果响应，实际导入也返回冲突明细而非 500。
 - DNS 导入界面显示 CSV 行或 BIND 记录冲突明细；若预检后数据并发变化导致正式导入冲突，界面保留服务端返回的冲突列表，便于修复后重做预检。
+- 持续 W06 审计发现 RFC 2136 动态更新对 owner 使用 SQLite 字符串精确比较，可能因输入大小写与既有记录不同而漏删、误判 prerequisite 或生成重复 owner。现在更新操作将新 owner 规范化为小写；匹配、删除、RRset TTL 维护、CNAME 互斥及 prerequisite/audit 查询统一忽略大小写与末尾点。`go build ./...` 与 `go vet ./...` 通过，最新 CI 回归仍需通过。
 
 ### W13 DNS 区域导入体验（2026-09-24，代码实现完成）
 
