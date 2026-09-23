@@ -140,6 +140,35 @@ test('read-only role cannot open write actions across modules and administration
     })
     expect(assignResponse.ok()).toBe(true)
 
+    const restrictRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: [readPermissions[0]] }
+    })
+    expect(restrictRoleResponse.ok()).toBe(true)
+    const dnsOnlyLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
+    expect(dnsOnlyLogin.ok()).toBe(true)
+    const dnsOnly = (await dnsOnlyLogin.json()).data
+    const dnsOnlyHeaders = { Authorization: `Bearer ${dnsOnly.token}` }
+    const readChecks = await Promise.all([
+      api.get('/api/v1/dns/zones', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/dhcp/scopes', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/ipam/spaces', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/backup', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/tokens', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/settings', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/users', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/roles', { headers: dnsOnlyHeaders }),
+      api.get('/api/v1/groups', { headers: dnsOnlyHeaders })
+    ])
+    expect(readChecks.map(response => response.status()), 'DNS-only grants must not cross resource boundaries')
+      .toEqual([200, ...Array(readChecks.length - 1).fill(403)])
+
+    const restoreRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: readPermissions }
+    })
+    expect(restoreRoleResponse.ok()).toBe(true)
+
     const readerLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
     expect(readerLogin.ok()).toBe(true)
     const reader = (await readerLogin.json()).data
