@@ -174,7 +174,7 @@
           <div v-if="Object.keys(importPreview.record_types || {}).length">{{ Object.entries(importPreview.record_types).map(([type, count]) => `${type}: ${count}`).join(' · ') }}</div>
           <ul v-if="importPreview.conflicts?.length">
             <li v-for="(conflict, index) in importPreview.conflicts" :key="`${conflict.row}-${index}`">
-              {{ t('dns.zones.importConflictRow', { row: conflict.row, owner: conflict.owner, type: conflict.type, message: conflict.message }) }}
+              {{ t('dns.zones.importConflictRow', { row: conflict.row ?? conflict.record, owner: conflict.owner, type: conflict.type, message: conflict.message }) }}
             </li>
           </ul>
         </n-alert>
@@ -257,6 +257,7 @@ import { SearchOutline } from '@vicons/ionicons5'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
+import { ApiError } from '@/service/api/goddi/client'
 import {
   getDNSZone, updateDNSZone, exportZoneFile, importZoneFile, syncSecondaryZone,
   enableDNSSEC, disableDNSSEC, rotateDNSSECKeys, getDNSSECStatus,
@@ -573,7 +574,11 @@ async function previewImport() {
     const response = await importZoneFile(zoneId, importContent.value, importFormat.value, true)
     importPreview.value = response.data.data as ZoneImportPreview
   } catch (err: unknown) {
-    importPreview.value = null
+    if (err instanceof ApiError && err.payload && typeof err.payload === 'object' && 'conflicts' in err.payload) {
+      importPreview.value = err.payload as ZoneImportPreview
+    } else {
+      importPreview.value = null
+    }
     message.error(err instanceof Error ? err.message : t('common.failed'))
   } finally {
     importPreviewLoading.value = false
@@ -592,8 +597,12 @@ async function applyImport() {
     loadZone()
     loadRecords()
   } catch (err: unknown) {
+    if (err instanceof ApiError && err.payload && typeof err.payload === 'object' && 'conflicts' in err.payload) {
+      importPreview.value = err.payload as ZoneImportPreview
+    } else {
+      importPreview.value = null
+    }
     message.error(err instanceof Error ? err.message : t('common.failed'))
-    importPreview.value = null
   } finally {
     importApplying.value = false
   }

@@ -264,6 +264,15 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 		if req.DryRun {
 			preview, err := recordMgr.PreviewZoneFile(zoneID, req.Content)
 			if err != nil {
+				var conflictErr *zone.ZoneFileImportConflictError
+				if errors.As(err, &conflictErr) {
+					response.BadRequestWithData(w, "zone-file validation found conflicts", map[string]interface{}{
+						"zone_id": zoneID, "dry_run": true, "valid": false,
+						"record_count": preview.RecordCount, "record_types": preview.RecordTypes,
+						"conflicts": conflictErr.Conflicts,
+					})
+					return
+				}
 				response.BadRequest(w, err.Error())
 				return
 			}
@@ -274,6 +283,14 @@ func ImportZoneFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := recordMgr.ImportZoneFile(zoneID, req.Content); err != nil {
+			var conflictErr *zone.ZoneFileImportConflictError
+			if errors.As(err, &conflictErr) {
+				response.BadRequestWithData(w, err.Error(), map[string]interface{}{
+					"zone_id": zoneID, "dry_run": false, "valid": false,
+					"conflicts": conflictErr.Conflicts,
+				})
+				return
+			}
 			response.InternalErrorWithLog(w, "导入区域文件失败", err)
 			return
 		}

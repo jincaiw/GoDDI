@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,9 +25,47 @@ type CSVImportPreview struct {
 // ZoneFileImportPreview summarizes a BIND zone-file import validated against
 // the target zone without committing any rows or journal changes.
 type ZoneFileImportPreview struct {
-	RecordCount int            `json:"record_count"`
-	RecordTypes map[string]int `json:"record_types"`
-	Valid       bool           `json:"valid"`
+	RecordCount int                      `json:"record_count"`
+	RecordTypes map[string]int           `json:"record_types"`
+	Valid       bool                     `json:"valid"`
+	Conflicts   []ZoneFileImportConflict `json:"conflicts,omitempty"`
+}
+
+// ZoneFileImportConflict identifies one BIND record that conflicts with the
+// zone or another record in the same file. Record is the one-based parsed
+// record number (SOA records excluded), since the zone parser does not expose
+// source line positions.
+type ZoneFileImportConflict struct {
+	Record  int    `json:"record"`
+	Owner   string `json:"owner"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ZoneFileImportConflictError reports data conflicts found during preflight.
+type ZoneFileImportConflictError struct {
+	Conflicts []ZoneFileImportConflict
+}
+
+type zoneFileImportRR struct {
+	id       string
+	name     string
+	rtype    string
+	value    string
+	ttl      int
+	priority *int
+	weight   *int
+	port     *int
+	flag     *int
+	tag      string
+}
+
+func (e *ZoneFileImportConflictError) Error() string {
+	if e == nil || len(e.Conflicts) == 0 {
+		return "zone-file import contains conflicts"
+	}
+	return fmt.Sprintf("zone-file import contains %d conflict(s)", len(e.Conflicts))
 }
 
 // CSVImportConflict identifies an import row that cannot be applied without
@@ -83,20 +122,7 @@ func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun boo
 	zp := dns.NewZoneParser(strings.NewReader(content), zone.Name, "")
 
 	// Collect all records first, then insert in a transaction.
-	type importRR struct {
-		id       string
-		name     string
-		rtype    string
-		value    string
-		ttl      int
-		priority *int
-		weight   *int
-		port     *int
-		flag     *int
-		tag      string
-	}
-
-	var records []importRR
+	var records []zoneFileImportRR
 	for rr, ok := zp.Next(); ok; rr, ok = zp.Next() {
 		hdr := rr.Header()
 
@@ -127,7 +153,7 @@ func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun boo
 		id := uuid.New().String()
 		priority, weight, port := extractRRMeta(rr)
 
-		rec := importRR{
+		rec := zoneFileImportRR{
 			id:    id,
 			name:  name,
 			rtype: rtype,
@@ -178,25 +204,56 @@ func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun boo
 	}
 	defer stmt.Close()
 
-	for _, rec := range records {
+	conflicts := zoneFileIntraFileConflicts(records)
+	conflictedRecords := make(map[int]struct{}, len(conflicts))
+	for _, conflict := range conflicts {
+		conflictedRecords[conflict.Record-1] = struct{}{}
+	}
+	for index, rec := range records {
 		priority, weight, port, flag := intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port), intOrZero(rec.flag)
 		if err := validateRecordTTL(rec.ttl); err != nil {
-			return fmt.Errorf("zone-file import: %w", err)
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "invalid_ttl", err))
+			continue
 		}
 		if err := validateRecordValue(rec.rtype, rec.value, &priority, &weight, &port, rec.tag, &flag); err != nil {
-			return fmt.Errorf("zone-file import: invalid %s record at %s: %w", rec.rtype, rec.name, err)
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "invalid_value", err))
+			continue
+		}
+		if _, conflicted := conflictedRecords[index]; conflicted {
+			continue
 		}
 		if err := ValidateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
-			return fmt.Errorf("zone-file import: %w", err)
+			if !strings.HasPrefix(err.Error(), "RRset TTL conflict:") {
+				return fmt.Errorf("zone-file import: %w", err)
+			}
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "rrset_ttl_mismatch", err))
+			continue
 		}
 		if err := ValidateCNAMEExclusivityTx(tx, zoneID, rec.name, rec.rtype, rec.value, ""); err != nil {
-			return fmt.Errorf("zone-file import: %w", err)
+			code := "cname_exclusive_type"
+			switch {
+			case strings.HasPrefix(err.Error(), "CNAME conflict at "):
+				code = "cname_exclusive_type"
+			case strings.HasPrefix(err.Error(), "multiple CNAME targets at "):
+				code = "multiple_cname_targets"
+			default:
+				return fmt.Errorf("zone-file import: %w", err)
+			}
+			conflicts = append(conflicts, zoneFileConflict(index, rec, code, err))
+			continue
 		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
 			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
 		if err != nil {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
+	}
+	if len(conflicts) > 0 {
+		if preview != nil {
+			preview.Valid = false
+			preview.Conflicts = append([]ZoneFileImportConflict(nil), conflicts...)
+		}
+		return &ZoneFileImportConflictError{Conflicts: conflicts}
 	}
 	if len(records) > 0 {
 		serial, err := bumpZoneSerialTx(tx, zoneID)
@@ -236,6 +293,116 @@ func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun boo
 	}
 
 	return nil
+}
+
+func zoneFileConflict(index int, rec zoneFileImportRR, code string, err error) ZoneFileImportConflict {
+	return ZoneFileImportConflict{
+		Record: index + 1, Owner: dns.Fqdn(rec.name), Type: rec.rtype,
+		Code: code, Message: err.Error(),
+	}
+}
+
+func zoneFileIntraFileConflicts(records []zoneFileImportRR) []ZoneFileImportConflict {
+	type ownerRecords struct {
+		indices []int
+		types   map[string]map[string][]int
+	}
+	owners := make(map[string]*ownerRecords)
+	for i, rec := range records {
+		owner := strings.ToLower(dns.Fqdn(rec.name))
+		group := owners[owner]
+		if group == nil {
+			group = &ownerRecords{types: make(map[string]map[string][]int)}
+			owners[owner] = group
+		}
+		group.indices = append(group.indices, i)
+		typeName := strings.ToUpper(rec.rtype)
+		if group.types[typeName] == nil {
+			group.types[typeName] = make(map[string][]int)
+		}
+		valueKey := rec.value
+		if typeName == "CNAME" {
+			valueKey = strings.ToLower(dns.Fqdn(rec.value))
+		}
+		group.types[typeName][valueKey] = append(group.types[typeName][valueKey], i)
+	}
+
+	var conflicts []ZoneFileImportConflict
+	seen := make(map[string]struct{})
+	appendConflict := func(index int, code, message string) {
+		key := fmt.Sprintf("%d/%s", index, code)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		conflicts = append(conflicts, zoneFileConflict(index, records[index], code, fmt.Errorf("%s", message)))
+	}
+	for owner, group := range owners {
+		for typeName := range group.types {
+			var firstTTL int
+			hasTTL := false
+			for _, index := range group.indices {
+				rec := records[index]
+				if !strings.EqualFold(rec.rtype, typeName) {
+					continue
+				}
+				if !hasTTL {
+					firstTTL, hasTTL = rec.ttl, true
+				} else if rec.ttl != firstTTL {
+					// Include records that use the first TTL too, so the report
+					// marks every member of the inconsistent RRset.
+					for _, priorIndex := range group.indices {
+						if strings.EqualFold(records[priorIndex].rtype, typeName) {
+							appendConflict(priorIndex, "rrset_ttl_mismatch", fmt.Sprintf("%s %s RRset contains different TTL values", typeName, owner))
+						}
+					}
+					break
+				}
+			}
+		}
+		cnameValues := group.types["CNAME"]
+		if len(cnameValues) == 0 {
+			continue
+		}
+		hasOtherType := false
+		for typeName := range group.types {
+			if typeName != "CNAME" {
+				hasOtherType = true
+				break
+			}
+		}
+		if hasOtherType {
+			for typeName := range group.types {
+				if typeName == "CNAME" {
+					continue
+				}
+				for _, indices := range cnameValues {
+					for _, index := range indices {
+						appendConflict(index, "cname_exclusive_type", fmt.Sprintf("CNAME conflicts with %s at %s", typeName, owner))
+					}
+				}
+				for _, indices := range group.types[typeName] {
+					for _, index := range indices {
+						appendConflict(index, "cname_exclusive_type", fmt.Sprintf("%s conflicts with CNAME at %s", typeName, owner))
+					}
+				}
+			}
+		}
+		if len(cnameValues) > 1 {
+			for _, indices := range cnameValues {
+				for _, index := range indices {
+					appendConflict(index, "multiple_cname_targets", fmt.Sprintf("owner %s has multiple CNAME targets", owner))
+				}
+			}
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool {
+		if conflicts[i].Record != conflicts[j].Record {
+			return conflicts[i].Record < conflicts[j].Record
+		}
+		return conflicts[i].Code < conflicts[j].Code
+	})
+	return conflicts
 }
 
 // ExportZoneFile generates a BIND zone file format for the specified zone.

@@ -84,13 +84,13 @@ export function getCatalogMembers(id: string) {
 
 export interface ZoneImportPreview {
   zone_id: string
-  dry_run: true
+  dry_run: boolean
   valid: boolean
   record_count: number
   record_types: Record<string, number>
   creates?: number
   unchanged?: number
-  conflicts?: Array<{ row: number; owner: string; type: string; code: string; message: string }>
+  conflicts?: Array<{ row?: number; record?: number; owner: string; type: string; code: string; message: string }>
 }
 
 export function importZoneFile(id: string, content: string, format: 'bind' | 'csv', dryRun = false) {

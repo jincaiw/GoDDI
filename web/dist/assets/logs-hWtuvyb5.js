@@ -1,1 +1,0 @@
-import{C as e}from"./router-D3GWPhwH.js";function t(t){return e(`/logs/audit`,t)}export{t};
