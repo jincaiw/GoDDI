@@ -232,7 +232,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 单节点 DHCP 默认初始化 sequence allocator 与 observation outbox，并把 REQUEST 绑定/激活/续租、释放、拒绝、管理界面释放及到期清理接到 FactsMutationWriter。租约、事实 envelope 和兼容 DNS outbox 同事务提交；scope 已关闭 DNS 更新时仍允许删除旧记录。facts 投递由 Runner 唤醒，但不阻塞 DHCP ACK。
 - 地址无法映射到本地 IPAM space 时，DHCP 操作沿用现有 lease 路径，到期仍会清理租约；不会伪造 facts。映射数据库出现其他错误时，单次 facts mutation 回滚并返回错误。
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
-- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由及 unmapped expiry。当前 `go test ./...` 全量通过。
+- 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
 - HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管：现有 HA 复制只镜像 lease rows，不复制 facts 序列和 outbox；启用后会在接管时造成序列断档。W04 仍需补齐 HA 故障转移时的事实复制语义、控制库与 DHCP 数据库分离时的故障恢复及真实网络端到端演练。本批接通非 HA 默认生产者和消费者，但不发布版本。
 
 ## 范围与限制
