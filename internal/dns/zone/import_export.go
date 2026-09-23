@@ -230,7 +230,7 @@ func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun boo
 			continue
 		}
 		if err := ValidateCNAMEExclusivityTx(tx, zoneID, rec.name, rec.rtype, rec.value, ""); err != nil {
-			code := "cname_exclusive_type"
+			var code string
 			switch {
 			case strings.HasPrefix(err.Error(), "CNAME conflict at "):
 				code = "cname_exclusive_type"
