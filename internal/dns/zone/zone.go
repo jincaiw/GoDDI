@@ -941,13 +941,13 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	before, err := readSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		return 0, fmt.Errorf("reading SOA before serial increment: %w", err)
+	}
 
 	// Get current serial.
-	var currentSerial uint32
-	err = tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&currentSerial)
-	if err != nil {
-		return 0, fmt.Errorf("querying serial: %w", err)
-	}
+	currentSerial := before.Serial
 
 	// Use a serial that is always strictly greater than the current one.
 	// We compare against the zone's own serial (not the global max) so that
@@ -969,6 +969,11 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		// A concurrent writer changed the serial between our read and
 		// write; report failure so the caller can retry.
 		return 0, fmt.Errorf("serial changed concurrently, retry needed")
+	}
+	after := before
+	after.Serial = newSerial
+	if err := LogSOAChangeTx(tx, zoneID, newSerial, before, after); err != nil {
+		return 0, fmt.Errorf("journaling serial increment: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1189,11 +1194,21 @@ func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
 		return nil, fmt.Errorf("begin zone type conversion: %w", err)
 	}
 	defer tx.Rollback()
+	beforeSOA, err := readSOAHistoryStateTx(tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading SOA before zone type conversion: %w", err)
+	}
 	if _, err := tx.Exec(`UPDATE dns_zones SET type = ?, updated_at = datetime('now') WHERE id = ?`, newType, id); err != nil {
 		return nil, fmt.Errorf("converting zone: %w", err)
 	}
-	if _, err := bumpZoneSerialTx(tx, id); err != nil {
+	serial, err := bumpZoneSerialTx(tx, id)
+	if err != nil {
 		return nil, fmt.Errorf("bumping zone serial after type conversion: %w", err)
+	}
+	afterSOA := beforeSOA
+	afterSOA.Serial = serial
+	if err := LogSOAChangeTx(tx, id, serial, beforeSOA, afterSOA); err != nil {
+		return nil, fmt.Errorf("journaling SOA after zone type conversion: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit zone type conversion: %w", err)

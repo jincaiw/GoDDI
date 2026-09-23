@@ -133,7 +133,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - 自动 PTR 创建现与正向 A/AAAA 创建共用同一 SQL 事务；提交后分别通知发生变更的 primary 区域，避免只写入一侧或出现孤立 PTR。
 - 修改：`internal/dataplane/sync.go`、`runner.go` 与 `cmd/goddi/main.go` 在数据面配置同步事务内比较同步前后的 primary SOA/可见 RRset，计算实际变化区域；事务完成后刷新内存 Store，并只对变化的 primary 区域发送 NOTIFY。删除区域已无法从当前配置查询并发送通知，secondary 将按既有刷新/EXPIRE 机制处理，此边界仍需运行态验收。
 - 修改：`internal/dns/zone/zone.go` 将管理 API 修改 SOA 相关参数和 zone 类型转换与 serial 推进纳入同一事务。
-- 修改：`internal/configver/adapters_records.go` 在配置发布改变应答 RRset 时，同事务推进 zone serial 并记录实际删除/新增记录；`adapters_dns.go` 与 `ZoneManager.UpdateZone` 对 synthesized SOA 变化同事务记录旧/新 SOA RDATA。history 目前没有跨所有写入者统一、有序的 SOA 分界，传输端也未证明可无损表达所有支持的 RR 类型；因此不代表 IXFR 可用。
+- 修改：`internal/configver/adapters_records.go` 在配置发布改变应答 RRset 时，同事务推进 zone serial 并记录实际删除/新增记录；`adapters_dns.go`、`ZoneManager.UpdateZone`、`IncrementSerial` 和 zone type conversion 对 serial/SOA 变化同事务记录旧/新 SOA RDATA。history 目前没有跨所有写入者统一、有序的 SOA 分界，传输端也未证明可无损表达所有支持的 RR 类型；因此不代表 IXFR 可用。
 - 修改：`internal/dns/transfer/secondary.go` 校验 AXFR 首尾 SOA、SOA 数据一致性、IN 类和 owner 区域范围；缺少闭合 SOA、存储模型不支持/不能无损表示的 RR（包括无法保留字符串边界的 TXT）或任一插入失败均不提交新快照。
 - AXFR 校验进一步要求 SOA 位于响应第一条和最后一条，类别为 IN，并比较首尾 TTL 与其余 SOA 数据；仅“响应中恰好出现两个 SOA”不再视为完整帧。
 - 修改：`internal/dns/zone/store.go` 和 `internal/dns/transfer/transfer.go` 保留显式 TTL=0，不再改写为 3600；RecordManager 限制 TTL 在 DNS 有效范围内，非法数据库记录会阻止不完整的内存快照替换，AXFR 则失败关闭。
@@ -225,7 +225,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 - BIND zonefile 导入现检查 TTL/RR 值并在同一事务中执行 CNAME 独占性验证，覆盖既有记录及本批此前已插入记录；发现冲突时整批回滚。回归确认同 owner 的 CNAME+A 不会留下部分写入。`go test ./internal/dns/zone ./internal/dns/transfer` 通过。其他记录入口的完整不变量、多 DNS 关联和 IXFR 解禁条件仍未完成。
 - Record API 单条/批量创建、更新、自动 PTR、配置发布和 DHCP DDNS 共用 DNS 大小写无关且忽略过期/禁用 RR 的 CNAME 独占性事务校验；拒绝同一 owner 下不同 CNAME 目标以及 CNAME 与其他类型共存。批量路径过去会吞掉 CNAME 检查的 SQL 错误，现已移除。更新路径排除当前记录。回归覆盖大小写不同的冲突创建/改名、批次原子回滚、zonefile 整批回滚、DHCP A 与现有 CNAME 冲突、自动 PTR 冲突、配置发布与 data-plane CNAME 冲突。相关包测试通过。
 - IPAM 的 DNS 辅助关联曾对跨 space 重叠 IP 使用 `LIMIT 2` 后任取第一条，可能关联错地址对象。现无 scope 的入口在存在多个 space 候选时 fail-closed，并提供显式 `space_id` 的关联方法；回归确认歧义不写入关联、显式 space 关联命中目标对象。
-- SOA 配置变更（管理 API 与配置版本发布）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。该 journal 还缺少所有 zone 写入者共享的有序 SOA 分界，IXFR 继续回退 AXFR。
+- SOA 配置/serial 变更（管理 API、配置发布、显式 serial increment 与 zone type conversion）现将旧/新 synthesized SOA RDATA 写入同 serial 的 journal，并与元数据和 serial 更新同事务提交；回归核对旧、新序列及 timer/name 字段。该 journal 还缺少所有 RR 写入者共享的有序 SOA 分界，IXFR 继续回退 AXFR。
 
 ### W04 跨库事实传输实施中（2026-09-24，尚未发布）
 

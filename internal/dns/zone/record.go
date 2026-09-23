@@ -1178,6 +1178,15 @@ type SOAHistoryState struct {
 	Expire, Minimum    int
 }
 
+func readSOAHistoryStateTx(tx *sql.Tx, zoneID string) (SOAHistoryState, error) {
+	var state SOAHistoryState
+	err := tx.QueryRow(`SELECT name, soa_mname, soa_rname, serial, default_ttl,
+		refresh, retry, expire, minimum FROM dns_zones WHERE id = ?`, zoneID).Scan(
+		&state.Name, &state.MName, &state.RName, &state.Serial, &state.TTL,
+		&state.Refresh, &state.Retry, &state.Expire, &state.Minimum)
+	return state, err
+}
+
 // LogSOAChangeTx records the prior and new synthesized SOA at one committed
 // serial. It is for transactional writers outside ZoneManager; the change
 // history is not sufficient to enable IXFR until every serial-changing writer

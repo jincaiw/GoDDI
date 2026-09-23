@@ -278,6 +278,27 @@ func TestUpdateZoneJournalsSynthesizedSOAChange(t *testing.T) {
 	if changes["add"] != wantNew {
 		t.Errorf("new SOA history = %q, want %q", changes["add"], wantNew)
 	}
+	assertSOAHistoryPair := func(serial uint32, operation string) {
+		t.Helper()
+		var count int
+		if err := store.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes
+			WHERE zone_id = ? AND serial = ? AND type = 'SOA'`, z.ID, serial).Scan(&count); err != nil {
+			t.Fatalf("count SOA history after %s: %v", operation, err)
+		}
+		if count != 2 {
+			t.Fatalf("SOA history after %s = %d rows, want delete/add pair", operation, count)
+		}
+	}
+	incremented, err := manager.IncrementSerial(z.ID)
+	if err != nil {
+		t.Fatalf("increment serial: %v", err)
+	}
+	assertSOAHistoryPair(incremented, "serial increment")
+	converted, err := manager.ConvertZoneType(z.ID, string(ZoneTypeSecondary))
+	if err != nil {
+		t.Fatalf("convert zone type: %v", err)
+	}
+	assertSOAHistoryPair(converted.Serial, "zone type conversion")
 }
 
 func TestImportsRejectMalformedAndPreserveNAPTR(t *testing.T) {
