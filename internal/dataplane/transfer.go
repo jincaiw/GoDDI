@@ -491,7 +491,7 @@ func (r *Replicator) recordPushFailures(markerTable, markerKey string, failures 
 
 	write, err := tx.Prepare(fmt.Sprintf(`
 		UPDATE %s
-		   SET attempts = ?, last_error = ?, next_attempt_at = datetime('now', ?)
+		   SET attempts = ?, last_error = ?, next_attempt_at = strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now', ?)
 		 WHERE %s = ?`, markerTable, markerKey))
 	if err != nil {
 		return fmt.Errorf("dataplane: preparing the refusal write: %w", err)

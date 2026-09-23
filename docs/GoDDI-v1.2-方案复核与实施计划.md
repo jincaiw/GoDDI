@@ -209,6 +209,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 
 - RFC 2136 动态 UPDATE 添加 RR 时，采用该次更新指定的 TTL，并在同一事务内调整该 owner/type 的全部旧成员；随后添加或替换的记录不会留下混合 TTL 的 RRset。
 - TTL 重写为每个旧成员写 delete/add journal 行，新 RR 写 add 行；相同 RDATA、相同 TTL 仍保持幂等，不推进 serial。
+- 修复上行复制首次拒绝的重试截止时间精度，避免 SQLite 秒级时间戳截断后让 1 秒退避过早到期；清理 catalog 实现中重复且未调用的旧包装方法以恢复 lint。
 - 回归覆盖向已有 RRset 添加不同 TTL 的记录，以及以不同 TTL 重新添加相同 RDATA；其它元数据完整表达与 IXFR 重新启用仍未验收。
 
 ## 范围与限制
