@@ -5,7 +5,7 @@
         <n-button @click="router.push('/dns/zones')">{{ t('common.cancel') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateRecord">{{ t('dns.records.createRecord') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="showImport = true">{{ t('dns.zones.importZone') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
+        <n-button v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleSync" :disabled="zone?.type !== 'slave'">{{ t('dns.zones.syncZone') }}</n-button>
       </n-space>
     </page-header>
@@ -387,6 +387,7 @@ async function loadCatalogData() {
 }
 
 async function saveCatalog() {
+  if (!perm.canWrite('dns')) return
   catalogSaving.value = true
   try {
     zone.value = await updateDNSZone(zoneId, { catalog: catalogForm.catalog })
@@ -417,6 +418,7 @@ const queryAccessOptions = [
 ]
 
 async function saveACL() {
+  if (!perm.canWrite('dns')) return
   aclSaving.value = true
   try {
     // Send the ACL unconditionally: an all-empty list clears restrictions
@@ -466,6 +468,7 @@ function handleRecordPageSizeChange(pageSize: number) {
 }
 
 async function toggleZoneEnabled() {
+  if (!perm.canWrite('dns')) return
   if (!zone.value) return
   try {
     await updateDNSZone(zoneId, { enabled: !zone.value.enabled })
@@ -477,6 +480,7 @@ async function toggleZoneEnabled() {
 }
 
 async function toggleRecordEnabled(record: DNSRecord) {
+  if (!perm.canWrite('dns')) return
   try {
     await updateDNSRecord(zoneId, record.id, { enabled: !record.enabled })
     message.success(t('common.updateSuccess'))
@@ -611,6 +615,7 @@ async function applyImport() {
 }
 
 async function handleSync() {
+  if (!perm.canWrite('dns')) return
   try {
     await syncSecondaryZone(zoneId)
     message.success(t('common.success'))
@@ -622,6 +627,7 @@ async function handleSync() {
 }
 
 async function handleDnssecAction(action: string) {
+  if (!perm.canWrite('dns')) return
   try {
     if (action === 'enable') await enableDNSSEC(zoneId)
     else if (action === 'disable') await disableDNSSEC(zoneId)
@@ -675,10 +681,12 @@ async function loadPermissions() {
 }
 
 function addPermission() {
+  if (!perm.canWrite('dns')) return
   permissions.value.push({ principal_type: 'user', principal_id: '', can_view: true, can_modify: false, can_delete: false })
 }
 
 function removePermission(row: ZonePermission) {
+  if (!perm.canWrite('dns')) return
   permissions.value = permissions.value.filter(p => !(p.principal_type === row.principal_type && p.principal_id === row.principal_id))
 }
 
@@ -786,6 +794,7 @@ async function loadDsRecords() {
 }
 
 async function handleToggleKey(key: DNSSECKey, enabled: boolean) {
+  if (!perm.canWrite('dns')) return
   try {
     await toggleDNSSECKey(zoneId, key.id, enabled)
     key.enabled = enabled
@@ -795,6 +804,7 @@ async function handleToggleKey(key: DNSSECKey, enabled: boolean) {
 }
 
 async function handleDeleteKey(key: DNSSECKey) {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSSECKey(zoneId, key.id)
     message.success(t('common.success'))
@@ -812,6 +822,7 @@ function openGenerateKey() {
 }
 
 async function handleGenerateKey() {
+  if (!perm.canWrite('dns')) return
   try {
     await generateDNSSECKey(zoneId, generateKeyType.value, generateKeyAlgorithm.value)
     showGenerateKey.value = false
@@ -824,6 +835,7 @@ async function handleGenerateKey() {
 }
 
 async function handlePromoteStandby() {
+  if (!perm.canWrite('dns')) return
   try {
     await promoteDNSSECStandbyKeys(zoneId)
     message.success(t('common.success'))
@@ -848,6 +860,7 @@ async function loadNsec3() {
 }
 
 async function saveNsec3() {
+  if (!perm.canWrite('dns')) return
   nsec3Saving.value = true
   try {
     await setNSEC3Params(zoneId, { ...nsec3Form })

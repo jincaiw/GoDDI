@@ -290,6 +290,7 @@ function openConvert(zone: DNSZone) {
 }
 
 async function handleClone() {
+  if (!perm.canWrite('dns')) return
   if (!cloneSource.value || !cloneName.value.trim()) {
     message.warning(t('dns.zones.newNameRequired'))
     return
@@ -308,6 +309,7 @@ async function handleClone() {
 }
 
 async function handleConvert() {
+  if (!perm.canWrite('dns')) return
   if (!convertSource.value || !convertTarget.value) return
   submitting.value = true
   try {
@@ -323,6 +325,7 @@ async function handleConvert() {
 }
 
 async function handleBatchDelete() {
+  if (!perm.canDelete('dns')) return
   showBatchDeleteConfirm.value = false
   if (checkedKeys.value.length === 0) return
   batchDeleting.value = true
@@ -350,6 +353,7 @@ function handlePageSizeChange(pageSize: number) {
 }
 
 async function toggleEnabled(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   try {
     await updateDNSZone(zone.id, { enabled: !zone.enabled })
     message.success(t('common.updateSuccess'))
@@ -360,6 +364,7 @@ async function toggleEnabled(zone: DNSZone) {
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('dns')) return
   submitting.value = true
   try {
     if (editingZone.value) {
@@ -380,6 +385,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSZone(deletingId.value)
     message.success(t('common.deleteSuccess'))

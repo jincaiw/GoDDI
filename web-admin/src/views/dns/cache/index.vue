@@ -150,10 +150,12 @@ async function loadEntries() {
 }
 
 function handleFlushCache() {
+  if (!perm.canDelete('dns')) return
   showFlushConfirm.value = true
 }
 
 async function confirmFlush() {
+  if (!perm.canDelete('dns')) return
   try {
     await flushDNSCache()
     message.success(t('common.success'))
@@ -166,6 +168,7 @@ async function confirmFlush() {
 }
 
 async function handleFlushEntry(row: CacheEntry) {
+  if (!perm.canDelete('dns')) return
   try {
     await flushDNSCacheEntry(row.qname, row.qtype)
     message.success(t('common.success'))

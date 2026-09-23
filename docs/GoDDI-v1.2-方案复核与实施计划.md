@@ -324,6 +324,7 @@ W12-a/W12-c 隔离式 restore 演练通过。完整 `go test ./...` 与 `go vet 
 - 权限契约抽查发现 IPAM space/subnet 编辑按钮之前未禁用 `ipam:write` 不足的用户；子网建池计划读用 `ipam:write`，但最终创建 scope 还需 `dhcp:write`，原向导未说明或禁用该操作。现编辑按钮匹配后端权限，建池向导展示权限说明并禁用无权创建，避免操作到最后才收到 403。
 - 对地址详情端点的进一步核对发现它只要求 `ipam:read`，却会返回 DNS 记录、DHCP 租约/作用域和由两侧数据推导的冲突，且没有应用 DNS 区域 ACL。现 API 仍允许 IPAM 读者查询自身地址记录，但只在调用者同时具备相应模块读取权限/API token scope 时返回 DNS 或 DHCP 内容；DNS 记录逐区应用 `view` ACL。受权限裁剪时隐藏跨模块冲突结论，接口返回访问可见性标记，前端隐藏不可见分区并提示信息受限。
 - 继续逐页核对发现管理用户/组的编辑入口及已打开表单、角色/权限分配对话框、API token 创建对话框缺少对应写权限门禁；备份页的创建、还原、删除和系统设置的编辑控件也未按 API 权限收敛。现在这些入口、表单及确认操作均按 `user/group/role/token/backup/settings:write` 控制，角色分配还要求 `role:read` 以加载可选项。配置版本回滚确认也会随 `settings:write` 不足而禁用。
+- 持续权限审计发现 DHCP 的 scope/reservation/option 编辑及 DNS forwarder、安全策略、封禁/允许列表、区域与 DNSSEC 操作存在遗漏的入口或处理器权限门禁。现已补齐对应 `write`/`delete` 检查，并将只读 DNS 导出按钮改为匹配 `dns:read`；保留 API 端的权限校验作为最终边界。
 - 当前增量完成 `go build ./...`、`pnpm --dir web-admin typecheck`、生产构建和内嵌 `web/dist` 同步。跨模块权限修复尚待最新 PR CI 和浏览器验收；没有用静态检查替代端到端权限验收。
 
 ## 范围与限制
