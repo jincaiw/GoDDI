@@ -488,6 +488,36 @@ func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	}
 }
 
+func TestReconnectSnapshotDiscardsInterruptedFactsDeltaStaging(t *testing.T) {
+	store := openStore(t, "interrupted-delta")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a durable chunk left behind when the stream drops before its
+	// manifest/end frame. The next connection starts with a full snapshot.
+	if _, err := store.Exec(`INSERT INTO facts_replica_snapshot_chunks
+		(snapshot_id,chunk_index,first_sequence,last_sequence,event_count,chunk_json)
+		VALUES('interrupted-delta-id',0,1,1,1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mirror.beginSnapshot(context.Background(), Frame{
+		Type: FrameSnapshot, SnapshotID: "reconnected-snapshot", Seq: 0, FactsSeq: 0,
+	}); err != nil {
+		t.Fatalf("beginning reconnect snapshot: %v", err)
+	}
+	var staged int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM facts_replica_snapshot_chunks`).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 0 {
+		t.Fatalf("interrupted transfer left %d staged chunks after reconnect", staged)
+	}
+	if mirror.FactsAppliedSeq() != 0 {
+		t.Fatalf("interrupted delta advanced applied watermark to %d", mirror.FactsAppliedSeq())
+	}
+}
+
 func TestPrimaryRefusesFactsAckAheadOfItsAllocator(t *testing.T) {
 	store := openStore(t, "stale-facts-ack")
 	tx, err := store.DB.Begin()
