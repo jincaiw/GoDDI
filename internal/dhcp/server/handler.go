@@ -532,7 +532,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 				} else if factsReplicator, ok := s.leaseReplicator.(FactsAwareLeaseReplicator); ok {
 					confirmErr = factsReplicator.ConfirmFacts(context.Background(), bound, factsSeq)
 				} else {
-					confirmErr = s.leaseReplicator.Confirm(context.Background(), bound)
+					confirmErr = errors.New("DHCP facts mutation committed but HA replicator cannot confirm facts")
 				}
 			} else {
 				confirmErr = errors.New("DHCP facts mutation committed without a sequence reader")

@@ -111,7 +111,7 @@ func TestDefaultControlProcessRunsFactsConsumerLifecycle(t *testing.T) {
 		"ipamFactsPipeline.Status(ctx)",
 		"facts.NewSequenceAllocator(dhcpStore.DB)",
 		"facts.NewObservationOutbox(dhcpStore.DB)",
-		"if !haEnabled {",
+		"if !haEnabled || haRole == config.HARolePrimary {",
 		"dhcpSrv.SetLeaseFactsMutation(",
 		"dhcpSrv.SetLeaseObserver(ipamLinkage)",
 		"ipamLinkage.Reconcile(ipamReconcileLimit)",

@@ -104,6 +104,62 @@ func TestApplyStagedReplicaSnapshotKeepsActiveStateOnChecksumFailure(t *testing.
 	}
 }
 
+func TestApplyStagedReplicaChangesAppendsAtExactBase(t *testing.T) {
+	db := newFactsOutboxDB(t)
+	outbox, _ := NewObservationOutbox(db)
+	allocator, _ := NewSequenceAllocator(db)
+	ctx := context.Background()
+	seedActiveEvent(t, ctx, db, allocator, outbox, "base-event")
+	chunk := ReplicaSnapshotChunk{Index: 0, FirstSequence: 2, LastSequence: 2, Events: stagedReplicaEvents(2)}
+	accumulator, err := NewReplicaSnapshotAccumulatorAfter(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accumulator.AddChunk(chunk); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := accumulator.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stageChunk(t, ctx, db, outbox, "delta-2", chunk); err != nil {
+		t.Fatal(err)
+	}
+	wrongBase, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badManifest := manifest
+	badManifest.AfterSequence = 0
+	if err := outbox.ApplyStagedReplicaChangesTx(ctx, wrongBase, "delta-2", badManifest); err == nil {
+		_ = wrongBase.Rollback()
+		t.Fatal("delta with a stale base was applied")
+	}
+	_ = wrongBase.Rollback()
+
+	applyTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.ApplyStagedReplicaChangesTx(ctx, applyTx, "delta-2", manifest); err != nil {
+		_ = applyTx.Rollback()
+		t.Fatal(err)
+	}
+	if err := applyTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("active facts event count = %d, want 2", count)
+	}
+	if current, err := allocator.Current(ctx); err != nil || current != 2 {
+		t.Fatalf("allocator = %d, %v; want 2", current, err)
+	}
+}
+
 func TestStageReplicaChunkRejectsConflictingReplay(t *testing.T) {
 	db := newFactsOutboxDB(t)
 	outbox, _ := NewObservationOutbox(db)

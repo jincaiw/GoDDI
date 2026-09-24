@@ -1075,10 +1075,11 @@ func runServer(configPath string) error {
 	// projected atomically by the control-side consumer.
 	if dhcpSrv != nil {
 		dhcpSrv.SetLeaseObserver(ipamLinkage)
-		// HA facts mutation production remains disabled until the wire can stream
-		// post-snapshot facts incrementally. Reconnecting for every REQUEST would
-		// transfer the entire history and is not an acceptable ACK path.
-		if !haEnabled {
+		// Standbys and fenced nodes serve no DHCP requests and only receive the
+		// primary's facts stream. A primary, including one promoted by takeover,
+		// commits facts with its lease mutations and gates REQUEST/renewal ACKs on
+		// both HA watermarks.
+		if !haEnabled || haRole == config.HARolePrimary {
 			allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
 			if err != nil {
 				return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)

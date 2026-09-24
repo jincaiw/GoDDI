@@ -187,11 +187,27 @@ func (o *ObservationOutbox) StreamReplicaSnapshotTx(
 	chunkLimit int,
 	emit func(ReplicaSnapshotChunk) error,
 ) (ReplicaSnapshotManifest, error) {
+	return o.StreamReplicaChangesTx(ctx, tx, 0, chunkLimit, emit)
+}
+
+// StreamReplicaChangesTx streams the contiguous outbox suffix after a durable
+// peer watermark. It uses the caller's read transaction for a stable high
+// water and emits bounded chunks before returning a verifiable manifest.
+func (o *ObservationOutbox) StreamReplicaChangesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	afterSequence int64,
+	chunkLimit int,
+	emit func(ReplicaSnapshotChunk) error,
+) (ReplicaSnapshotManifest, error) {
 	if o == nil || o.db == nil {
 		return ReplicaSnapshotManifest{}, ErrOutboxClosed
 	}
 	if tx == nil {
 		return ReplicaSnapshotManifest{}, errors.New("facts: nil replica snapshot transaction")
+	}
+	if afterSequence < 0 {
+		return ReplicaSnapshotManifest{}, errors.New("facts: negative replica changes cursor")
 	}
 	if emit == nil {
 		return ReplicaSnapshotManifest{}, errors.New("facts: nil replica snapshot chunk handler")
@@ -211,11 +227,15 @@ func (o *ObservationOutbox) StreamReplicaSnapshotTx(
 		}
 		if !initialized {
 			highWater = page.LastSequence
-			accumulator, err = NewReplicaSnapshotAccumulator(highWater)
+			if afterSequence > highWater {
+				return ReplicaSnapshotManifest{}, fmt.Errorf("facts: replica changes cursor %d exceeds high water %d", afterSequence, highWater)
+			}
+			accumulator, err = NewReplicaSnapshotAccumulatorAfter(highWater, afterSequence)
 			if err != nil {
 				return ReplicaSnapshotManifest{}, err
 			}
 			initialized = true
+			after = afterSequence
 		} else if page.LastSequence != highWater {
 			return ReplicaSnapshotManifest{}, fmt.Errorf("facts: replica snapshot high water changed: expected=%d got=%d", highWater, page.LastSequence)
 		}

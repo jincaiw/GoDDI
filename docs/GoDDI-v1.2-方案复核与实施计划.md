@@ -262,7 +262,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 地址无法映射到本地 IPAM space 时，DHCP 操作沿用现有 lease 路径，到期仍会清理租约；不会伪造 facts。映射数据库出现其他错误时，单次 facts mutation 回滚并返回错误。
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
-- HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管。**2026-09-24 更新**：HA protocol v2 已加入 lease/facts 双水位和分块 facts 快照；primary 在单一只读事务中读取 lease rows、facts outbox 与 allocator 水位，standby staging 后校验 manifest 并在同一事务联合应用。facts applied watermark 已随确认返回，坏 manifest 集成回归确认不会替换租约；takeover 现报告 facts gap，并在 facts 缺口非零时 fail closed，因为跳过 sequence 会令后续快照传输 fail closed。该 wire 目前只有重连全量快照，尚无运行期增量 facts 传输；重连每次 DHCP mutation 的全量历史不可作为可接受的 ACK 路径，因此 HA producer 仍关闭。HA/facts 定向测试、vet 和 staging migration 检查通过。W04/W09 和版本发布门槛保持未完成；控制库分离故障恢复、自动化故障矩阵及真实双主机网络演练仍待完成。
+- **2026-09-24 更新**：HA protocol v3 已接入 lease/facts 双水位、分块全量重连快照和运行期增量 facts 帧；增量从备端 durable ACK 水位开始，验证连续 sequence、chunk manifest 与 base watermark 后才原子追加。HA primary 默认装配 mapped lease facts producer，REQUEST/续租在 lease 与 facts 双水位均确认后才 ACK；standby 接管遇 facts gap 会 fail closed。坏 manifest 和 live delta 已有集成回归。W04/W09 的主要代码链路已接通，但故障矩阵、控制库长期故障下重放、promoted primary/旧主回归对账及真实双主机 fencing/分区演练仍未验收；因此不发布版本、不宣称 HA GA。
 
 ### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 
@@ -292,13 +292,13 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 同一演练验证 control-only/缺失 store 的归档清单、`migrate --status/--check` 不意外创建数据面库，以及拒绝新 schema/新版本归档、允许旧 schema 归档后再迁移。
 - 所有断言通过。该演练验证文件/SQLite 路径和兼容性门禁，不证明底层介质断电持久性、加密密钥异机找回或真实生产恢复时间。
 
-### W11 DHCP facts producer 可观测性（2026-09-24，代码完成）
+### W11 DHCP facts producer 可观测性（2026-09-24，代码完成，现场验收待做）
 
-- DHCP 非 HA 事实 outbox 增加低基数 Prometheus 样本：pending/failed 数、已分配最高 sequence、首个未完成 sequence。查询带 2 秒超时；读取失败只记告警，不伪造零水位。
+- DHCP facts outbox 增加低基数 Prometheus 样本：pending/failed 数、已分配最高 sequence、首个未完成 sequence。非 HA 节点与 HA primary 注册 producer 样本；查询带 2 秒超时，读取失败只记告警，不伪造零水位。
 - 指标能区分“控制端 consumer 已追平”与“DHCP 生产 outbox 尚未送达”，也能直接暴露失败事件阻塞点；事件 ID、错误文本不作为标签。
 - `docs/prometheus-alerts.yml` 现包含 consumer gap/保留失败、producer 保留失败/持续积压和 HA 确认水位落后规则；`TestTheKeySignalsAreAlertedOn` 钉住这些指标仍被告警引用，`TestEveryAlertedMetricExists` 检查所有表达式中的 GoDDI 指标有注册及生产者。
-- `go test ./internal/metrics` 通过。HA facts 生产/复制尚未接通；备份年龄已有系列，但正式抓取、阈值调整、告警路由/恢复动作和真实触发仍需部署验收。
-- 后续补充 primary HA replication gauges：本机已分配 sequence、mirror durable ACK sequence、最近观察到的 peer applied sequence，均只由 primary 采样并使用 node_id 标签。回归检查了 exposition；operator 可区分“发送序号”“备端确认”和“备端实际应用”水位。该观测不改变复制协议，也不代表 facts 已随 HA 镜像。
+- `go test ./internal/metrics` 通过。备份年龄已有系列；正式抓取、阈值调整、告警路由/恢复动作和真实触发仍需部署验收。facts producer 样本现包含 HA primary，但 facts ACK/applied 差值的独立 Prometheus gauge 和正式告警阈值仍待补齐。
+- primary HA replication gauges 报告 lease 本机 sequence、mirror durable ACK sequence 和 peer applied sequence，并以 `node_id` 区分。facts 同样具有独立 durable watermark 与 takeover gap 报告；HA 实网触发与恢复对账尚待演练。
 
 ### W06 DNS owner 名规范化与 catalog 冲突修复（2026-09-24，代码完成）
 

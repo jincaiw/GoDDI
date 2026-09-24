@@ -10,17 +10,18 @@ import (
 	"hash"
 )
 
-const ReplicaSnapshotVersion = 1
+const ReplicaSnapshotVersion = 2
 
 // ReplicaSnapshotManifest identifies a complete, ordered facts snapshot.
 // Digest covers the canonical JSON encoding of each ReplicaEvent, prefixed by
 // its 8-byte big-endian length. It is independent of transport frame boundaries.
 type ReplicaSnapshotManifest struct {
-	Version      int    `json:"version"`
-	LastSequence int64  `json:"last_sequence"`
-	EventCount   int64  `json:"event_count"`
-	ChunkCount   int64  `json:"chunk_count"`
-	Digest       string `json:"digest"`
+	Version       int    `json:"version"`
+	AfterSequence int64  `json:"after_sequence"`
+	LastSequence  int64  `json:"last_sequence"`
+	EventCount    int64  `json:"event_count"`
+	ChunkCount    int64  `json:"chunk_count"`
+	Digest        string `json:"digest"`
 }
 
 // ReplicaSnapshotChunk is a transport-neutral bounded group of consecutive
@@ -36,21 +37,29 @@ type ReplicaSnapshotChunk struct {
 // ReplicaSnapshotAccumulator validates page continuity while building a
 // bounded-memory digest for one stable snapshot read.
 type ReplicaSnapshotAccumulator struct {
-	hash         hash.Hash
-	lastSequence int64
-	eventCount   int64
-	chunkCount   int64
-	nextAfter    int64
-	complete     bool
-	finished     bool
+	hash          hash.Hash
+	lastSequence  int64
+	afterSequence int64
+	eventCount    int64
+	chunkCount    int64
+	nextAfter     int64
+	complete      bool
+	finished      bool
 }
 
 func NewReplicaSnapshotAccumulator(lastSequence int64) (*ReplicaSnapshotAccumulator, error) {
-	if lastSequence < 0 {
+	return NewReplicaSnapshotAccumulatorAfter(lastSequence, 0)
+}
+
+// NewReplicaSnapshotAccumulatorAfter validates a contiguous range strictly
+// after afterSequence through lastSequence. A zero base is a full snapshot.
+func NewReplicaSnapshotAccumulatorAfter(lastSequence, afterSequence int64) (*ReplicaSnapshotAccumulator, error) {
+	if lastSequence < 0 || afterSequence < 0 || afterSequence > lastSequence {
 		return nil, fmt.Errorf("facts: invalid replica snapshot sequence %d", lastSequence)
 	}
 	return &ReplicaSnapshotAccumulator{
-		hash: sha256.New(), lastSequence: lastSequence, complete: lastSequence == 0,
+		hash: sha256.New(), lastSequence: lastSequence, afterSequence: afterSequence,
+		nextAfter: afterSequence, complete: afterSequence == lastSequence,
 	}, nil
 }
 
@@ -158,12 +167,12 @@ func (a *ReplicaSnapshotAccumulator) AddChunk(chunk ReplicaSnapshotChunk) error 
 }
 
 func (a *ReplicaSnapshotAccumulator) Manifest() (ReplicaSnapshotManifest, error) {
-	if a == nil || a.hash == nil || a.finished || !a.complete || a.nextAfter != a.lastSequence || a.eventCount != a.lastSequence {
+	if a == nil || a.hash == nil || a.finished || !a.complete || a.nextAfter != a.lastSequence || a.eventCount != a.lastSequence-a.afterSequence {
 		return ReplicaSnapshotManifest{}, errors.New("facts: replica snapshot is incomplete")
 	}
 	a.finished = true
 	return ReplicaSnapshotManifest{
-		Version: ReplicaSnapshotVersion, LastSequence: a.lastSequence,
+		Version: ReplicaSnapshotVersion, AfterSequence: a.afterSequence, LastSequence: a.lastSequence,
 		EventCount: a.eventCount, ChunkCount: a.chunkCount, Digest: hex.EncodeToString(a.hash.Sum(nil)),
 	}, nil
 }
@@ -172,7 +181,7 @@ func (a *ReplicaSnapshotAccumulator) Manifest() (ReplicaSnapshotManifest, error)
 // chunks. Calling it closes the accumulator, whether verification succeeds or
 // fails, so a partial or altered snapshot cannot be retried in place.
 func (a *ReplicaSnapshotAccumulator) Verify(expected ReplicaSnapshotManifest) error {
-	if expected.Version != ReplicaSnapshotVersion || expected.LastSequence < 0 || expected.EventCount < 0 || expected.ChunkCount < 0 {
+	if expected.Version != ReplicaSnapshotVersion || expected.AfterSequence < 0 || expected.LastSequence < expected.AfterSequence || expected.EventCount < 0 || expected.ChunkCount < 0 {
 		return errors.New("facts: invalid replica snapshot manifest")
 	}
 	if len(expected.Digest) != sha256.Size*2 {

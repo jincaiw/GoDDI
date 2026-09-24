@@ -77,6 +77,9 @@ func (o *ObservationOutbox) ApplyStagedReplicaSnapshotTx(ctx context.Context, tx
 	if strings.TrimSpace(snapshotID) == "" {
 		return errors.New("facts: empty replica snapshot ID")
 	}
+	if manifest.AfterSequence != 0 {
+		return errors.New("facts: full snapshot manifest has a nonzero base sequence")
+	}
 	verifier, err := NewReplicaSnapshotAccumulator(manifest.LastSequence)
 	if err != nil {
 		return err
@@ -113,6 +116,52 @@ func (o *ObservationOutbox) ApplyStagedReplicaSnapshotTx(ctx context.Context, tx
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM facts_replica_snapshot_chunks WHERE snapshot_id=?`, snapshotID); err != nil {
 		return fmt.Errorf("facts: remove applied replica staging rows: %w", err)
+	}
+	return nil
+}
+
+// ApplyStagedReplicaChangesTx appends a validated contiguous suffix to the
+// active outbox. The local allocator must exactly match the sender's base
+// watermark; otherwise the caller must reconnect and apply a full snapshot.
+func (o *ObservationOutbox) ApplyStagedReplicaChangesTx(ctx context.Context, tx *sql.Tx, snapshotID string, manifest ReplicaSnapshotManifest) error {
+	if o == nil || o.db == nil {
+		return ErrOutboxClosed
+	}
+	if tx == nil || strings.TrimSpace(snapshotID) == "" {
+		return errors.New("facts: invalid replica changes transaction or ID")
+	}
+	var current int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT last_sequence FROM facts_sequence_allocator WHERE domain=?), 0)`, sequenceAllocatorDomain).Scan(&current); err != nil {
+		return fmt.Errorf("facts: read current replica changes watermark: %w", err)
+	}
+	if current != manifest.AfterSequence {
+		return fmt.Errorf("facts: replica changes base mismatch: local=%d sender=%d", current, manifest.AfterSequence)
+	}
+	verifier, err := NewReplicaSnapshotAccumulatorAfter(manifest.LastSequence, manifest.AfterSequence)
+	if err != nil {
+		return err
+	}
+	if err := o.walkStagedChunks(ctx, tx, snapshotID, verifier.AddChunk); err != nil {
+		return err
+	}
+	if err := verifier.Verify(manifest); err != nil {
+		return fmt.Errorf("facts: verify staged replica changes: %w", err)
+	}
+	if err := o.walkStagedChunks(ctx, tx, snapshotID, func(chunk ReplicaSnapshotChunk) error {
+		for _, event := range chunk.Events {
+			if err := o.insertReplicaEventTx(ctx, tx, event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE facts_sequence_allocator SET last_sequence=? WHERE domain=? AND last_sequence=?`, manifest.LastSequence, sequenceAllocatorDomain, manifest.AfterSequence); err != nil {
+		return fmt.Errorf("facts: advance replica changes watermark: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM facts_replica_snapshot_chunks WHERE snapshot_id=?`, snapshotID); err != nil {
+		return fmt.Errorf("facts: remove applied replica changes staging: %w", err)
 	}
 	return nil
 }

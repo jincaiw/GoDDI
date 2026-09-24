@@ -122,6 +122,8 @@ type incomingSnapshot struct {
 	id          string
 	leaseSeq    int64
 	factsSeq    int64
+	factsAfter  int64
+	delta       bool
 	leases      []LeaseRow
 	accumulator *facts.ReplicaSnapshotAccumulator
 }
@@ -288,7 +290,7 @@ func (m *Mirror) session(ctx context.Context) error {
 				return err
 			}
 		case FrameSnapshotEnd:
-			if snapshot == nil {
+			if snapshot == nil || snapshot.delta {
 				return errors.New("ha: snapshot end received without a snapshot")
 			}
 			if err := m.finishSnapshot(ctx, snapshot, frame); err != nil {
@@ -301,11 +303,31 @@ func (m *Mirror) session(ctx context.Context) error {
 			if err := m.confirm(conn, leaseSeq); err != nil {
 				return err
 			}
+		case FrameFactsDeltaStart:
+			if snapshot != nil {
+				return errors.New("ha: facts delta interrupted another snapshot")
+			}
+			next, err := m.beginFactsDelta(ctx, frame)
+			if err != nil {
+				return err
+			}
+			snapshot = next
+		case FrameFactsDeltaEnd:
+			if snapshot == nil || !snapshot.delta {
+				return errors.New("ha: facts delta end received without a delta")
+			}
+			if err := m.finishFactsDelta(ctx, snapshot, frame); err != nil {
+				return err
+			}
+			snapshot = nil
+			if err := m.confirm(conn, m.AppliedSeq()); err != nil {
+				return err
+			}
 		case FrameOps:
 			if snapshot != nil {
 				return errors.New("ha: lease operations interrupted an incomplete snapshot")
 			}
-			if err := m.applyOps(ctx, frame.Seq, frame.Leases); err != nil {
+			if err := m.applyOps(ctx, frame.Seq, frame.FactsSeq, frame.Leases); err != nil {
 				return err
 			}
 			if err := m.confirm(conn, frame.Seq); err != nil {
@@ -426,6 +448,28 @@ func (m *Mirror) beginSnapshot(ctx context.Context, frame Frame) (*incomingSnaps
 	}, nil
 }
 
+func (m *Mirror) beginFactsDelta(ctx context.Context, frame Frame) (*incomingSnapshot, error) {
+	if frame.SnapshotID == "" || frame.Seq != m.FactsAppliedSeq() || frame.FactsSeq <= frame.Seq {
+		return nil, fmt.Errorf("ha: invalid facts delta range %d..%d (local=%d)", frame.Seq, frame.FactsSeq, m.FactsAppliedSeq())
+	}
+	accumulator, err := facts.NewReplicaSnapshotAccumulatorAfter(frame.FactsSeq, frame.Seq)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ha: opening facts delta staging cleanup: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM facts_replica_snapshot_chunks WHERE snapshot_id<>?`, frame.SnapshotID); err != nil {
+		return nil, fmt.Errorf("ha: clearing obsolete facts delta staging: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ha: committing facts delta staging cleanup: %w", err)
+	}
+	return &incomingSnapshot{id: frame.SnapshotID, factsSeq: frame.FactsSeq, factsAfter: frame.Seq, delta: true, accumulator: accumulator}, nil
+}
+
 func (m *Mirror) stageSnapshotChunk(ctx context.Context, snapshot *incomingSnapshot, frame Frame) error {
 	if frame.SnapshotID != snapshot.id || frame.FactsChunk == nil || frame.FactsManifest != nil || len(frame.Leases) != 0 {
 		return errors.New("ha: malformed facts snapshot chunk frame")
@@ -452,7 +496,7 @@ func (m *Mirror) stageSnapshotChunk(ctx context.Context, snapshot *incomingSnaps
 }
 
 func (m *Mirror) finishSnapshot(ctx context.Context, snapshot *incomingSnapshot, frame Frame) error {
-	if frame.SnapshotID != snapshot.id || frame.FactsManifest == nil || frame.FactsChunk != nil || len(frame.Leases) != 0 {
+	if snapshot.delta || frame.SnapshotID != snapshot.id || frame.FactsManifest == nil || frame.FactsChunk != nil || len(frame.Leases) != 0 {
 		return errors.New("ha: malformed snapshot end frame")
 	}
 	if frame.FactsManifest.LastSequence != snapshot.factsSeq {
@@ -463,6 +507,41 @@ func (m *Mirror) finishSnapshot(ctx context.Context, snapshot *incomingSnapshot,
 		return err
 	}
 	return m.applySnapshot(ctx, snapshot.leaseSeq, snapshot.leases, snapshot.id, *frame.FactsManifest)
+}
+
+func (m *Mirror) finishFactsDelta(ctx context.Context, delta *incomingSnapshot, frame Frame) error {
+	if frame.SnapshotID != delta.id || frame.FactsManifest == nil || frame.FactsChunk != nil ||
+		frame.FactsManifest.AfterSequence != delta.factsAfter || frame.FactsManifest.LastSequence != delta.factsSeq {
+		return errors.New("ha: malformed or mismatched facts delta end frame")
+	}
+	if err := delta.accumulator.Verify(*frame.FactsManifest); err != nil {
+		return err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ha: opening facts delta apply transaction: %w", err)
+	}
+	defer tx.Rollback()
+	outbox, err := facts.NewObservationOutbox(m.store.DB)
+	if err != nil {
+		return err
+	}
+	if err := outbox.ApplyStagedReplicaChangesTx(ctx, tx, delta.id, *frame.FactsManifest); err != nil {
+		return err
+	}
+	if err := setWatermark(ctx, tx, metaFactsAppliedSeq, delta.factsSeq); err != nil {
+		return err
+	}
+	if err := writePeerFactsWatermark(tx, delta.factsSeq); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ha: committing facts delta: %w", err)
+	}
+	m.mu.Lock()
+	m.factsApplied = delta.factsSeq
+	m.mu.Unlock()
+	return nil
 }
 
 func writePeerFactsWatermark(ex metaExec, seq int64) error {
@@ -630,15 +709,15 @@ func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow, 
 // and a row the primary did not send is one it did not change. There is no
 // delete here because the primary never deletes a lease row -- it marks it
 // expired or released -- so there is nothing for a deletion to say.
-func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error {
+func (m *Mirror) applyOps(ctx context.Context, seq, factsSeq int64, rows []LeaseRow) error {
 	if len(rows) == 0 {
 		if seq > m.AppliedSeq() {
-			return m.recordWatermark(ctx, seq)
+			return m.recordWatermark(ctx, seq, factsSeq)
 		}
-		return nil
+		return writePeerFactsWatermark(m.store.DB, factsSeq)
 	}
 	if seq < m.AppliedSeq() {
-		return nil
+		return writePeerFactsWatermark(m.store.DB, factsSeq)
 	}
 	tx, err := m.store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -661,6 +740,9 @@ func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error
 	if err := writePeerWatermark(tx, seq); err != nil {
 		return err
 	}
+	if err := writePeerFactsWatermark(tx, factsSeq); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM dhcp_lease_dirty"); err != nil {
 		return fmt.Errorf("ha: discarding the mirror's upward queue: %w", err)
 	}
@@ -675,7 +757,7 @@ func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error
 
 // recordWatermark advances the watermark without rows, which is what a batch
 // that carried nothing but a sequence means.
-func (m *Mirror) recordWatermark(ctx context.Context, seq int64) error {
+func (m *Mirror) recordWatermark(ctx context.Context, seq, factsSeq int64) error {
 	tx, err := m.store.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ha: opening the watermark transaction: %w", err)
@@ -685,6 +767,9 @@ func (m *Mirror) recordWatermark(ctx context.Context, seq int64) error {
 		return err
 	}
 	if err := writePeerWatermark(tx, seq); err != nil {
+		return err
+	}
+	if err := writePeerFactsWatermark(tx, factsSeq); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

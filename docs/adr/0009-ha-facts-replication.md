@@ -1,6 +1,6 @@
 # ADR-0009：DHCP HA 的事实事件复制与接管连续性
 
-- 状态：已接受设计；实现未完成
+- 状态：协议与代码路径已实现；部署验收未完成
 - 日期：2026-09-24
 - 相关：ADR-0001、ADR-0003、ADR-0007、`internal/dhcp/ha`、`internal/facts`
 
@@ -8,11 +8,11 @@
 
 非 HA DHCP 已在 authoritative lease transaction 中写入统一 facts outbox；data-plane Runner 异步将事件投递到 control inbox，control consumer 再原子更新 IPAM 投影和消费水位。DHCP ACK 不等待 control 投影。
 
-当前 HA 协议只复制租约行，并使用独立的 HA lease sequence。HA 部署因此继续使用兼容 IPAM observer，不装配统一 facts producer。若只启用 producer 而不复制 envelope 与 allocator，primary 故障后 standby 的下一个 event sequence 可能回退或跳号；若只复制 envelope 而不将其纳入 durable ACK，primary 可能确认客户端租约，而 standby 尚未持有该事实。
+HA 以独立 lease sequence 复制租约状态。已实现 facts 全量重连快照与运行期增量 facts 帧；primary 将 mapped DHCP mutations 与 lease/outbox 原子提交，并在 REQUEST/续租 ACK 前等待 standby 同时确认 lease 和 facts 水位。facts sequence gap 会阻止 takeover。HA facts 功能仍需经过自动故障矩阵和双主机实网验收，未通过前不宣称 HA GA。
 
 ## 决策
 
-HA facts 在下列协议与验收条件全部实现前保持关闭。当前观测路径是安全降级边界，不得删除或改为 best-effort facts 写入。
+HA facts 写入与复制已启用；HA GA 与关闭兼容 observer 的边界仍由下列验收条件控制。未映射到本地 IPAM space 的 lease mutations 保留兼容 observer 路径，不得删除或改为 best-effort facts 写入。
 
 ### 1. 双水位是两个独立契约
 
@@ -45,12 +45,11 @@ HA facts 在下列协议与验收条件全部实现前保持关闭。当前观�
 
 ## 实施顺序
 
-1. **已实现快照原语与 HA 重连快照接入（未发布）**：`ObservationOutbox.ReadReplicaPageTx`/`StreamReplicaSnapshotTx` 在调用方单一只读事务中有界读取 envelope 与 producer delivery state，并按 allocator 水位对 sequence 缺口 fail closed；`ReplicaSnapshotAccumulator` 校验跨页游标、chunk 边界并生成 SHA-256 manifest。HA protocol v2 在每次连接发送同一 SQLite read snapshot 上的 lease rows、facts outbox 与 allocator 水位；standby 分块 staging，验证 manifest 后在单一事务中联合应用 lease/facts，并返回 facts applied watermark。定向 HA/facts 测试、`go vet` 及 staging migration 检查通过；集成回归还验证坏 manifest 不会替换既有租约。
-2. **仍待实现**：将 DHCP facts mutation identity/sequence 返回至 HA replicator；把事实复制确认纳入 REQUEST/续租 ACK gate，并覆盖 release/decline/expiry。当前 HA DHCP producer 仍关闭，因此快照复制已有 facts 历史，但还不构成 HA mutation durability。
-3. **接管 facts 缺口保护已接入，producer/ACK 连续性仍待实现**：standby 状态报告 peer facts 水位和 facts gap；facts gap 会硬拒绝 takeover，必须先恢复缺失快照。仅提供 exact-gap 覆盖是不安全的：facts snapshot 读取要求 sequence 连续，跳过的事件会令后续复制再次 fail closed，且事实可能影响 IPAM 投影。当前分块 wire 只用于 reconnect snapshot，尚不能传送运行期间新增 facts；必须先实现增量 facts 帧与 standby staging/原子应用，再允许 HA mutation producer、REQUEST/续租双水位 ACK gate，以及 promoted primary control inbox delivery。
-4. 完成断开、进程崩溃、部分 snapshot、重复 envelope、sequence 冲突/缺口、control DB 长时间不可用及 takeover/replay 的自动化故障矩阵。
-5. 在真实双主机网络环境验证 fencing、分区、旧主回归、control DB 恢复与 IPAM 对账后，再考虑关闭兼容 observer 或发布 HA facts 能力。
+1. **全量重连快照已接通**：`ObservationOutbox.ReadReplicaPageTx`/`StreamReplicaSnapshotTx` 在调用方单一只读事务中有界读取 envelope 与 producer delivery state，并按 allocator 水位对 sequence 缺口 fail closed；HA protocol v3 同时快照 lease rows、facts outbox 与 allocator。standby 分块 staging、校验 SHA-256 manifest 后在单一事务联合应用，并返回双水位确认。定向回归验证坏 manifest 不会替换既有租约。
+2. **运行期增量和 ACK gate 已接通**：primary 从 facts acknowledged watermark 读取稳定 outbox suffix，以有界 chunk 和 manifest 发送；standby 验证 base watermark 与连续 sequence 后，在事务中追加 outbox、marker、allocator 和 facts applied watermark。DHCP primary 的 mapped REQUEST/续租 mutation 原子写入 facts；HA ACK 同时等待租约与 facts durable ACK。HA facts gap 硬拒绝 takeover；sequence snapshot 要求连续，所以不提供跳过缺口的 override。
+3. **剩余实现与验收**：覆盖重复/乱序帧、断开和进程崩溃、部分 delta staging、sequence conflict/gap、控制库长期不可用与 takeover/replay 的故障矩阵；验证 promoted primary 上行重放、旧主回归与恢复对账。
+4. 在真实双主机网络环境验证 fencing、分区、旧主回归、control DB 恢复与 IPAM 对账后，再考虑 HA facts GA 和关闭兼容 observer。
 
 ## 结果与边界
 
-该决策定义了实现边界，不代表协议已实现或通过部署验收。W04/W09 继续标记未完成；现有 HA 不宣称统一 facts durability，正式版本不得将本 ADR 或未来单机模型测试描述为 HA facts GA 证据。
+该 ADR 不代表通过部署验收。W04/W09 的协议实现已完成阶段性接线，但自动故障矩阵与双主机现场验收仍未完成；正式版本不得仅凭单机模型测试宣称 HA facts GA。

@@ -13,7 +13,7 @@ import (
 // Protocol is the version of the peer wire format. It is carried in the
 // handshake so that two nodes running different builds refuse each other
 // instead of exchanging frames one of them reads as something else.
-const Protocol = 2
+const Protocol = 3
 
 // maxFrameBytes bounds one frame on the wire.
 //
@@ -37,11 +37,16 @@ const (
 	// the primary on every new connection and starts a facts snapshot transfer.
 	FrameSnapshot FrameType = "snapshot"
 	// FrameFactsChunk carries one bounded facts outbox chunk belonging to the
-	// active snapshot ID.
+	// active full snapshot or incremental facts transfer ID.
 	FrameFactsChunk FrameType = "facts_chunk"
 	// FrameSnapshotEnd carries the complete facts manifest. The standby applies
 	// the lease and facts snapshot only after validating it.
 	FrameSnapshotEnd FrameType = "snapshot_end"
+	// FrameFactsDeltaStart declares a bounded live facts suffix. Seq is the
+	// peer's base watermark and FactsSeq is the sender's high water.
+	FrameFactsDeltaStart FrameType = "facts_delta_start"
+	// FrameFactsDeltaEnd closes a verified live facts suffix.
+	FrameFactsDeltaEnd FrameType = "facts_delta_end"
 	// FrameOps is a batch of lease changes in sequence order.
 	FrameOps FrameType = "ops"
 	// FrameApplied is the standby's confirmation: everything up to Seq is
@@ -80,9 +85,9 @@ type Frame struct {
 	Token string `json:"token,omitempty"`
 	// Watermarks accompanies hello.
 	Watermarks *Watermarks `json:"watermarks,omitempty"`
-	// Seq is the sequence this frame brings the peer up to. A snapshot and an
-	// ops batch both carry the highest sequence they cover; applied carries
-	// the highest sequence applied.
+	// Seq is the lease watermark on snapshot/ops/applied frames, and the base
+	// facts cursor on FrameFactsDeltaStart. FactsSeq on ops advertises the
+	// primary's current facts high water even before its delta is applied.
 	Seq    int64      `json:"seq,omitempty"`
 	Leases []LeaseRow `json:"leases,omitempty"`
 	// SnapshotID and FactsSeq are set on FrameSnapshot; FactsSeq is the
@@ -171,8 +176,16 @@ func (f Frame) validate() error {
 		if f.SnapshotID == "" || f.FactsManifest == nil || f.FactsChunk != nil || len(f.Leases) != 0 || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.Seq != 0 || f.FactsSeq != 0 {
 			return malformed("invalid snapshot end fields")
 		}
+	case FrameFactsDeltaStart:
+		if f.SnapshotID == "" || len(f.SnapshotID) > 128 || f.FactsSeq <= f.Seq || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || len(f.Leases) != 0 || f.FactsChunk != nil || f.FactsManifest != nil {
+			return malformed("invalid facts delta start fields")
+		}
+	case FrameFactsDeltaEnd:
+		if f.SnapshotID == "" || f.FactsManifest == nil || f.FactsChunk != nil || len(f.Leases) != 0 || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.Seq != 0 || f.FactsSeq != 0 {
+			return malformed("invalid facts delta end fields")
+		}
 	case FrameOps:
-		if f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.SnapshotID != "" || f.FactsChunk != nil || f.FactsManifest != nil || f.FactsSeq != 0 {
+		if f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.SnapshotID != "" || f.FactsChunk != nil || f.FactsManifest != nil {
 			return malformed("invalid operations fields")
 		}
 	case FrameApplied, FramePing:

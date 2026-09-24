@@ -391,6 +391,56 @@ func TestSnapshotCopiesFactsOutboxAndConfirmsItsWatermark(t *testing.T) {
 	}
 }
 
+func TestLiveFactsDeltaIsAppliedBeforeFactsAwareConfirmation(t *testing.T) {
+	primaryStore := openStore(t, "live-facts-primary")
+	primary, _ := startPrimary(t, primaryStore)
+	mirror, mirrorStore, _ := startMirror(t, primary, "live-facts-mirror")
+	waitFor(t, "the initial empty snapshot", func() bool {
+		return primary.FactsAckedSeq() == 0 && mirror.FactsAppliedSeq() == 0 && primary.State().Redundant()
+	})
+
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "ha-live-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 11, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"live-lease-1"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.ConfirmFacts(context.Background(), LeaseRow{ID: "live-lease-1", ScopeID: "scope-1", IPAddress: "192.0.2.20", Status: "active"}, sequence); err != nil {
+		t.Fatalf("facts-aware confirmation failed: %v", err)
+	}
+	waitFor(t, "the mirror to apply the live facts delta", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='ha-live-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && mirror.FactsAppliedSeq() == sequence && primary.FactsAckedSeq() == sequence
+	})
+}
+
 func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	store := openStore(t, "manifest-mirror")
 	insertLease(t, store, "existing", "192.0.2.10", "02:00:00:00:00:10", "active")
@@ -417,6 +467,49 @@ func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	}
 	if mirrorHas(t, store, "replacement", "active") {
 		t.Fatal("invalid facts manifest applied replacement lease rows")
+	}
+}
+
+func TestPrimaryRefusesFactsAckAheadOfItsAllocator(t *testing.T) {
+	store := openStore(t, "stale-facts-ack")
+	tx, err := store.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setWatermark(context.Background(), tx, metaFactsAckedSeq, 1); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewReplicator(testConfig(t, "primary"), store); err == nil {
+		t.Fatal("primary accepted a facts ACK watermark ahead of its local allocator")
+	}
+}
+
+func TestLeaseOpsAdvertiseUnappliedFactsHighWaterToTakeoverGate(t *testing.T) {
+	store := openStore(t, "ops-facts-gap")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mirror.applyOps(context.Background(), 1, 2, []LeaseRow{{
+		ID: "lease-with-pending-fact", ScopeID: "scope-1", IPAddress: "192.0.2.30", Status: "active",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	setMetaText(store.DB, metaPeerSeqAt, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano))
+	status, err := NewOperator(testConfig(t, "standby"), store).Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PeerFactsSeq != 2 || status.FactsAppliedSeq != 0 || status.FactsGap != 2 {
+		t.Fatalf("facts gap status = peer %d applied %d gap %d; want 2/0/2", status.PeerFactsSeq, status.FactsAppliedSeq, status.FactsGap)
+	}
+	_, err = NewOperator(testConfig(t, "standby"), store).Takeover(TakeoverOptions{Confirmed: true, OldPrimaryCannotWrite: true})
+	if !errors.Is(err, ErrUnexplainedFactsGap) {
+		t.Fatalf("takeover with facts advertised but unapplied = %v, want ErrUnexplainedFactsGap", err)
 	}
 }
 

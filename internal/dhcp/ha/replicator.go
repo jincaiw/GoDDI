@@ -63,11 +63,12 @@ type Replicator struct {
 	store *dataplane.Store
 	link  linkHealth
 
-	mu         sync.Mutex
-	seq        int64
-	acked      int64
-	factsAcked int64
-	pending    []pendingOp
+	mu            sync.Mutex
+	seq           int64
+	acked         int64
+	factsAcked    int64
+	factsInFlight int64
+	pending       []pendingOp
 	// advance is closed and replaced whenever acked moves. Waiting on a
 	// channel rather than a condition variable is what makes the wait
 	// interruptible by a context and bounded by a timer.
@@ -111,6 +112,17 @@ func NewReplicator(cfg Config, store *dataplane.Store) (*Replicator, error) {
 	factsAcked, err := readWatermark(store.DB, metaFactsAckedSeq)
 	if err != nil {
 		return nil, fmt.Errorf("ha: reading the acknowledged facts watermark: %w", err)
+	}
+	allocator, err := facts.NewSequenceAllocator(store.DB)
+	if err != nil {
+		return nil, err
+	}
+	currentFactsSeq, err := allocator.CurrentOrZero(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if factsAcked > currentFactsSeq {
+		return nil, fmt.Errorf("ha: acknowledged facts watermark %d is ahead of local allocator %d", factsAcked, currentFactsSeq)
 	}
 	r := &Replicator{
 		cfg:        cfg,
@@ -453,7 +465,7 @@ func (r *Replicator) session(ctx context.Context, conn net.Conn) error {
 		case <-ctx.Done():
 			return nil
 		}
-		if err := r.sendWork(conn); err != nil {
+		if err := r.sendWork(ctx, conn); err != nil {
 			return err
 		}
 	}
@@ -562,6 +574,9 @@ func (r *Replicator) noteConfirmed(seq, factsSeq, localFactsSeq int64) {
 	leaseAdvanced := seq > r.acked
 	if factsAdvanced {
 		r.factsAcked = factsSeq
+		if factsSeq >= r.factsInFlight {
+			r.factsInFlight = 0
+		}
 	}
 	if leaseAdvanced {
 		r.acked = seq
@@ -685,7 +700,7 @@ func (r *Replicator) reloadDegraded() error {
 
 // sendWork emits one frame: the next batch of changes if there are any, and a
 // request for a confirmation if there are not.
-func (r *Replicator) sendWork(conn net.Conn) error {
+func (r *Replicator) sendWork(ctx context.Context, conn net.Conn) error {
 	r.mu.Lock()
 	var batch []pendingOp
 	if len(r.pending) > 0 {
@@ -703,15 +718,36 @@ func (r *Replicator) sendWork(conn net.Conn) error {
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
 
 	if len(batch) > 0 {
+		factsSeq, err := r.currentFactsSequence()
+		if err != nil {
+			return err
+		}
 		rows := make([]LeaseRow, len(batch))
 		for i, op := range batch {
 			rows[i] = op.row
 		}
-		if err := writeFrame(conn, Frame{Type: FrameOps, Seq: batch[len(batch)-1].seq, Leases: rows}); err != nil {
+		if err := writeFrame(conn, Frame{Type: FrameOps, Seq: batch[len(batch)-1].seq, FactsSeq: factsSeq, Leases: rows}); err != nil {
 			return err
 		}
 		r.markSent()
 		return nil
+	}
+	r.mu.Lock()
+	baseFactsSeq := r.factsAcked
+	factsInFlight := r.factsInFlight
+	r.mu.Unlock()
+	if factsInFlight == 0 {
+		sent, factsSeq, err := r.sendFactsDelta(ctx, conn, baseFactsSeq)
+		if err != nil {
+			return err
+		}
+		if sent {
+			r.mu.Lock()
+			r.factsInFlight = factsSeq
+			r.mu.Unlock()
+			r.markSent()
+			return nil
+		}
 	}
 	if pingDue {
 		factsSeq, err := r.currentFactsSequence()
@@ -726,6 +762,55 @@ func (r *Replicator) sendWork(conn net.Conn) error {
 		r.markSent()
 	}
 	return nil
+}
+
+func (r *Replicator) sendFactsDelta(ctx context.Context, conn net.Conn, after int64) (bool, int64, error) {
+	tx, err := r.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return false, 0, fmt.Errorf("ha: opening facts delta read: %w", err)
+	}
+	defer tx.Rollback()
+	outbox, err := facts.NewObservationOutbox(r.store.DB)
+	if err != nil {
+		return false, 0, err
+	}
+	highWater, err := outbox.ReplicaHighWaterTx(ctx, tx)
+	if err != nil {
+		return false, 0, err
+	}
+	if highWater <= after {
+		if err := tx.Commit(); err != nil {
+			return false, 0, fmt.Errorf("ha: closing facts delta read: %w", err)
+		}
+		return false, 0, nil
+	}
+	var idBytes [16]byte
+	if _, err := rand.Read(idBytes[:]); err != nil {
+		return false, 0, fmt.Errorf("ha: generating facts delta ID: %w", err)
+	}
+	id := hex.EncodeToString(idBytes[:])
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{Type: FrameFactsDeltaStart, SnapshotID: id, Seq: after, FactsSeq: highWater}); err != nil {
+		return false, 0, err
+	}
+	manifest, err := outbox.StreamReplicaChangesTx(ctx, tx, after, 256, func(chunk facts.ReplicaSnapshotChunk) error {
+		conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+		return writeFrame(conn, Frame{Type: FrameFactsChunk, SnapshotID: id, FactsChunk: &chunk})
+	})
+	if err != nil {
+		return false, 0, err
+	}
+	if manifest.AfterSequence != after || manifest.LastSequence != highWater {
+		return false, 0, fmt.Errorf("ha: facts delta range changed: base=%d/%d high=%d/%d", after, manifest.AfterSequence, highWater, manifest.LastSequence)
+	}
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{Type: FrameFactsDeltaEnd, SnapshotID: id, FactsManifest: &manifest}); err != nil {
+		return false, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, fmt.Errorf("ha: closing facts delta read: %w", err)
+	}
+	return true, highWater, nil
 }
 
 func (r *Replicator) markSent() {

@@ -198,6 +198,24 @@ type releaseFactsReplicatorProbe struct {
 	factCount int
 }
 
+type factsConfirmReplicatorProbe struct {
+	confirmCalls      int
+	factsConfirmCalls int
+	factsSeq          int64
+}
+
+func (p *factsConfirmReplicatorProbe) MayBind() bool { return true }
+func (p *factsConfirmReplicatorProbe) Confirm(context.Context, *lease.Lease) error {
+	p.confirmCalls++
+	return nil
+}
+func (p *factsConfirmReplicatorProbe) ConfirmFacts(_ context.Context, _ *lease.Lease, seq int64) error {
+	p.factsConfirmCalls++
+	p.factsSeq = seq
+	return nil
+}
+func (*factsConfirmReplicatorProbe) Replicate(*lease.Lease) {}
+
 func (p *releaseFactsReplicatorProbe) MayBind() bool { return true }
 
 func (p *releaseFactsReplicatorProbe) Confirm(context.Context, *lease.Lease) error { return nil }
@@ -301,6 +319,41 @@ func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) 
 	}
 	if factsCount != 2 || dnsCount != 2 {
 		t.Fatalf("after RELEASE: facts=%d DNS events=%d, want 2/2", factsCount, dnsCount)
+	}
+}
+
+func TestMappedRequestUsesFactsAwareHAConfirmation(t *testing.T) {
+	s, db, _, spaceID := newIPAMLinkedServer(t)
+	allocator, err := facts.NewSequenceAllocator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := lease.NewFactsMutationWriter(lease.NewManager(db), allocator, outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
+	resolver, err := ipam.NewScopeIdentityResolver(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
+		Caller: writer, Source: "ha-primary", DNSOutboxAtomic: true,
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+	replicator := &factsConfirmReplicatorProbe{}
+	s.SetLeaseReplicator(replicator)
+	dhcpExchange(t, s, testMAC(26), "ha-facts-client")
+	if replicator.confirmCalls != 0 || replicator.factsConfirmCalls != 1 || replicator.factsSeq != 1 {
+		t.Fatalf("HA confirmations = lease-only:%d facts-aware:%d facts-seq:%d; want 0/1/1 (space %s)",
+			replicator.confirmCalls, replicator.factsConfirmCalls, replicator.factsSeq, spaceID)
 	}
 }
 
