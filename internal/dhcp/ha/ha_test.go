@@ -441,6 +441,24 @@ func TestLiveFactsDeltaIsAppliedBeforeFactsAwareConfirmation(t *testing.T) {
 	})
 }
 
+func TestFactsAcknowledgementClearsInFlightDelta(t *testing.T) {
+	store := openStore(t, "facts-ack-in-flight")
+	r, err := NewReplicator(testConfig(t, "primary"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.factsInFlight = 4
+	r.mu.Unlock()
+	r.noteConfirmed(0, 4, 4)
+	r.mu.Lock()
+	inFlight, acked := r.factsInFlight, r.factsAcked
+	r.mu.Unlock()
+	if inFlight != 0 || acked != 4 {
+		t.Fatalf("facts delta state after immediate ACK = in-flight %d, acked %d; want 0/4", inFlight, acked)
+	}
+}
+
 func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	store := openStore(t, "manifest-mirror")
 	insertLease(t, store, "existing", "192.0.2.10", "02:00:00:00:00:10", "active")

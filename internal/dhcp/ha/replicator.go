@@ -737,14 +737,11 @@ func (r *Replicator) sendWork(ctx context.Context, conn net.Conn) error {
 	factsInFlight := r.factsInFlight
 	r.mu.Unlock()
 	if factsInFlight == 0 {
-		sent, factsSeq, err := r.sendFactsDelta(ctx, conn, baseFactsSeq)
+		sent, _, err := r.sendFactsDelta(ctx, conn, baseFactsSeq)
 		if err != nil {
 			return err
 		}
 		if sent {
-			r.mu.Lock()
-			r.factsInFlight = factsSeq
-			r.mu.Unlock()
 			r.markSent()
 			return nil
 		}
@@ -803,8 +800,19 @@ func (r *Replicator) sendFactsDelta(ctx context.Context, conn net.Conn, after in
 	if manifest.AfterSequence != after || manifest.LastSequence != highWater {
 		return false, 0, fmt.Errorf("ha: facts delta range changed: base=%d/%d high=%d/%d", after, manifest.AfterSequence, highWater, manifest.LastSequence)
 	}
+	// Record the in-flight watermark before the end frame can provoke an
+	// immediate ACK. Otherwise noteConfirmed can clear zero, then this sender
+	// can overwrite that confirmation with a stale in-flight value.
+	r.mu.Lock()
+	r.factsInFlight = highWater
+	r.mu.Unlock()
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
 	if err := writeFrame(conn, Frame{Type: FrameFactsDeltaEnd, SnapshotID: id, FactsManifest: &manifest}); err != nil {
+		r.mu.Lock()
+		if r.factsInFlight == highWater {
+			r.factsInFlight = 0
+		}
+		r.mu.Unlock()
 		return false, 0, err
 	}
 	if err := tx.Commit(); err != nil {

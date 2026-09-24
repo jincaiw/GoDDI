@@ -67,12 +67,12 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W01 IXFR | primary serial 作者写入者均记录完整 SOA 分界；连续 journal 链服务已实现，缺链回退 AXFR | 真实 secondary、多消息 TCP framing、pruning 临界点与恢复互通 |
 | W02 架构边界 | 单写、双副本确认、无见证时暂停、显式降级/接管操作已有实现与 ADR | 生产围栏设备、跨主机分区、主备恢复演练；不得据此启用自动接管 |
 | W03 DHCP 协议 | REQUEST 分类、server-id、relay allowlist、有界队列及负向用例已有代码 | 真实 relay、多种客户端/多网卡的现场交互和 ACK 行为 |
-| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer、跨库幂等传送/水位和 readiness 已接通；HA 双水位、ACK 与快照复制不变量已记录于 ADR-0009 | HA facts 协议、接管后首事件连续性、控制库故障重放和实网演练仍未实现/验收 |
+| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer、跨库幂等传送/水位和 readiness 已接通；HA protocol v3 已接入运行期 facts delta、连续序列校验、备端事务应用和双水位 ACK gate | 完成断连/重启/写入中断自动化故障矩阵；验证接管后首事件连续性、控制库故障重放及真实网络演练 |
 | W05 配置发布 | revision、CAS、幂等与 release outbox 已有实现 | 多节点 applied 确认、部分节点失败时保留 LKG 的部署级协调验收 |
 | W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；CSV 与 BIND 导入 dry-run 聚合冲突 | 多 DNS 关系源及并发地址分配仍需完整验收 |
 | W07 进程隔离/恢复 | 数据面快照重建和 readiness gate 已接线 | 坏快照、旧 schema、磁盘满、控制进程退出与重启故障注入 |
 | W08 DNS HA | secondary 周期刷新、EXPIRE 与健康状态已有代码 | 双 DNS 地址/策略同步、客户端切换和真实节点断连恢复 |
-| W09 DHCP HA | 单写复制水位、显式 takeover/fence/rejoin 机制存在；当前不自动 promote；HA lease/facts 双水位契约见 ADR-0009 | HA facts 协议、生产 fencing 和网络分区验收；未完成前不能宣称 HA GA |
+| W09 DHCP HA | 单写复制水位、显式 takeover/fence/rejoin 机制存在；当前不自动 promote；HA lease/facts 双水位协议与 ACK gate 已实现 | promoted primary/旧主回归对账、生产 fencing 和网络分区验收；未完成前不能宣称 HA GA |
 | W10 安全/备份 | 加密备份、restore 版本/schema 门禁和全状态归档已有实现 | 密钥异机保存/找回、真实权限/TSIG 恢复、硬件断电持久性 |
 | W11 可观测性 | facts consumer gap/失败、producer backlog/失败、HA 确认落后及备份年龄指标已接线；facts/HA 关键状态已有随仓告警规则与指标存在性守卫 | 正式 Prometheus 抓取、按部署调整阈值、告警路由/恢复动作与触发演练 |
 | W12 升级/灾备 | 在线 WAL 原地 restore 与空白异路径整机恢复 smoke 均通过 | 逐节点升级、expand-contract 兼容性、现场密钥及介质恢复 |
@@ -98,7 +98,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - W02 以已接受的 ADR-0001/0003 为约束复核最新版装配；保持 primary 单写、未围栏不自动接管、双副本 durable ACK、显式单副本降级。
 - W01 完成 primary 写入分界后接通完整 journal 链传送和 RFC 1982 serial 回绕处理；继续验证 TCP 分帧、历史清理边界及真实 secondary 互操作。缺历史时始终回退 AXFR。
 - W03 不重复实现已有 REQUEST 分类、server identifier、OFFER/DECLINE、Option 82 allowlist 和有界队列；补齐最新版差异对账与真实 relay/客户端外部验收。
-- W04 复核租约 generation 与持久事实事件，闭合 A/PTR 生命周期。DHCP ACK 不等待控制库投影，但投影失败可见且可重放。
+- W04 已接通租约 generation 与持久事实事件；HA REQUEST/续租在 lease 与 facts 两个 durable watermarks 确认后 ACK，控制库投影仍异步且可重放。剩余工作是断连/重启故障矩阵、长期控制库故障和部署验收。
 - W10 提前处理安全默认、关键审计和“全状态备份能否在新路径恢复”的最小演练。
 
 退出条件：协议反例无错误 ACK/NAK；重复分配、误删记录及半成功 DNS 更新被回归用例拦截；恢复流程可重复执行。
