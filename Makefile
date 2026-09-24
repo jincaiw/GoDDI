@@ -4,7 +4,8 @@
 BINARY_NAME=goddi
 GO=go
 GOFLAGS=-v
-LDFLAGS=-ldflags "-X main.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo '0.1.0') -X main.GitCommit=$(shell git rev-parse --short HEAD 2>/dev/null || echo 'unknown') -X main.BuildDate=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')"
+VERSION ?= $(shell sed -nE 's/^[[:space:]]*Version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' cmd/goddi/main.go | head -n 1)
+LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-parse --short HEAD 2>/dev/null || echo 'unknown') -X main.BuildDate=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 # Build directory
 BUILD_DIR=./dist

@@ -22,9 +22,9 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.24.0 功能边界
+## v0.24.1 功能边界
 
-GoDDI v0.24.0 是一套基于 SQLite/WAL 的自托管 DDI 平台，强化了 DNS IXFR 历史链校验、DHCP 到 IPAM 的持久事实复制，以及最小权限控制。生产能力边界如下：
+GoDDI v0.24.1 是一套基于 SQLite/WAL 的自托管 DDI 平台，包含 v0.24.0 的安全与质量更新，并将 Docker 运行镜像升级到仍受支持的 Alpine 分支。生产能力边界如下：
 
 - **已实现**：权威与递归 DNS、DHCP 处理、IPAM、配置版本、备份恢复、监控指标、Web 控制台，以及 DoT/DoH/DoQ 监听器配置。真实 DoT/DoH/DoQ 客户端握手仍需部署环境验证。
 - **实验性/不完整**：DHCP HA 尚未通过 GA 认证；DNSSEC 密钥与 DS 管理尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
@@ -41,7 +41,7 @@ GoDDI v0.24.0 是一套基于 SQLite/WAL 的自托管 DDI 平台，强化了 DNS
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.24.0/goddi-v0.24.0-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.24.1/goddi-v0.24.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
