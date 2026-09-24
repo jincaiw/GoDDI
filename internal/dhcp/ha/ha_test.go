@@ -455,6 +455,125 @@ func TestFactsProducedDuringDisconnectAreRestoredOnMirrorReconnect(t *testing.T)
 	})
 }
 
+func TestPrimaryAndMirrorRestartPreserveFactsAcknowledgement(t *testing.T) {
+	primaryStore := openStore(t, "restart-facts-primary")
+	primaryCfg := testConfig(t, "primary")
+	primary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryCtx, stopPrimary := context.WithCancel(context.Background())
+	primaryDone := make(chan struct{})
+	go func() { defer close(primaryDone); _ = primary.Run(primaryCtx) }()
+	waitFor(t, "primary listener", func() bool { return primary.Addr() != nil })
+
+	mirrorStore := openStore(t, "restart-facts-mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "restart-facts-mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	mirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirrorCtx, stopMirror := context.WithCancel(context.Background())
+	mirrorDone := make(chan struct{})
+	go func() { defer close(mirrorDone); _ = mirror.Run(mirrorCtx) }()
+	waitFor(t, "initial primary/mirror connection", func() bool { return primary.State() == StatePrimary })
+
+	insertLease(t, primaryStore, "restart-fact-lease", "192.0.2.41", "02:00:00:00:00:41", "active")
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "restart-fact-event", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 14, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"restart-fact-lease"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.ConfirmFacts(context.Background(), LeaseRow{
+		ID: "restart-fact-lease", ScopeID: "scope-1", IPAddress: "192.0.2.41",
+		MACAddress: "02:00:00:00:00:41", Status: "active", Generation: 1,
+	}, sequence); err != nil {
+		t.Fatalf("initial facts-aware confirmation: %v", err)
+	}
+
+	stopMirror()
+	stopPrimary()
+	select {
+	case <-mirrorDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("mirror process did not stop")
+	}
+	select {
+	case <-primaryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("primary process did not stop")
+	}
+
+	restartedPrimary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatalf("restarting primary from durable lease store: %v", err)
+	}
+	if restartedPrimary.FactsAckedSeq() != sequence {
+		t.Fatalf("persisted facts ACK after restart = %d, want %d", restartedPrimary.FactsAckedSeq(), sequence)
+	}
+	restartedCtx, stopRestarted := context.WithCancel(context.Background())
+	restartedDone := make(chan struct{})
+	go func() { defer close(restartedDone); _ = restartedPrimary.Run(restartedCtx) }()
+	waitFor(t, "restarted primary listener", func() bool { return restartedPrimary.Addr() != nil })
+
+	mirrorCfg.PeerAddress = restartedPrimary.Addr().String()
+	restartedMirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatalf("restarting mirror from durable lease store: %v", err)
+	}
+	reconnectedCtx, stopReconnected := context.WithCancel(context.Background())
+	reconnectedDone := make(chan struct{})
+	go func() { defer close(reconnectedDone); _ = restartedMirror.Run(reconnectedCtx) }()
+	waitFor(t, "both restarted nodes to converge facts and lease watermarks", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='restart-fact-event'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && leaseCount(t, mirrorStore) == 1 &&
+			restartedMirror.FactsAppliedSeq() == sequence && restartedPrimary.FactsAckedSeq() == sequence &&
+			restartedPrimary.State() == StatePrimary
+	})
+	stopReconnected()
+	stopRestarted()
+	select {
+	case <-reconnectedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restarted mirror process did not stop")
+	}
+	select {
+	case <-restartedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restarted primary process did not stop")
+	}
+}
+
 func TestLiveFactsDeltaIsAppliedBeforeFactsAwareConfirmation(t *testing.T) {
 	primaryStore := openStore(t, "live-facts-primary")
 	primary, _ := startPrimary(t, primaryStore)

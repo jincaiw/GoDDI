@@ -89,3 +89,43 @@ func TestPushFactsRetainsSequenceConflictForRetry(t *testing.T) {
 		t.Fatalf("refused count = %d, %v; want 1", n, err)
 	}
 }
+
+func TestPushFactsRecoversAfterControlDatabaseWriteFailure(t *testing.T) {
+	store := newStore(t, config.DataPlaneLease)
+	control := newControlDB(t)
+	rep := NewReplicator(control, store)
+	enqueueTestFact(t, store.DB, "fact-recover-after-outage", 1)
+	if _, err := control.Exec(`CREATE TRIGGER reject_fact_delivery BEFORE INSERT ON dhcp_ipam_observation_events
+		BEGIN SELECT RAISE(ABORT, 'injected control database outage'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := rep.PushFacts(context.Background(), 10); err != nil || n != 0 {
+		t.Fatalf("push during control database outage = %d, %v; want retained retry", n, err)
+	}
+	if pending, err := rep.PendingFacts(); err != nil || pending != 1 {
+		t.Fatalf("facts pending during outage = %d, %v; want 1", pending, err)
+	}
+	if refused, err := rep.Refused(); err != nil || refused != 1 {
+		t.Fatalf("refused facts during outage = %d, %v; want 1", refused, err)
+	}
+	if _, err := control.Exec(`DROP TRIGGER reject_fact_delivery`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`UPDATE dhcp_ipam_observation_event_dirty
+		SET next_attempt_at='2000-01-01 00:00:00' WHERE event_id='fact-recover-after-outage'`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := rep.PushFacts(context.Background(), 10); err != nil || n != 1 {
+		t.Fatalf("push after control database recovery = %d, %v; want one delivery", n, err)
+	}
+	if pending, err := rep.PendingFacts(); err != nil || pending != 0 {
+		t.Fatalf("facts pending after recovery = %d, %v; want 0", pending, err)
+	}
+	var count int
+	if err := control.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='fact-recover-after-outage'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("control inbox rows after recovery = %d, want 1", count)
+	}
+}
