@@ -30,6 +30,12 @@ func (a *Adapter) Confirm(ctx context.Context, l *lease.Lease) error {
 	return a.r.Confirm(ctx, RowOf(l))
 }
 
+// ConfirmFacts waits for both the mirrored lease sequence and the facts event
+// produced by the same DHCP mutation.
+func (a *Adapter) ConfirmFacts(ctx context.Context, l *lease.Lease, factsSeq int64) error {
+	return a.r.ConfirmFacts(ctx, RowOf(l), factsSeq)
+}
+
 // Replicate records a lease change without waiting for the mirror. It is used
 // for the changes that are not promises.
 func (a *Adapter) Replicate(l *lease.Lease) {

@@ -1075,9 +1075,9 @@ func runServer(configPath string) error {
 	// projected atomically by the control-side consumer.
 	if dhcpSrv != nil {
 		dhcpSrv.SetLeaseObserver(ipamLinkage)
-		// HA replication currently mirrors authoritative lease rows, not the
-		// unified fact sequence/outbox. Keep HA on its existing observer path
-		// until takeover can continue the durable stream without a gap.
+		// HA facts mutation production remains disabled until the wire can stream
+		// post-snapshot facts incrementally. Reconnecting for every REQUEST would
+		// transfer the entire history and is not an acceptable ACK path.
 		if !haEnabled {
 			allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
 			if err != nil {

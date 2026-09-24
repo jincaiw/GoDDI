@@ -143,6 +143,18 @@ type LeaseFactsMutationCaller interface {
 	ExpireFactsBatch(context.Context, string, func(*lease.Lease) (string, error)) ([]*lease.Lease, error)
 }
 
+// LeaseFactsSequenceReader is implemented by durable facts writers that can
+// report the high water committed by a request mutation.
+type LeaseFactsSequenceReader interface {
+	CurrentSequence(context.Context) (int64, error)
+}
+
+// FactsAwareLeaseReplicator confirms both the lease mutation and its durable
+// facts event before the DHCP ACK is allowed out.
+type FactsAwareLeaseReplicator interface {
+	ConfirmFacts(context.Context, *lease.Lease, int64) error
+}
+
 // LeaseFactsMutationConfig supplies the writer and a resolver that reads only
 // the local DHCP store. ResolveSpaceID must not query the control database.
 type LeaseFactsMutationConfig struct {

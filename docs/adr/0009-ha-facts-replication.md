@@ -47,7 +47,7 @@ HA facts 在下列协议与验收条件全部实现前保持关闭。当前观�
 
 1. **已实现快照原语与 HA 重连快照接入（未发布）**：`ObservationOutbox.ReadReplicaPageTx`/`StreamReplicaSnapshotTx` 在调用方单一只读事务中有界读取 envelope 与 producer delivery state，并按 allocator 水位对 sequence 缺口 fail closed；`ReplicaSnapshotAccumulator` 校验跨页游标、chunk 边界并生成 SHA-256 manifest。HA protocol v2 在每次连接发送同一 SQLite read snapshot 上的 lease rows、facts outbox 与 allocator 水位；standby 分块 staging，验证 manifest 后在单一事务中联合应用 lease/facts，并返回 facts applied watermark。定向 HA/facts 测试、`go vet` 及 staging migration 检查通过；集成回归还验证坏 manifest 不会替换既有租约。
 2. **仍待实现**：将 DHCP facts mutation identity/sequence 返回至 HA replicator；把事实复制确认纳入 REQUEST/续租 ACK gate，并覆盖 release/decline/expiry。当前 HA DHCP producer 仍关闭，因此快照复制已有 facts 历史，但还不构成 HA mutation durability。
-3. **接管 facts 缺口保护已接入，producer/ACK 连续性仍待实现**：standby 状态报告 peer facts 水位和 facts gap；facts gap 会硬拒绝 takeover，必须先恢复缺失快照。仅提供 exact-gap 覆盖是不安全的：facts snapshot 读取要求 sequence 连续，跳过的事件会令后续复制再次 fail closed，且事实可能影响 IPAM 投影。DHCP mutation identity/sequence 返回 HA replicator、REQUEST/续租 ACK gate、promoted primary 装配 facts producer 和 control inbox delivery仍待实现。
+3. **接管 facts 缺口保护已接入，producer/ACK 连续性仍待实现**：standby 状态报告 peer facts 水位和 facts gap；facts gap 会硬拒绝 takeover，必须先恢复缺失快照。仅提供 exact-gap 覆盖是不安全的：facts snapshot 读取要求 sequence 连续，跳过的事件会令后续复制再次 fail closed，且事实可能影响 IPAM 投影。当前分块 wire 只用于 reconnect snapshot，尚不能传送运行期间新增 facts；必须先实现增量 facts 帧与 standby staging/原子应用，再允许 HA mutation producer、REQUEST/续租双水位 ACK gate，以及 promoted primary control inbox delivery。
 4. 完成断开、进程崩溃、部分 snapshot、重复 envelope、sequence 冲突/缺口、control DB 长时间不可用及 takeover/replay 的自动化故障矩阵。
 5. 在真实双主机网络环境验证 fencing、分区、旧主回归、control DB 恢复与 IPAM 对账后，再考虑关闭兼容 observer 或发布 HA facts 能力。
 

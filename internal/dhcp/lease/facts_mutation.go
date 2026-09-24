@@ -81,6 +81,16 @@ func (w *FactsMutationWriter) notifyPostCommit() {
 	}
 }
 
+// CurrentSequence reports the durable facts high water after a mutation. HA
+// request handling uses it to wait for the mirror's facts watermark as well
+// as its lease watermark before returning an ACK.
+func (w *FactsMutationWriter) CurrentSequence(ctx context.Context) (int64, error) {
+	if w == nil || w.allocator == nil {
+		return 0, errors.New("lease facts mutation: writer is unavailable")
+	}
+	return w.allocator.CurrentOrZero(ctx)
+}
+
 // BindLease creates a confirmed binding directly and commits its fact in the
 // same transaction. This covers valid REQUEST paths that arrive without a
 // matching local OFFER (for example INIT-REBOOT after a server restart).

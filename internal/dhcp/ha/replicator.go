@@ -224,6 +224,15 @@ func (r *Replicator) DegradedReason() string {
 // by the time this is called -- that ordering is the point: the mirror is only
 // ever asked to hold something this node has, never the reverse.
 func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
+	return r.ConfirmFacts(ctx, row, 0)
+}
+
+// ConfirmFacts confirms the lease operation and its durable facts event. A
+// zero factsSeq preserves the lease-only contract for callers without facts.
+func (r *Replicator) ConfirmFacts(ctx context.Context, row LeaseRow, factsSeq int64) error {
+	if factsSeq < 0 {
+		return fmt.Errorf("ha: invalid facts sequence %d", factsSeq)
+	}
 	// The state is read once. Reading it again after the wait would be asking a
 	// different question than the one the caller is waiting on the answer to.
 	state := r.State()
@@ -249,13 +258,20 @@ func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
 	if !state.Redundant() {
 		return nil
 	}
+	localFactsSeq, err := r.currentFactsSequence()
+	if err != nil {
+		return err
+	}
+	if factsSeq > localFactsSeq {
+		return fmt.Errorf("ha: facts sequence %d is beyond local high water %d", factsSeq, localFactsSeq)
+	}
 
 	deadline := time.NewTimer(r.cfg.ConfirmTimeout)
 	defer deadline.Stop()
 
 	for {
 		r.mu.Lock()
-		if r.acked >= seq {
+		if r.acked >= seq && r.factsAcked >= factsSeq {
 			r.mu.Unlock()
 			return nil
 		}
@@ -266,9 +282,10 @@ func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
 		case <-ch:
 		case <-deadline.C:
 			slog.Warn("HA: withholding an acknowledgement; the mirror did not confirm in time",
-				"seq", seq, "acked_seq", r.AckedSeq(), "timeout", r.cfg.ConfirmTimeout)
-			return fmt.Errorf("%w (seq %d, mirror at %d, timeout %s)",
-				ErrNotConfirmed, seq, r.AckedSeq(), r.cfg.ConfirmTimeout)
+				"seq", seq, "acked_seq", r.AckedSeq(), "facts_seq", factsSeq,
+				"facts_acked_seq", r.FactsAckedSeq(), "timeout", r.cfg.ConfirmTimeout)
+			return fmt.Errorf("%w (lease seq %d mirror at %d, facts seq %d mirror at %d, timeout %s)",
+				ErrNotConfirmed, seq, r.AckedSeq(), factsSeq, r.FactsAckedSeq(), r.cfg.ConfirmTimeout)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -542,11 +559,14 @@ func (r *Replicator) noteConfirmed(seq, factsSeq, localFactsSeq int64) {
 	r.mu.Lock()
 	var advanced chan struct{}
 	factsAdvanced := factsSeq > r.factsAcked
+	leaseAdvanced := seq > r.acked
 	if factsAdvanced {
 		r.factsAcked = factsSeq
 	}
-	if seq > r.acked {
+	if leaseAdvanced {
 		r.acked = seq
+	}
+	if leaseAdvanced || factsAdvanced {
 		advanced = r.advance
 		r.advance = make(chan struct{})
 	}

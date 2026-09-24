@@ -468,6 +468,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	// authoritative, so the state it relies on must already be durable.
 	var bound *lease.Lease
 	factsCommitted := false
+	factsMutationCommitted := false
 	observed := LeaseObservedBind
 	factsCfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(sc.ID, requestedIP.String())
 	if err != nil {
@@ -479,6 +480,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 			bound, err = factsCfg.Caller.BindLease(context.Background(), "", factsCfg.Source, spaceID,
 				sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
 			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.CreateLease(sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
 		}
@@ -490,6 +492,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		if useFacts {
 			bound, err = factsCfg.Caller.ActivateLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
 			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.ActivateLease(held.ID, leaseDuration)
 		}
@@ -500,6 +503,7 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		if useFacts {
 			bound, err = factsCfg.Caller.RenewLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
 			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
+			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.RenewLease(held.ID, leaseDuration)
 		}
@@ -519,9 +523,26 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	// right now, and the address is fine. Silence leaves the client retrying,
 	// and the retry lands on the same address once the second copy is back.
 	if s.leaseReplicator != nil {
-		if err := s.leaseReplicator.Confirm(context.Background(), bound); err != nil {
+		var confirmErr error
+		if factsMutationCommitted {
+			if sequenceReader, ok := factsCfg.Caller.(LeaseFactsSequenceReader); ok {
+				factsSeq, err := sequenceReader.CurrentSequence(context.Background())
+				if err != nil {
+					confirmErr = fmt.Errorf("read committed DHCP facts sequence: %w", err)
+				} else if factsReplicator, ok := s.leaseReplicator.(FactsAwareLeaseReplicator); ok {
+					confirmErr = factsReplicator.ConfirmFacts(context.Background(), bound, factsSeq)
+				} else {
+					confirmErr = s.leaseReplicator.Confirm(context.Background(), bound)
+				}
+			} else {
+				confirmErr = errors.New("DHCP facts mutation committed without a sequence reader")
+			}
+		} else {
+			confirmErr = s.leaseReplicator.Confirm(context.Background(), bound)
+		}
+		if confirmErr != nil {
 			slog.Warn("DHCP: withholding the ACK; the second copy did not confirm",
-				"mac", mac, "ip", requestedIP, "lease_id", bound.ID, "error", err)
+				"mac", mac, "ip", requestedIP, "lease_id", bound.ID, "error", confirmErr)
 			return nil, nil
 		}
 	}
