@@ -53,7 +53,21 @@ const CSV_HEADER = 'ip_address,status,mac_address,hostname,owner,device,location
 function octet(from: number, to: number): number {
   return from + Math.floor(Math.random() * (to - from + 1))
 }
-const NEW_IP = `192.0.2.${octet(2, 127)}`
+
+function octetExceptSeed(from: number, to: number, prefix: string): number {
+  const seedOctets = SEED_IP.split('.')
+  const prefixOctets = prefix.split('.')
+  const seedIsInRange = prefixOctets.every((part, index) => seedOctets[index] === part) &&
+    Number(seedOctets[prefixOctets.length]) >= from &&
+    Number(seedOctets[prefixOctets.length]) <= to
+  if (!seedIsInRange) return octet(from, to)
+
+  const seedValue = Number(seedOctets[prefixOctets.length])
+  const selected = octet(from, to - 1)
+  return selected >= seedValue ? selected + 1 : selected
+}
+
+const NEW_IP = `192.0.2.${octetExceptSeed(2, 127, '192.0.2')}`
 const SECOND_IP = `192.0.2.${octet(128, 253)}`
 const SPARSE_IP = `198.50.${octet(2, 127)}.${octet(2, 253)}`
 

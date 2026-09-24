@@ -69,6 +69,9 @@ jobs:
           sha256sum goddi-${VERSION}-linux-amd64 goddi-${VERSION}-linux-arm64 > "SHA256SUMS-${VERSION}.txt"
           cat "SHA256SUMS-${VERSION}.txt"
 
+      - name: Smoke test Linux amd64 release binary
+        run: bash scripts/release_smoke.sh "dist/goddi-${GITHUB_REF_NAME}-linux-amd64" "${GITHUB_REF_NAME}"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:

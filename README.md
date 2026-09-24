@@ -22,9 +22,9 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ![Backup management](docs/images/backup.png)
 
-## Version 0.24.0 Scope
+## Version 0.24.1 Scope
 
-GoDDI v0.24.0 is a self-hosted DDI platform backed by SQLite/WAL. It includes hardened DNS IXFR history handling, durable DHCP-to-IPAM facts replication, and broader least-privilege controls. Its production boundaries remain explicit:
+GoDDI v0.24.1 is a self-hosted DDI platform backed by SQLite/WAL. It includes the v0.24.0 security and quality updates and uses a supported Alpine runtime base for Docker deployments. Its production boundaries remain explicit:
 
 - **Implemented:** authoritative and recursive DNS, DHCP processing, IPAM, configuration revisions, backup/restore, metrics, the web console, and DoT/DoH/DoQ listener configuration. Real DoT/DoH/DoQ client handshakes still require deployment validation.
 - **Experimental/incomplete:** DHCP HA is not certified as GA. DNSSEC key and DS management does not provide a complete signing chain with RRSIG, DNSKEY, and NSEC/NSEC3 serving.
@@ -41,7 +41,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.24.0/goddi-v0.24.0-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.24.1/goddi-v0.24.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
