@@ -67,7 +67,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W01 IXFR | primary serial 作者写入者均记录完整 SOA 分界；连续 journal 链服务已实现，缺链回退 AXFR | 真实 secondary、多消息 TCP framing、pruning 临界点与恢复互通 |
 | W02 架构边界 | 单写、双副本确认、无见证时暂停、显式降级/接管操作已有实现与 ADR | 生产围栏设备、跨主机分区、主备恢复演练；不得据此启用自动接管 |
 | W03 DHCP 协议 | REQUEST 分类、server-id、relay allowlist、有界队列及负向用例已有代码 | 真实 relay、多种客户端/多网卡的现场交互和 ACK 行为 |
-| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer 与跨库幂等投影已接通；HA protocol v3 已接入运行期 facts delta、连续序列校验、备端事务应用和双水位 ACK gate；自动化覆盖离线重连、主备同时重启、失效 staging 清理、apply 失败回滚及 control 写失败恢复 | control DB 长时间不可用/恢复、promoted primary 首事件连续性、旧主回归对账和真实网络演练 |
+| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer 与跨库幂等投影已接通；HA protocol v3 已接入运行期 facts delta、连续序列校验、备端事务应用和双水位 ACK gate；自动化覆盖离线重连、主备同时重启、失效 staging 清理、apply 失败回滚、control 写失败恢复及接管后首个 facts 序列连续性 | control DB 长时间不可用/恢复、旧主回归对账和真实网络演练 |
 | W05 配置发布 | revision、CAS、幂等与 release outbox 已有实现 | 多节点 applied 确认、部分节点失败时保留 LKG 的部署级协调验收 |
 | W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；CSV 与 BIND 导入 dry-run 聚合冲突 | 多 DNS 关系源及并发地址分配仍需完整验收 |
 | W07 进程隔离/恢复 | 数据面快照重建和 readiness gate 已接线 | 坏快照、旧 schema、磁盘满、控制进程退出与重启故障注入 |
@@ -79,7 +79,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W13 产品体验 | IP 地址详情抽屉、子网导入与建池向导、DNS CSV/BIND 预检导入均已有实现；建池冲突服务端闸门和跨模块详情权限隔离已接通；DNS、DHCP、IPAM、RBAC、备份、系统配置和 token 页面操作入口及处理器已完成静态权限逐项核对；只读 UI 场景覆盖九类资源页面、关键 RBAC 按钮及九类写入拒绝；API 浏览器回归覆盖九类单资源读取隔离、双角色权限并集和受限管理员的 user/role/group 授权工作流；本地真实服务用例通过 | 最新提交 CI 待完成；授权写入流程覆盖 API 工作流，未覆盖每个管理对话框的 UI 点击路径 |
 | W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
 
-W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `bf6d5f9` 的 CI 全通过；W13 真实浏览器/API 权限场景在本地通过。提交 `6341d00` 的远端 CI 全通过。最新已推送提交 `f2514ef` 包含 HA facts lag 指标，本地全量 Go tests、metrics/HA/facts/cmd race、vet、golangci-lint v2.13.2 和 diff 检查均通过；它的远端 CI 尚在运行。本工作树另增加了主备进程重启和 control write 恢复故障用例，需在推送后由 CI 复验。此前 `e1a1f45` lint 暴露的非零 base 游标错误已由 `4bba613` 修正，并由 `6341d00` 全量 CI 验证。现场/部署退出条件仍未满足，当前分支保持 draft，未达正式发布门槛。
+W12-a/W12-c 隔离式 restore 演练通过；历史实现提交 `8641d20` 和 `bf6d5f9` 的 CI 全通过；W13 真实浏览器/API 权限场景在本地通过。提交 `6341d00` 的远端 CI 全通过。`fa4049a` 包含 HA facts lag 指标及主备重启、control 写失败恢复回归，本地全量 Go tests、metrics/HA/facts/cmd race、vet、golangci-lint v2.13.2 和 diff 检查均通过；其远端 test job 当时仍在运行。当前工作树新增接管后 facts 序列连续性回归并已通过定向测试，完成后需由 CI 复验。此前 `e1a1f45` lint 暴露的非零 base 游标错误已由 `4bba613` 修正，并由 `6341d00` 全量 CI 验证。现场/部署退出条件仍未满足，当前分支保持 draft，未达正式发布门槛。
 
 ## 调整后的实施计划
 
@@ -98,7 +98,7 @@ W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `b
 - W02 以已接受的 ADR-0001/0003 为约束复核最新版装配；保持 primary 单写、未围栏不自动接管、双副本 durable ACK、显式单副本降级。
 - W01 完成 primary 写入分界后接通完整 journal 链传送和 RFC 1982 serial 回绕处理；继续验证 TCP 分帧、历史清理边界及真实 secondary 互操作。缺历史时始终回退 AXFR。
 - W03 不重复实现已有 REQUEST 分类、server identifier、OFFER/DECLINE、Option 82 allowlist 和有界队列；补齐最新版差异对账与真实 relay/客户端外部验收。
-- W04 已接通租约 generation 与持久事实事件；HA REQUEST/续租在 lease 与 facts 两个 durable watermarks 确认后 ACK，控制库投影仍异步且可重放。剩余工作是断连/重启故障矩阵、长期控制库故障和部署验收。
+- W04 已接通租约 generation 与持久事实事件；HA REQUEST/续租在 lease 与 facts 两个 durable watermarks 确认后 ACK，控制库投影仍异步且可重放；断连、重启、控制写失败恢复和接管后首事件序列连续性有自动化回归。剩余工作是长期控制库故障、旧主回归对账和部署/现场验收。
 - W10 提前处理安全默认、关键审计和“全状态备份能否在新路径恢复”的最小演练。
 
 退出条件：协议反例无错误 ACK/NAK；重复分配、误删记录及半成功 DNS 更新被回归用例拦截；恢复流程可重复执行。

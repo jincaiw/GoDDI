@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // These tests cover the half of the contract that a machine cannot decide: the
@@ -412,6 +414,94 @@ func TestFactsShortfallMustBeNamedToBeAccepted(t *testing.T) {
 	}
 	if role, _ := EffectiveRole(cfg, store); role != config.HARoleStandby {
 		t.Fatalf("facts-gap refusal changed role to %q", role)
+	}
+}
+
+func TestPromotedPrimaryContinuesFactsSequenceWithoutStaleAck(t *testing.T) {
+	store := openStore(t, "promote-facts-sequence")
+	allocator, err := facts.NewSequenceAllocator(store.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(store.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, facts.Envelope{
+		EventID: "before-takeover", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Now().UTC(), PayloadVersion: 1, Payload: json.RawMessage(`{"lease_id":"lease-1"}`),
+	}); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	setMetaText(store.DB, metaSeq, "8")
+	setMetaText(store.DB, metaPeerSeq, "8")
+	setMetaText(store.DB, metaAppliedSeq, "8")
+	setMetaText(store.DB, metaFactsAppliedSeq, "1")
+	setMetaText(store.DB, metaPeerFactsSeq, "1")
+	setMetaText(store.DB, metaPeerSeqAt, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano))
+
+	standbyCfg := testConfig(t, "standby")
+	if _, err := NewOperator(standbyCfg, store).Takeover(TakeoverOptions{
+		Confirmed: true, OldPrimaryCannotWrite: true,
+	}); err != nil {
+		t.Fatalf("takeover without a facts gap: %v", err)
+	}
+
+	promoted, err := NewReplicator(testConfig(t, "primary"), store)
+	if err != nil {
+		t.Fatalf("starting promoted primary: %v", err)
+	}
+	if promoted.FactsAckedSeq() != 0 {
+		t.Fatalf("promoted primary inherited stale facts ACK %d; takeover must reset it", promoted.FactsAckedSeq())
+	}
+	newTx, err := store.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := allocator.NextTx(context.Background(), newTx)
+	if err != nil {
+		_ = newTx.Rollback()
+		t.Fatal(err)
+	}
+	if next != 2 {
+		_ = newTx.Rollback()
+		t.Fatalf("first facts sequence after takeover = %d, want 2", next)
+	}
+	if err := outbox.EnqueueTx(context.Background(), newTx, facts.Envelope{
+		EventID: "after-takeover", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "renew", Generation: 2, Sequence: next, Source: "dhcp",
+		OccurredAt: time.Now().UTC(), PayloadVersion: 1, Payload: json.RawMessage(`{"lease_id":"lease-1"}`),
+	}); err != nil {
+		_ = newTx.Rollback()
+		t.Fatal(err)
+	}
+	if err := newTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := promoted.FactsSequence(); err != nil || got != 2 {
+		t.Fatalf("facts allocator after takeover = %d, %v; want 2", got, err)
+	}
+	if err := promoted.ConfirmFacts(context.Background(), LeaseRow{
+		ID: "lease-1", ScopeID: "scope-1", IPAddress: "192.0.2.51", Status: "active",
+	}, next); err != nil {
+		t.Fatalf("operator-authorized promoted primary confirmation = %v, want nil", err)
+	}
+	if promoted.FactsAckedSeq() != 0 {
+		t.Fatalf("promoted primary reported facts ACK %d without a new mirror, want 0", promoted.FactsAckedSeq())
 	}
 }
 
