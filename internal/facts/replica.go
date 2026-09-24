@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const maxReplicaPageEvents = 1000
+const (
+	maxReplicaPageEvents = 1000
+	maxReplicaPageBytes  = 16 << 20
+)
 
 // ReplicaEventStatus is the producer-side delivery state that must travel
 // with an envelope when a DHCP lease store is mirrored for HA.

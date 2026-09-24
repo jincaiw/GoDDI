@@ -74,6 +74,7 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 	}
 	expected := a.nextAfter + 1
 	encodedEvents := make([][]byte, 0, len(page.Events))
+	encodedBytes := 0
 	for _, event := range page.Events {
 		if event.Envelope.Sequence != expected {
 			return fmt.Errorf("%w: expected=%d got=%d", ErrReplicaSequenceGap, expected, event.Envelope.Sequence)
@@ -81,6 +82,10 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 		encoded, err := json.Marshal(event)
 		if err != nil {
 			return fmt.Errorf("facts: encode replica event %s: %w", event.Envelope.EventID, err)
+		}
+		encodedBytes += len(encoded)
+		if encodedBytes > maxReplicaPageBytes {
+			return errors.New("facts: replica snapshot page exceeds byte limit")
 		}
 		encodedEvents = append(encodedEvents, encoded)
 		expected++
