@@ -19,7 +19,18 @@ type ReplicaSnapshotManifest struct {
 	Version      int    `json:"version"`
 	LastSequence int64  `json:"last_sequence"`
 	EventCount   int64  `json:"event_count"`
+	ChunkCount   int64  `json:"chunk_count"`
 	Digest       string `json:"digest"`
+}
+
+// ReplicaSnapshotChunk is a transport-neutral bounded group of consecutive
+// events. Index is zero-based and FirstSequence/LastSequence bind its declared
+// boundaries to its contents.
+type ReplicaSnapshotChunk struct {
+	Index         int64          `json:"index"`
+	FirstSequence int64          `json:"first_sequence"`
+	LastSequence  int64          `json:"last_sequence"`
+	Events        []ReplicaEvent `json:"events"`
 }
 
 // ReplicaSnapshotAccumulator validates page continuity while building a
@@ -28,6 +39,7 @@ type ReplicaSnapshotAccumulator struct {
 	hash         hash.Hash
 	lastSequence int64
 	eventCount   int64
+	chunkCount   int64
 	nextAfter    int64
 	complete     bool
 	finished     bool
@@ -53,6 +65,9 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 	}
 	if page.LastSequence != a.lastSequence {
 		return fmt.Errorf("facts: replica snapshot high water changed: expected=%d got=%d", a.lastSequence, page.LastSequence)
+	}
+	if len(page.Events) > maxReplicaPageEvents {
+		return errors.New("facts: replica snapshot page exceeds event limit")
 	}
 	if page.NextAfter < a.nextAfter || page.NextAfter > a.lastSequence {
 		return fmt.Errorf("facts: invalid replica snapshot cursor %d after %d (head=%d)", page.NextAfter, a.nextAfter, a.lastSequence)
@@ -85,7 +100,35 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 	}
 	a.nextAfter = page.NextAfter
 	a.complete = page.Complete
+	if len(page.Events) > 0 {
+		a.chunkCount++
+	}
 	return nil
+}
+
+// AddChunk checks the declared chunk index and sequence range before adding
+// its events to the snapshot digest.
+func (a *ReplicaSnapshotAccumulator) AddChunk(chunk ReplicaSnapshotChunk) error {
+	if a == nil || a.hash == nil || a.finished {
+		return errors.New("facts: replica snapshot accumulator is unavailable")
+	}
+	if len(chunk.Events) == 0 {
+		return errors.New("facts: replica snapshot chunk is empty")
+	}
+	if chunk.Index != a.chunkCount {
+		return fmt.Errorf("facts: replica snapshot chunk index=%d expected=%d", chunk.Index, a.chunkCount)
+	}
+	first := chunk.Events[0].Envelope.Sequence
+	last := chunk.Events[len(chunk.Events)-1].Envelope.Sequence
+	if chunk.FirstSequence != first || chunk.LastSequence != last || first != a.nextAfter+1 {
+		return fmt.Errorf("facts: invalid replica snapshot chunk range declared=%d..%d actual=%d..%d expected_start=%d",
+			chunk.FirstSequence, chunk.LastSequence, first, last, a.nextAfter+1)
+	}
+	page := ReplicaPage{
+		LastSequence: a.lastSequence, NextAfter: last,
+		Complete: last == a.lastSequence, Events: chunk.Events,
+	}
+	return a.AddPage(page)
 }
 
 func (a *ReplicaSnapshotAccumulator) Manifest() (ReplicaSnapshotManifest, error) {
@@ -95,6 +138,29 @@ func (a *ReplicaSnapshotAccumulator) Manifest() (ReplicaSnapshotManifest, error)
 	a.finished = true
 	return ReplicaSnapshotManifest{
 		Version: ReplicaSnapshotVersion, LastSequence: a.lastSequence,
-		EventCount: a.eventCount, Digest: hex.EncodeToString(a.hash.Sum(nil)),
+		EventCount: a.eventCount, ChunkCount: a.chunkCount, Digest: hex.EncodeToString(a.hash.Sum(nil)),
 	}, nil
+}
+
+// Verify checks a sender's final manifest against the locally accumulated
+// chunks. Calling it closes the accumulator, whether verification succeeds or
+// fails, so a partial or altered snapshot cannot be retried in place.
+func (a *ReplicaSnapshotAccumulator) Verify(expected ReplicaSnapshotManifest) error {
+	if expected.Version != ReplicaSnapshotVersion || expected.LastSequence < 0 || expected.EventCount < 0 || expected.ChunkCount < 0 {
+		return errors.New("facts: invalid replica snapshot manifest")
+	}
+	if len(expected.Digest) != sha256.Size*2 {
+		return errors.New("facts: invalid replica snapshot digest length")
+	}
+	if _, err := hex.DecodeString(expected.Digest); err != nil {
+		return fmt.Errorf("facts: invalid replica snapshot digest: %w", err)
+	}
+	actual, err := a.Manifest()
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return fmt.Errorf("facts: replica snapshot manifest mismatch: got=%+v expected=%+v", actual, expected)
+	}
+	return nil
 }

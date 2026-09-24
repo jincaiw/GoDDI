@@ -97,8 +97,36 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != ReplicaSnapshotVersion || manifest.LastSequence != 3 || manifest.EventCount != 3 || len(manifest.Digest) != 64 {
+	if manifest.Version != ReplicaSnapshotVersion || manifest.LastSequence != 3 || manifest.EventCount != 3 || manifest.ChunkCount != 2 || len(manifest.Digest) != 64 {
 		t.Fatalf("snapshot manifest = %+v", manifest)
+	}
+	verifier, err := NewReplicaSnapshotAccumulator(first.LastSequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.AddChunk(ReplicaSnapshotChunk{Index: 0, FirstSequence: 1, LastSequence: 2, Events: first.Events}); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.AddChunk(ReplicaSnapshotChunk{Index: 1, FirstSequence: 3, LastSequence: 3, Events: last.Events}); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify(manifest); err != nil {
+		t.Fatalf("verify complete snapshot: %v", err)
+	}
+	rechunked, err := NewReplicaSnapshotAccumulator(first.LastSequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allEvents := append(append([]ReplicaEvent(nil), first.Events...), last.Events...)
+	if err := rechunked.AddChunk(ReplicaSnapshotChunk{Index: 0, FirstSequence: 1, LastSequence: 3, Events: allEvents}); err != nil {
+		t.Fatal(err)
+	}
+	rechunkedManifest, err := rechunked.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rechunkedManifest.Digest != manifest.Digest || rechunkedManifest.ChunkCount != 1 {
+		t.Fatalf("digest changed with transport chunking: split=%+v combined=%+v", manifest, rechunkedManifest)
 	}
 }
 
@@ -109,6 +137,26 @@ func TestReplicaSnapshotAccumulatorRejectsChangedHighWater(t *testing.T) {
 	}
 	if err := accumulator.AddPage(ReplicaPage{LastSequence: 3, NextAfter: 0}); err == nil {
 		t.Fatal("page with changed allocator high water was accepted")
+	}
+}
+
+func TestReplicaSnapshotAccumulatorRejectsChunkBoundaryMismatch(t *testing.T) {
+	accumulator, err := NewReplicaSnapshotAccumulator(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := ReplicaSnapshotChunk{
+		Index: 0, FirstSequence: 2, LastSequence: 2,
+		Events: []ReplicaEvent{{Envelope: Envelope{Sequence: 1}}},
+	}
+	if err := accumulator.AddChunk(chunk); err == nil {
+		t.Fatal("chunk with a false declared boundary was accepted")
+	}
+	chunk.FirstSequence = 1
+	chunk.LastSequence = 1
+	chunk.Index = 1
+	if err := accumulator.AddChunk(chunk); err == nil {
+		t.Fatal("chunk with an out-of-order index was accepted")
 	}
 }
 

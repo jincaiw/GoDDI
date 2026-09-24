@@ -263,7 +263,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
 - HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管：现有 HA 复制只镜像 lease rows，不复制 facts 序列和 outbox；启用后会在接管时造成序列断档。新增 ADR-0009 固化双水位、复制确认、分块快照完整性和接管约束；这些是实施约束而非完成功能。W04 仍需实现 HA 故障转移时的事实复制、控制库与 DHCP 数据库分离时的故障恢复及真实网络端到端演练。本批接通非 HA 默认生产者和消费者，但不发布版本。
-- W04 HA 快照基础新增 `ObservationOutbox.ReadReplicaPageTx` 和 `ReplicaSnapshotAccumulator`：同一只读事务按 allocator 水位有界读取 envelope 与 delivery marker；累积器校验跨页游标/固定高水位并生成 SHA-256 manifest，对缺号、不完整快照 fail closed。定向 `go test ./internal/facts` 通过；尚无 HA wire 编码、备端 staging/原子应用、水位确认和 takeover 接线，因此没有改变 HA 部署行为或发布边界。
+- W04 HA 快照基础新增 `ObservationOutbox.ReadReplicaPageTx` 和 `ReplicaSnapshotAccumulator`：同一只读事务按 allocator 水位有界读取 envelope 与 delivery marker；累积器校验跨页游标/固定高水位、chunk 序号与首尾范围，生成可由接收端核对且不受分块大小影响的 SHA-256 manifest，对缺号、不完整快照 fail closed。定向 `go test ./internal/facts` 与 `go vet ./internal/facts` 通过；尚无 HA wire 集成、备端 staging/原子应用、水位确认和 takeover 接线，因此没有改变 HA 部署行为或发布边界。
 
 ### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 

@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxReplicaPageEvents = 1000
+
 // ReplicaEventStatus is the producer-side delivery state that must travel
 // with an envelope when a DHCP lease store is mirrored for HA.
 type ReplicaEventStatus string
@@ -66,7 +68,7 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 	if after < 0 {
 		return ReplicaPage{}, fmt.Errorf("facts: invalid replica cursor %d", after)
 	}
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > maxReplicaPageEvents {
 		limit = 256
 	}
 	var page ReplicaPage
