@@ -1,4 +1,4 @@
-import client, { get, getList, post, put, del } from './client'
+import { get, getList, post, put, del } from './client'
 
 // --- DHCP Scopes ---
 

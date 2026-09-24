@@ -1,0 +1,40 @@
+diff --git a/lib/symbol-factory.js b/lib/symbol-factory.js
+index d4ecdbb3a535eaf23ffd2bb6df9d120044d2dbb8..85bbf13c434acc5054fb184d89e2f4dfd5ea4bee 100644
+--- a/lib/symbol-factory.js
++++ b/lib/symbol-factory.js
+@@ -1,7 +1,6 @@
+ const processor = require('posthtml-svg-mode');
+ const renameId = require('posthtml-rename-id');
+ const normalizeViewBox = require('./transformations/normalize-viewbox');
+-const rasterToSVG = require('./transformations/raster-to-svg');
+ const prefixStyleSelectors = require('./transformations/prefix-style-selectors');
+ const svgToSymbol = require('./transformations/svg-to-symbol');
+ 
+@@ -16,9 +15,10 @@ function symbolFactory(options) {
+   const { id } = options;
+   const plugins = [];
+ 
+-  // convert raster image to svg
++  // GoDDI's icon directory contains SVG source files only. Keep their markup
++  // as text instead of passing it through image-size's raster parser.
+   const content = Buffer.isBuffer(options.content)
+-    ? rasterToSVG(options.content)
++    ? options.content.toString('utf8')
+     : options.content;
+ 
+   plugins.push(normalizeViewBox());
+diff --git a/package.json b/package.json
+index 8f8f937c34bb8bf484e40a9862c5f8fb4af3dfb5..e651f71b4c64a517913750f69750b788336c2018 100644
+--- a/package.json
++++ b/package.json
+@@ -16,7 +16,6 @@
+     "bluebird": "^3.5.0",
+     "clone": "^2.1.1",
+     "he": "^1.1.1",
+-    "image-size": "^0.5.1",
+     "loader-utils": "^1.1.0",
+     "merge-options": "1.0.1",
+     "micromatch": "3.1.0",
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+deleted file mode 100644
+index acc7bb74d535fd1b53b905f2e47d84e203584775..0000000000000000000000000000000000000000

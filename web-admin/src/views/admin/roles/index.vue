@@ -1,57 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('admin.roles.title')">
-      <n-button v-if="perm.canWrite('role')" type="primary" @click="openCreate">{{ t('admin.roles.createRole') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="roles"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: Role) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Create/Edit Role Modal -->
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.roles.editRole') : t('admin.roles.createRole')" preset="card" style="width: 450px;">
-      <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" :disabled="!perm.canWrite('role')" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('role')" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('role')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Assign Permissions Modal -->
-    <n-modal v-if="showPermModal" v-model:show="showPermModal" :title="t('admin.roles.assignPermissions')" preset="card" style="width: 550px;">
-      <n-checkbox-group v-model:value="selectedPerms">
-        <n-space vertical>
-          <div v-for="group in permissionGroups" :key="group.resource">
-            <n-text strong>{{ t(`perm.resource.${group.resource}`) }}</n-text>
-            <n-space style="margin-top: 4px; margin-left: 12px;">
-              <n-checkbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" :disabled="!perm.canWrite('role')" />
-            </n-space>
-          </div>
-        </n-space>
-      </n-checkbox-group>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showPermModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('role')" @click="handleAssignPermissions">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -172,3 +118,57 @@ async function handleAssignPermissions() {
 
 onMounted(() => { loadData(); loadPermissions() })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('admin.roles.title')">
+      <NButton v-if="perm.canWrite('role')" type="primary" @click="openCreate">{{ t('admin.roles.createRole') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="roles"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: Role) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Create/Edit Role Modal -->
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.roles.editRole') : t('admin.roles.createRole')" preset="card" style="width: 450px;">
+      <NForm :model="formData" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" :disabled="!perm.canWrite('role')" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('role')" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('role')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Assign Permissions Modal -->
+    <NModal v-if="showPermModal" v-model:show="showPermModal" :title="t('admin.roles.assignPermissions')" preset="card" style="width: 550px;">
+      <NCheckboxGroup v-model:value="selectedPerms">
+        <NSpace vertical>
+          <div v-for="group in permissionGroups" :key="group.resource">
+            <NText strong>{{ t(`perm.resource.${group.resource}`) }}</NText>
+            <NSpace style="margin-top: 4px; margin-left: 12px;">
+              <NCheckbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" :disabled="!perm.canWrite('role')" />
+            </NSpace>
+          </div>
+        </NSpace>
+      </NCheckboxGroup>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showPermModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('role')" @click="handleAssignPermissions">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

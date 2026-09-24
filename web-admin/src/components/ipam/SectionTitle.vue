@@ -1,16 +1,16 @@
-<template>
-  <h4 class="section-title">
-    <span>{{ text }}</span>
-    <n-tag v-if="count !== undefined" size="tiny" :bordered="false">{{ count }}</n-tag>
-  </h4>
-</template>
-
 <script setup lang="ts">
 defineProps<{
   text: string
   count?: number
 }>()
 </script>
+
+<template>
+  <h4 class="section-title">
+    <span>{{ text }}</span>
+    <NTag v-if="count !== undefined" size="tiny" :bordered="false">{{ count }}</NTag>
+  </h4>
+</template>
 
 <style scoped>
 .section-title {

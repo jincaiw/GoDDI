@@ -1,142 +1,3 @@
-<template>
-  <n-modal
-    :show="show"
-    preset="card"
-    :title="t('ipam.pool.title')"
-    style="width: 780px;"
-    @update:show="emit('update:show', $event)"
-  >
-    <n-alert v-if="subnetLabel" type="default" :show-icon="false" style="margin-bottom: 14px;">
-      {{ t('ipam.subnets.title') }}: {{ subnetLabel }}
-    </n-alert>
-
-    <n-spin :show="loading">
-      <!-- A plan that could not be read is not an empty plan. Saying so is the
-           difference between "nothing to report" and "we did not look". -->
-      <n-alert v-if="loadFailed" type="error" :title="t('ipam.pool.planFailed')">
-        {{ loadFailed }}
-      </n-alert>
-
-      <template v-else-if="plan">
-        <n-alert v-if="!perm.canWrite('dhcp')" type="warning" :title="t('ipam.pool.noDhcpPermission')" style="margin-bottom: 14px;">
-          {{ t('ipam.pool.noDhcpPermissionHint') }}
-        </n-alert>
-
-        <!-- The world moved between the plan and the create. The operator is
-             holding an approval of something that is no longer true, so the
-             only useful action is to look again. -->
-        <n-alert v-if="stale" type="warning" :title="t('ipam.pool.stale')" style="margin-bottom: 16px;">
-          {{ t('ipam.pool.staleHint') }}
-        </n-alert>
-
-        <n-steps :current="step === 'plan' ? 1 : 2" size="small" style="margin-bottom: 18px;">
-          <n-step :title="t('ipam.pool.stepPlan')" />
-          <n-step :title="t('ipam.pool.stepConfirm')" />
-        </n-steps>
-
-        <!-- Step 1: what IPAM says about the pool this subnet would become. -->
-        <template v-if="step === 'plan'">
-          <n-alert v-if="plan.conflicts.length > 0" type="error" :title="t('ipam.pool.conflicts')" style="margin-bottom: 14px;">
-            <ul style="margin: 0; padding-left: 18px;">
-              <li v-for="(conflict, index) in plan.conflicts" :key="index">{{ conflict }}</li>
-            </ul>
-          </n-alert>
-
-          <n-alert v-if="plan.warnings.length > 0" type="warning" :title="t('ipam.pool.warnings')" style="margin-bottom: 14px;">
-            <ul style="margin: 0; padding-left: 18px;">
-              <li v-for="(warning, index) in plan.warnings" :key="index">{{ warning }}</li>
-            </ul>
-          </n-alert>
-
-          <n-descriptions :column="2" bordered size="small" label-placement="left" style="margin-bottom: 18px;">
-            <n-descriptions-item :label="t('ipam.subnets.cidr')" :span="2">{{ plan.cidr }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.range')" :span="2">{{ plan.start_ip }} – {{ plan.end_ip }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.detail.router')">
-              {{ plan.router || '—' }}
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.routerSource')">{{ routerSourceText }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.leaseTime')">{{ draft?.lease_time ?? '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.fingerprint')">
-              <n-text code>{{ shortFingerprint(plan.fingerprint) }}</n-text>
-            </n-descriptions-item>
-          </n-descriptions>
-
-          <section-title :text="t('ipam.pool.excluded')" :count="plan.excluded.length" />
-          <!-- A DHCP scope carries no exclusion list, so this is not a preview
-               of what the scope will refuse: it is a list of addresses the
-               allocator will still hand out. Reading it as a safety net is the
-               mistake the warning below exists to prevent. -->
-          <p v-if="plan.excluded.length === 0" class="empty">{{ t('ipam.pool.excludedEmpty') }}</p>
-          <template v-else>
-            <n-alert type="warning" :show-icon="false" style="margin-bottom: 10px;">
-              {{ t('ipam.pool.excludedHint') }}
-            </n-alert>
-            <n-data-table
-              size="small"
-              :bordered="false"
-              :single-line="false"
-              :max-height="220"
-              :row-key="(row: PlanAddress) => row.ip"
-              :columns="excludedColumns"
-              :data="plan.excluded"
-            />
-          </template>
-
-          <n-form label-placement="left" label-width="110" style="margin-top: 18px;">
-            <n-form-item :label="t('common.name')">
-              <n-input v-model:value="name" :placeholder="draft?.name || plan.subnet_name" />
-            </n-form-item>
-          </n-form>
-        </template>
-
-        <!-- Step 2: the scope itself, which is what gets approved. -->
-        <template v-else>
-          <n-alert type="info" :show-icon="false" style="margin-bottom: 14px;">
-            {{ t('ipam.pool.confirmHint') }}
-          </n-alert>
-
-          <n-descriptions :column="2" bordered size="small" label-placement="left">
-            <n-descriptions-item :label="t('common.name')" :span="2">{{ name || draft?.name || plan.subnet_name }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.subnets.cidr')" :span="2">{{ draft?.subnet || plan.cidr }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.range')" :span="2">{{ draft?.start_ip }} – {{ draft?.end_ip }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.mask')">{{ draft?.subnet_mask || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.detail.router')">{{ draft?.router || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.leaseTime')">{{ draft?.lease_time ?? '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.pool.fingerprint')">
-              <n-text code>{{ shortFingerprint(plan.fingerprint) }}</n-text>
-            </n-descriptions-item>
-          </n-descriptions>
-        </template>
-      </template>
-    </n-spin>
-
-    <template #footer>
-      <n-space justify="end">
-        <n-button v-if="step === 'plan'" @click="close">{{ t('common.cancel') }}</n-button>
-        <n-button v-else :disabled="creating" @click="step = 'plan'">{{ t('ipam.pool.back') }}</n-button>
-
-        <!-- Re-planning is offered only when there is something to re-plan:
-             a stale approval, or a plan that never loaded. -->
-        <n-button v-if="stale || loadFailed" :loading="loading" @click="load()">
-          {{ t('ipam.pool.replan') }}
-        </n-button>
-
-        <n-button
-          v-if="step === 'plan'"
-          type="primary"
-          :disabled="!plan || hasBlockingErrors || !!loadFailed"
-          @click="step = 'confirm'"
-        >
-          {{ t('ipam.pool.next') }}
-        </n-button>
-        <n-button v-else type="primary" :loading="creating" :disabled="!perm.canWrite('dhcp')" @click="create">
-          {{ t('ipam.pool.create') }}
-        </n-button>
-      </n-space>
-    </template>
-  </n-modal>
-</template>
-
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -296,6 +157,153 @@ watch(
   },
 )
 </script>
+
+<template>
+  <NModal
+    :show="show"
+    preset="card"
+    :title="t('ipam.pool.title')"
+    style="width: 780px;"
+    @update:show="emit('update:show', $event)"
+  >
+    <NAlert v-if="subnetLabel" type="default" :show-icon="false" style="margin-bottom: 14px;">
+      {{ t('ipam.subnets.title') }}: {{ subnetLabel }}
+    </NAlert>
+
+    <NSpin :show="loading">
+      <!--
+ A plan that could not be read is not an empty plan. Saying so is the
+           difference between "nothing to report" and "we did not look".
+-->
+      <NAlert v-if="loadFailed" type="error" :title="t('ipam.pool.planFailed')">
+        {{ loadFailed }}
+      </NAlert>
+
+      <template v-else-if="plan">
+        <NAlert v-if="!perm.canWrite('dhcp')" type="warning" :title="t('ipam.pool.noDhcpPermission')" style="margin-bottom: 14px;">
+          {{ t('ipam.pool.noDhcpPermissionHint') }}
+        </NAlert>
+
+        <!--
+ The world moved between the plan and the create. The operator is
+             holding an approval of something that is no longer true, so the
+             only useful action is to look again.
+-->
+        <NAlert v-if="stale" type="warning" :title="t('ipam.pool.stale')" style="margin-bottom: 16px;">
+          {{ t('ipam.pool.staleHint') }}
+        </NAlert>
+
+        <NSteps :current="step === 'plan' ? 1 : 2" size="small" style="margin-bottom: 18px;">
+          <NStep :title="t('ipam.pool.stepPlan')" />
+          <NStep :title="t('ipam.pool.stepConfirm')" />
+        </NSteps>
+
+        <!-- Step 1: what IPAM says about the pool this subnet would become. -->
+        <template v-if="step === 'plan'">
+          <NAlert v-if="plan.conflicts.length > 0" type="error" :title="t('ipam.pool.conflicts')" style="margin-bottom: 14px;">
+            <ul style="margin: 0; padding-left: 18px;">
+              <li v-for="(conflict, index) in plan.conflicts" :key="index">{{ conflict }}</li>
+            </ul>
+          </NAlert>
+
+          <NAlert v-if="plan.warnings.length > 0" type="warning" :title="t('ipam.pool.warnings')" style="margin-bottom: 14px;">
+            <ul style="margin: 0; padding-left: 18px;">
+              <li v-for="(warning, index) in plan.warnings" :key="index">{{ warning }}</li>
+            </ul>
+          </NAlert>
+
+          <NDescriptions :column="2" bordered size="small" label-placement="left" style="margin-bottom: 18px;">
+            <NDescriptionsItem :label="t('ipam.subnets.cidr')" :span="2">{{ plan.cidr }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.range')" :span="2">{{ plan.start_ip }} – {{ plan.end_ip }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.detail.router')">
+              {{ plan.router || '—' }}
+            </NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.routerSource')">{{ routerSourceText }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.leaseTime')">{{ draft?.lease_time ?? '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.fingerprint')">
+              <NText code>{{ shortFingerprint(plan.fingerprint) }}</NText>
+            </NDescriptionsItem>
+          </NDescriptions>
+
+          <SectionTitle :text="t('ipam.pool.excluded')" :count="plan.excluded.length" />
+          <!--
+ A DHCP scope carries no exclusion list, so this is not a preview
+               of what the scope will refuse: it is a list of addresses the
+               allocator will still hand out. Reading it as a safety net is the
+               mistake the warning below exists to prevent.
+-->
+          <p v-if="plan.excluded.length === 0" class="empty">{{ t('ipam.pool.excludedEmpty') }}</p>
+          <template v-else>
+            <NAlert type="warning" :show-icon="false" style="margin-bottom: 10px;">
+              {{ t('ipam.pool.excludedHint') }}
+            </NAlert>
+            <NDataTable
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :max-height="220"
+              :row-key="(row: PlanAddress) => row.ip"
+              :columns="excludedColumns"
+              :data="plan.excluded"
+            />
+          </template>
+
+          <NForm label-placement="left" label-width="110" style="margin-top: 18px;">
+            <NFormItem :label="t('common.name')">
+              <NInput v-model:value="name" :placeholder="draft?.name || plan.subnet_name" />
+            </NFormItem>
+          </NForm>
+        </template>
+
+        <!-- Step 2: the scope itself, which is what gets approved. -->
+        <template v-else>
+          <NAlert type="info" :show-icon="false" style="margin-bottom: 14px;">
+            {{ t('ipam.pool.confirmHint') }}
+          </NAlert>
+
+          <NDescriptions :column="2" bordered size="small" label-placement="left">
+            <NDescriptionsItem :label="t('common.name')" :span="2">{{ name || draft?.name || plan.subnet_name }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.subnets.cidr')" :span="2">{{ draft?.subnet || plan.cidr }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.range')" :span="2">{{ draft?.start_ip }} – {{ draft?.end_ip }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.mask')">{{ draft?.subnet_mask || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.detail.router')">{{ draft?.router || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.leaseTime')">{{ draft?.lease_time ?? '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.pool.fingerprint')">
+              <NText code>{{ shortFingerprint(plan.fingerprint) }}</NText>
+            </NDescriptionsItem>
+          </NDescriptions>
+        </template>
+      </template>
+    </NSpin>
+
+    <template #footer>
+      <NSpace justify="end">
+        <NButton v-if="step === 'plan'" @click="close">{{ t('common.cancel') }}</NButton>
+        <NButton v-else :disabled="creating" @click="step = 'plan'">{{ t('ipam.pool.back') }}</NButton>
+
+        <!--
+ Re-planning is offered only when there is something to re-plan:
+             a stale approval, or a plan that never loaded.
+-->
+        <NButton v-if="stale || loadFailed" :loading="loading" @click="load()">
+          {{ t('ipam.pool.replan') }}
+        </NButton>
+
+        <NButton
+          v-if="step === 'plan'"
+          type="primary"
+          :disabled="!plan || hasBlockingErrors || !!loadFailed"
+          @click="step = 'confirm'"
+        >
+          {{ t('ipam.pool.next') }}
+        </NButton>
+        <NButton v-else type="primary" :loading="creating" :disabled="!perm.canWrite('dhcp')" @click="create">
+          {{ t('ipam.pool.create') }}
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
+</template>
 
 <style scoped>
 .empty {

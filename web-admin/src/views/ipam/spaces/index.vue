@@ -1,36 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('ipam.spaces.title')">
-      <n-button v-if="perm.canWrite('ipam')" type="primary" @click="openCreate">{{ t('ipam.spaces.createSpace') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="spaces"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: IPAMSpace) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('ipam.spaces.editSpace') : t('ipam.spaces.createSpace')" preset="card" style="width: 450px;">
-      <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -104,3 +71,36 @@ async function handleDelete() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('ipam.spaces.title')">
+      <NButton v-if="perm.canWrite('ipam')" type="primary" @click="openCreate">{{ t('ipam.spaces.createSpace') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="spaces"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: IPAMSpace) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('ipam.spaces.editSpace') : t('ipam.spaces.createSpace')" preset="card" style="width: 450px;">
+      <NForm :model="formData" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

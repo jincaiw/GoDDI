@@ -1,256 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('settings.configVersions.title')">
-      <n-button @click="refreshAll">{{ t('common.refresh') }}</n-button>
-    </page-header>
-
-    <!-- Resource types this instance can publish. -->
-    <n-card :title="t('settings.configVersions.resourceTypesTitle')" size="small" class="cv-card">
-      <n-alert v-if="typesError" type="warning" :show-icon="true">{{ typesError }}</n-alert>
-      <template v-else>
-        <n-space v-if="resourceTypes.length">
-          <n-tag v-for="rt in resourceTypes" :key="rt" type="info" size="small">{{ resourceTypeLabel(rt) }}</n-tag>
-        </n-space>
-        <n-text v-else depth="3">{{ t('settings.configVersions.resourceTypesEmpty') }}</n-text>
-      </template>
-    </n-card>
-
-    <!-- Revision history. -->
-    <n-card :title="t('settings.configVersions.revisionsTitle')" size="small" class="cv-card">
-      <div class="cv-filter">
-        <n-space align="center">
-          <n-select
-            v-model:value="filterType"
-            :options="typeOptions"
-            :placeholder="t('settings.configVersions.filterResourceType')"
-            clearable
-            style="width: 200px;"
-            @update:value="handleFilterChange"
-          />
-          <n-input
-            v-model:value="filterId"
-            :placeholder="t('settings.configVersions.resourceIdPlaceholder')"
-            clearable
-            style="width: 300px;"
-            @keyup.enter="handleFilterChange"
-          />
-          <n-button type="primary" @click="handleFilterChange">{{ t('common.search') }}</n-button>
-        </n-space>
-      </div>
-
-      <n-alert v-if="revisionsError" type="error" :show-icon="true" class="cv-alert">{{ revisionsError }}</n-alert>
-
-      <n-data-table
-        :columns="revisionColumns"
-        :data="revisions"
-        :loading="loadingRevisions"
-        :row-key="(row: ConfigRevision) => row.id"
-        :row-props="revisionRowProps"
-        :pagination="pagination"
-        remote
-        :bordered="true"
-        size="small"
-        @update:page="handlePageChange"
-        @update:page-size="handlePageSizeChange"
-      />
-      <n-text v-if="!loadingRevisions && revisions.length === 0 && !revisionsError" depth="3" class="cv-empty">
-        {{ t('settings.configVersions.emptyRevisions') }}
-      </n-text>
-    </n-card>
-
-    <!-- Diff between two revisions. -->
-    <n-card :title="t('settings.configVersions.diffTitle')" size="small" class="cv-card">
-      <n-text depth="3" class="cv-hint">{{ t('settings.configVersions.diffHint') }}</n-text>
-      <n-space align="center" class="cv-filter">
-        <n-select
-          v-model:value="diffFrom"
-          :options="revisionOptions"
-          :placeholder="t('settings.configVersions.diffFrom')"
-          style="width: 220px;"
-        />
-        <span>→</span>
-        <n-select
-          v-model:value="diffTo"
-          :options="revisionOptions"
-          :placeholder="t('settings.configVersions.diffTo')"
-          style="width: 220px;"
-        />
-        <n-button type="primary" :disabled="diffFrom === null || diffTo === null" :loading="diffLoading" @click="computeDiff">
-          {{ t('settings.configVersions.computeDiff') }}
-        </n-button>
-      </n-space>
-
-      <n-alert v-if="diffError" type="error" :show-icon="true" class="cv-alert">{{ diffError }}</n-alert>
-
-      <template v-if="diffComputed && !diffError">
-        <n-alert v-if="fieldChanges.length === 0 && recordDiffRows.length === 0" type="success" :show-icon="true">
-          {{ t('settings.configVersions.noChanges') }}
-        </n-alert>
-
-        <template v-else>
-          <n-divider>{{ t('settings.configVersions.fieldChanges') }}</n-divider>
-          <n-data-table
-            v-if="fieldChanges.length"
-            :columns="fieldChangeColumns"
-            :data="fieldChanges"
-            :row-key="(row: ConfigFieldChange) => row.field"
-            :bordered="true"
-            size="small"
-          />
-          <n-text v-else depth="3">{{ t('settings.configVersions.noFieldChanges') }}</n-text>
-
-          <template v-if="isRecordsType">
-            <n-divider>{{ t('settings.configVersions.recordChanges') }}</n-divider>
-            <n-text depth="3" class="cv-hint">{{ t('settings.configVersions.recordChangesHint') }}</n-text>
-            <n-data-table
-              v-if="recordDiffRows.length"
-              :columns="recordDiffColumns"
-              :data="recordDiffRows"
-              :bordered="true"
-              size="small"
-              :row-key="recordDiffKey"
-            />
-            <n-text v-else depth="3">{{ t('settings.configVersions.noRecordChanges') }}</n-text>
-            <n-text v-if="recordDiffRows.length" depth="3" class="cv-hint">
-              {{ t('settings.configVersions.recordDiffSummary', recordDiffCounts) }}
-            </n-text>
-          </template>
-        </template>
-      </template>
-    </n-card>
-
-    <!-- Dry-run publish. -->
-    <n-card :title="t('settings.configVersions.publishTitle')" size="small" class="cv-card">
-      <n-text depth="3" class="cv-hint">{{ t('settings.configVersions.publishHint') }}</n-text>
-      <n-alert v-if="!isRecordsType" type="info" :show-icon="true" class="cv-alert">
-        {{ t('settings.configVersions.publishApiOnly') }}
-      </n-alert>
-      <template v-else>
-        <n-form-item :label="t('settings.configVersions.contentJson')" label-placement="top">
-          <n-input v-model:value="contentText" type="textarea" :rows="12" spellcheck="false" />
-        </n-form-item>
-        <n-alert v-if="publishError" type="error" :show-icon="true" class="cv-alert">{{ publishError }}</n-alert>
-        <n-button
-          type="primary"
-          :disabled="!canWrite || !filterId || filterType !== 'dns_records'"
-          :loading="publishLoading"
-          @click="runDryRun"
-        >
-          {{ t('settings.configVersions.dryRun') }}
-        </n-button>
-        <n-alert v-if="!canWrite" type="warning" :show-icon="true" class="cv-alert">
-          {{ t('settings.configVersions.writeRequired') }}
-        </n-alert>
-
-        <template v-if="dryRunResult">
-          <n-divider>{{ t('settings.configVersions.dryRunResult') }}</n-divider>
-          <n-descriptions :column="2" size="small" bordered>
-            <n-descriptions-item :label="t('settings.configVersions.dryRunBaseRevision')">
-              {{ dryRunResult.base_revision }}
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('settings.configVersions.dryRunReplayed')">
-              {{ dryRunResult.replayed ? t('common.yesOrNo.yes') : t('common.yesOrNo.no') }}
-            </n-descriptions-item>
-          </n-descriptions>
-          <n-data-table
-            v-if="dryRunResult.changes.length"
-            :columns="fieldChangeColumns"
-            :data="dryRunResult.changes"
-            :row-key="(row: ConfigFieldChange) => row.field"
-            :bordered="true"
-            size="small"
-            class="cv-table-gap"
-          />
-          <n-text v-else depth="3">{{ t('settings.configVersions.noChanges') }}</n-text>
-        </template>
-      </template>
-    </n-card>
-
-    <!-- Data-plane release queue. -->
-    <n-card :title="t('settings.configVersions.queueTitle')" size="small" class="cv-card">
-      <n-space align="center" class="cv-stats">
-        <n-statistic :label="t('settings.configVersions.queuePending')" :value="releaseStats.pending" />
-        <n-statistic :label="t('settings.configVersions.queueFailed')">
-          <n-text :type="releaseStats.failed > 0 ? 'error' : undefined">{{ releaseStats.failed }}</n-text>
-        </n-statistic>
-        <n-button
-          v-if="writeAllowed"
-          type="warning"
-          size="small"
-          :disabled="releaseStats.failed === 0"
-          :loading="retrying"
-          @click="retryFailed()"
-        >
-          {{ t('settings.configVersions.retryFailed') }}
-        </n-button>
-      </n-space>
-
-      <n-alert v-if="queueError" type="error" :show-icon="true" class="cv-alert">{{ queueError }}</n-alert>
-
-      <n-data-table
-        :columns="releaseColumns"
-        :data="releases"
-        :loading="loadingQueue"
-        :row-key="(row: ConfigRelease) => String(row.id)"
-        :bordered="true"
-        size="small"
-      />
-      <n-text v-if="!loadingQueue && releases.length === 0 && !queueError" depth="3" class="cv-empty">
-        {{ t('settings.configVersions.queueEmpty') }}
-      </n-text>
-    </n-card>
-
-    <!-- Rollback confirmation. -->
-    <n-modal
-      v-model:show="showRollback"
-      preset="card"
-      :title="t('settings.configVersions.rollbackTitle')"
-      style="width: 520px;"
-    >
-      <n-descriptions :column="1" size="small" bordered>
-        <n-descriptions-item :label="t('settings.configVersions.resourceType')">
-          {{ rollbackRow ? resourceTypeLabel(rollbackRow.resource_type) : '' }}
-        </n-descriptions-item>
-        <n-descriptions-item :label="t('settings.configVersions.resourceId')">
-          {{ rollbackRow?.resource_id }}
-        </n-descriptions-item>
-        <n-descriptions-item :label="t('settings.configVersions.rollbackTarget')">
-          #{{ rollbackRow?.revision }}
-        </n-descriptions-item>
-      </n-descriptions>
-
-      <n-form-item :label="t('settings.configVersions.rollbackExpected')" label-placement="top">
-        <n-input-number v-model:value="rollbackExpected" :min="0" style="width: 160px;" />
-        <template #feedback>
-          <span class="cv-hint">{{ t('settings.configVersions.rollbackExpectedHint') }}</span>
-        </template>
-      </n-form-item>
-      <n-form-item :label="t('settings.configVersions.rollbackNote')" label-placement="top">
-        <n-input v-model:value="rollbackNote" />
-      </n-form-item>
-
-      <n-alert v-if="rollbackError" type="error" :show-icon="true">{{ rollbackError }}</n-alert>
-      <n-alert v-if="rollbackConflict" type="warning" :show-icon="true" class="cv-alert">
-        {{ t('settings.configVersions.conflictBody', { message: rollbackConflict }) }}
-      </n-alert>
-
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showRollback = false">{{ t('common.cancel') }}</n-button>
-          <n-button
-            type="warning"
-            :loading="rollbackLoading"
-            :disabled="!writeAllowed || rollbackBaselineLoading"
-            @click="submitRollback"
-          >
-            {{ t('settings.configVersions.rollbackConfirm') }}
-          </n-button>
-        </n-space>
-      </template>
-    </n-modal>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -360,6 +107,8 @@ async function loadRevisions() {
   }
 }
 
+const diffComputed = ref(false)
+
 function handleFilterChange() {
   pagination.page = 1
   diffComputed.value = false
@@ -430,7 +179,6 @@ const diffFrom = ref<number | null>(null)
 const diffTo = ref<number | null>(null)
 const diffLoading = ref(false)
 const diffError = ref('')
-const diffComputed = ref(false)
 const fieldChanges = ref<ConfigFieldChange[]>([])
 const recordDiffRows = ref<RecordDiffRow[]>([])
 
@@ -683,6 +431,13 @@ function prefillContent() {
   }
 }
 
+// The newest revision of the currently filtered resource, which is what a
+// publish or rollback must cite as its optimistic-concurrency baseline.
+const currentRevision = computed(() => {
+  if (!filterType.value || !filterId.value.trim() || revisions.value.length === 0) return 0
+  return revisions.value.reduce((max, r) => Math.max(max, r.revision), 0)
+})
+
 async function runDryRun() {
   publishLoading.value = true
   publishError.value = ''
@@ -692,7 +447,7 @@ async function runDryRun() {
     try {
       content = JSON.parse(contentText.value || '{}')
     } catch (err: unknown) {
-      throw new Error(t('settings.configVersions.invalidJson'))
+      throw new Error(t('settings.configVersions.invalidJson'), { cause: err })
     }
     const res = await publishConfig({
       resource_type: 'dns_records',
@@ -708,13 +463,6 @@ async function runDryRun() {
     publishLoading.value = false
   }
 }
-
-// The newest revision of the currently filtered resource, which is what a
-// publish or rollback must cite as its optimistic-concurrency baseline.
-const currentRevision = computed(() => {
-  if (!filterType.value || !filterId.value.trim() || revisions.value.length === 0) return 0
-  return revisions.value.reduce((max, r) => Math.max(max, r.revision), 0)
-})
 
 // --- Rollback --------------------------------------------------------------
 
@@ -896,6 +644,259 @@ onMounted(() => {
   refreshAll()
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('settings.configVersions.title')">
+      <NButton @click="refreshAll">{{ t('common.refresh') }}</NButton>
+    </PageHeader>
+
+    <!-- Resource types this instance can publish. -->
+    <NCard :title="t('settings.configVersions.resourceTypesTitle')" size="small" class="cv-card">
+      <NAlert v-if="typesError" type="warning" :show-icon="true">{{ typesError }}</NAlert>
+      <template v-else>
+        <NSpace v-if="resourceTypes.length">
+          <NTag v-for="rt in resourceTypes" :key="rt" type="info" size="small">{{ resourceTypeLabel(rt) }}</NTag>
+        </NSpace>
+        <NText v-else depth="3">{{ t('settings.configVersions.resourceTypesEmpty') }}</NText>
+      </template>
+    </NCard>
+
+    <!-- Revision history. -->
+    <NCard :title="t('settings.configVersions.revisionsTitle')" size="small" class="cv-card">
+      <div class="cv-filter">
+        <NSpace align="center">
+          <NSelect
+            v-model:value="filterType"
+            :options="typeOptions"
+            :placeholder="t('settings.configVersions.filterResourceType')"
+            clearable
+            style="width: 200px;"
+            @update:value="handleFilterChange"
+          />
+          <NInput
+            v-model:value="filterId"
+            :placeholder="t('settings.configVersions.resourceIdPlaceholder')"
+            clearable
+            style="width: 300px;"
+            @keyup.enter="handleFilterChange"
+          />
+          <NButton type="primary" @click="handleFilterChange">{{ t('common.search') }}</NButton>
+        </NSpace>
+      </div>
+
+      <NAlert v-if="revisionsError" type="error" :show-icon="true" class="cv-alert">{{ revisionsError }}</NAlert>
+
+      <NDataTable
+        :columns="revisionColumns"
+        :data="revisions"
+        :loading="loadingRevisions"
+        :row-key="(row: ConfigRevision) => row.id"
+        :row-props="revisionRowProps"
+        :pagination="pagination"
+        remote
+        :bordered="true"
+        size="small"
+        @update:page="handlePageChange"
+        @update:page-size="handlePageSizeChange"
+      />
+      <NText v-if="!loadingRevisions && revisions.length === 0 && !revisionsError" depth="3" class="cv-empty">
+        {{ t('settings.configVersions.emptyRevisions') }}
+      </NText>
+    </NCard>
+
+    <!-- Diff between two revisions. -->
+    <NCard :title="t('settings.configVersions.diffTitle')" size="small" class="cv-card">
+      <NText depth="3" class="cv-hint">{{ t('settings.configVersions.diffHint') }}</NText>
+      <NSpace align="center" class="cv-filter">
+        <NSelect
+          v-model:value="diffFrom"
+          :options="revisionOptions"
+          :placeholder="t('settings.configVersions.diffFrom')"
+          style="width: 220px;"
+        />
+        <span>→</span>
+        <NSelect
+          v-model:value="diffTo"
+          :options="revisionOptions"
+          :placeholder="t('settings.configVersions.diffTo')"
+          style="width: 220px;"
+        />
+        <NButton type="primary" :disabled="diffFrom === null || diffTo === null" :loading="diffLoading" @click="computeDiff">
+          {{ t('settings.configVersions.computeDiff') }}
+        </NButton>
+      </NSpace>
+
+      <NAlert v-if="diffError" type="error" :show-icon="true" class="cv-alert">{{ diffError }}</NAlert>
+
+      <template v-if="diffComputed && !diffError">
+        <NAlert v-if="fieldChanges.length === 0 && recordDiffRows.length === 0" type="success" :show-icon="true">
+          {{ t('settings.configVersions.noChanges') }}
+        </NAlert>
+
+        <template v-else>
+          <NDivider>{{ t('settings.configVersions.fieldChanges') }}</NDivider>
+          <NDataTable
+            v-if="fieldChanges.length"
+            :columns="fieldChangeColumns"
+            :data="fieldChanges"
+            :row-key="(row: ConfigFieldChange) => row.field"
+            :bordered="true"
+            size="small"
+          />
+          <NText v-else depth="3">{{ t('settings.configVersions.noFieldChanges') }}</NText>
+
+          <template v-if="isRecordsType">
+            <NDivider>{{ t('settings.configVersions.recordChanges') }}</NDivider>
+            <NText depth="3" class="cv-hint">{{ t('settings.configVersions.recordChangesHint') }}</NText>
+            <NDataTable
+              v-if="recordDiffRows.length"
+              :columns="recordDiffColumns"
+              :data="recordDiffRows"
+              :bordered="true"
+              size="small"
+              :row-key="recordDiffKey"
+            />
+            <NText v-else depth="3">{{ t('settings.configVersions.noRecordChanges') }}</NText>
+            <NText v-if="recordDiffRows.length" depth="3" class="cv-hint">
+              {{ t('settings.configVersions.recordDiffSummary', recordDiffCounts) }}
+            </NText>
+          </template>
+        </template>
+      </template>
+    </NCard>
+
+    <!-- Dry-run publish. -->
+    <NCard :title="t('settings.configVersions.publishTitle')" size="small" class="cv-card">
+      <NText depth="3" class="cv-hint">{{ t('settings.configVersions.publishHint') }}</NText>
+      <NAlert v-if="!isRecordsType" type="info" :show-icon="true" class="cv-alert">
+        {{ t('settings.configVersions.publishApiOnly') }}
+      </NAlert>
+      <template v-else>
+        <NFormItem :label="t('settings.configVersions.contentJson')" label-placement="top">
+          <NInput v-model:value="contentText" type="textarea" :rows="12" spellcheck="false" />
+        </NFormItem>
+        <NAlert v-if="publishError" type="error" :show-icon="true" class="cv-alert">{{ publishError }}</NAlert>
+        <NButton
+          type="primary"
+          :disabled="!canWrite || !filterId || filterType !== 'dns_records'"
+          :loading="publishLoading"
+          @click="runDryRun"
+        >
+          {{ t('settings.configVersions.dryRun') }}
+        </NButton>
+        <NAlert v-if="!canWrite" type="warning" :show-icon="true" class="cv-alert">
+          {{ t('settings.configVersions.writeRequired') }}
+        </NAlert>
+
+        <template v-if="dryRunResult">
+          <NDivider>{{ t('settings.configVersions.dryRunResult') }}</NDivider>
+          <NDescriptions :column="2" size="small" bordered>
+            <NDescriptionsItem :label="t('settings.configVersions.dryRunBaseRevision')">
+              {{ dryRunResult.base_revision }}
+            </NDescriptionsItem>
+            <NDescriptionsItem :label="t('settings.configVersions.dryRunReplayed')">
+              {{ dryRunResult.replayed ? t('common.yesOrNo.yes') : t('common.yesOrNo.no') }}
+            </NDescriptionsItem>
+          </NDescriptions>
+          <NDataTable
+            v-if="dryRunResult.changes.length"
+            :columns="fieldChangeColumns"
+            :data="dryRunResult.changes"
+            :row-key="(row: ConfigFieldChange) => row.field"
+            :bordered="true"
+            size="small"
+            class="cv-table-gap"
+          />
+          <NText v-else depth="3">{{ t('settings.configVersions.noChanges') }}</NText>
+        </template>
+      </template>
+    </NCard>
+
+    <!-- Data-plane release queue. -->
+    <NCard :title="t('settings.configVersions.queueTitle')" size="small" class="cv-card">
+      <NSpace align="center" class="cv-stats">
+        <NStatistic :label="t('settings.configVersions.queuePending')" :value="releaseStats.pending" />
+        <NStatistic :label="t('settings.configVersions.queueFailed')">
+          <NText :type="releaseStats.failed > 0 ? 'error' : undefined">{{ releaseStats.failed }}</NText>
+        </NStatistic>
+        <NButton
+          v-if="writeAllowed"
+          type="warning"
+          size="small"
+          :disabled="releaseStats.failed === 0"
+          :loading="retrying"
+          @click="retryFailed()"
+        >
+          {{ t('settings.configVersions.retryFailed') }}
+        </NButton>
+      </NSpace>
+
+      <NAlert v-if="queueError" type="error" :show-icon="true" class="cv-alert">{{ queueError }}</NAlert>
+
+      <NDataTable
+        :columns="releaseColumns"
+        :data="releases"
+        :loading="loadingQueue"
+        :row-key="(row: ConfigRelease) => String(row.id)"
+        :bordered="true"
+        size="small"
+      />
+      <NText v-if="!loadingQueue && releases.length === 0 && !queueError" depth="3" class="cv-empty">
+        {{ t('settings.configVersions.queueEmpty') }}
+      </NText>
+    </NCard>
+
+    <!-- Rollback confirmation. -->
+    <NModal
+      v-model:show="showRollback"
+      preset="card"
+      :title="t('settings.configVersions.rollbackTitle')"
+      style="width: 520px;"
+    >
+      <NDescriptions :column="1" size="small" bordered>
+        <NDescriptionsItem :label="t('settings.configVersions.resourceType')">
+          {{ rollbackRow ? resourceTypeLabel(rollbackRow.resource_type) : '' }}
+        </NDescriptionsItem>
+        <NDescriptionsItem :label="t('settings.configVersions.resourceId')">
+          {{ rollbackRow?.resource_id }}
+        </NDescriptionsItem>
+        <NDescriptionsItem :label="t('settings.configVersions.rollbackTarget')">
+          #{{ rollbackRow?.revision }}
+        </NDescriptionsItem>
+      </NDescriptions>
+
+      <NFormItem :label="t('settings.configVersions.rollbackExpected')" label-placement="top">
+        <NInputNumber v-model:value="rollbackExpected" :min="0" style="width: 160px;" />
+        <template #feedback>
+          <span class="cv-hint">{{ t('settings.configVersions.rollbackExpectedHint') }}</span>
+        </template>
+      </NFormItem>
+      <NFormItem :label="t('settings.configVersions.rollbackNote')" label-placement="top">
+        <NInput v-model:value="rollbackNote" />
+      </NFormItem>
+
+      <NAlert v-if="rollbackError" type="error" :show-icon="true">{{ rollbackError }}</NAlert>
+      <NAlert v-if="rollbackConflict" type="warning" :show-icon="true" class="cv-alert">
+        {{ t('settings.configVersions.conflictBody', { message: rollbackConflict }) }}
+      </NAlert>
+
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showRollback = false">{{ t('common.cancel') }}</NButton>
+          <NButton
+            type="warning"
+            :loading="rollbackLoading"
+            :disabled="!writeAllowed || rollbackBaselineLoading"
+            @click="submitRollback"
+          >
+            {{ t('settings.configVersions.rollbackConfirm') }}
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+  </div>
+</template>
 
 <style scoped>
 .cv-card {

@@ -1,73 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.client.title')" />
-
-    <n-card>
-      <n-form :model="queryForm" label-placement="left" label-width="100px" inline>
-        <n-form-item :label="t('dns.client.queryName')">
-          <n-input v-model:value="queryForm.name" placeholder="example.com" style="width: 240px;" />
-        </n-form-item>
-        <n-form-item :label="t('dns.client.queryType')">
-          <n-select v-model:value="queryForm.type" :options="typeOptions" style="width: 120px;" />
-        </n-form-item>
-        <n-form-item :label="t('dns.client.upstream')">
-          <n-input v-model:value="queryForm.upstream" placeholder="Optional" style="width: 200px;" clearable />
-        </n-form-item>
-        <n-form-item>
-          <n-button type="primary" :loading="querying" :disabled="!perm.canRead('dns')" @click="handleQuery">{{ t('dns.client.execute') }}</n-button>
-        </n-form-item>
-      </n-form>
-    </n-card>
-
-    <n-card v-if="queryResult" :title="t('dns.client.response')" style="margin-top: 16px;">
-      <n-descriptions :column="2" label-placement="left" style="margin-bottom: 16px;">
-        <n-descriptions-item :label="t('dns.client.queryTime')">{{ (queryResult.duration / 1e6).toFixed(2) }}ms</n-descriptions-item>
-        <n-descriptions-item :label="t('dns.client.server')">{{ queryResult.upstream }}</n-descriptions-item>
-      </n-descriptions>
-
-      <n-data-table
-        :columns="answerColumns"
-        :data="queryResult.answers || []"
-        :bordered="false"
-        size="small"
-      />
-    </n-card>
-
-    <!-- Import answer into a local zone (Technitium DNS Client parity) -->
-    <n-modal v-if="showImport" v-model:show="showImport" preset="card" :title="t('dns.client.importToZone')" style="width: 480px;">
-      <n-form :model="importForm" label-placement="left" label-width="100px">
-        <n-form-item :label="t('dns.zones.title')">
-          <n-select
-            v-model:value="importForm.zone_id"
-            :options="zoneOptions"
-            filterable
-            :placeholder="t('dns.client.selectZone')"
-            style="width: 100%;"
-          />
-        </n-form-item>
-        <n-form-item :label="t('dns.records.recordName')">
-          <n-input v-model:value="importForm.name" />
-        </n-form-item>
-        <n-form-item :label="t('dns.records.recordType')">
-          <n-input v-model:value="importForm.type" disabled />
-        </n-form-item>
-        <n-form-item :label="t('dns.records.recordValue')">
-          <n-input v-model:value="importForm.value" type="textarea" :rows="2" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.ttl')">
-          <n-input-number v-model:value="importForm.ttl" :min="0" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
-            <n-button type="primary" :loading="importing" :disabled="!perm.canWrite('dns')" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -92,7 +22,7 @@ const queryForm = reactive({
   upstream: '',
 })
 
-const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(t => ({ label: t, value: t }))
+const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(type => ({ label: type, value: type }))
 
 const showImport = ref(false)
 const importing = ref(false)
@@ -188,3 +118,73 @@ async function handleImportSubmit() {
   }
 }
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.client.title')" />
+
+    <NCard>
+      <NForm :model="queryForm" label-placement="left" label-width="100px" inline>
+        <NFormItem :label="t('dns.client.queryName')">
+          <NInput v-model:value="queryForm.name" placeholder="example.com" style="width: 240px;" />
+        </NFormItem>
+        <NFormItem :label="t('dns.client.queryType')">
+          <NSelect v-model:value="queryForm.type" :options="typeOptions" style="width: 120px;" />
+        </NFormItem>
+        <NFormItem :label="t('dns.client.upstream')">
+          <NInput v-model:value="queryForm.upstream" placeholder="Optional" style="width: 200px;" clearable />
+        </NFormItem>
+        <NFormItem>
+          <NButton type="primary" :loading="querying" :disabled="!perm.canRead('dns')" @click="handleQuery">{{ t('dns.client.execute') }}</NButton>
+        </NFormItem>
+      </NForm>
+    </NCard>
+
+    <NCard v-if="queryResult" :title="t('dns.client.response')" style="margin-top: 16px;">
+      <NDescriptions :column="2" label-placement="left" style="margin-bottom: 16px;">
+        <NDescriptionsItem :label="t('dns.client.queryTime')">{{ (queryResult.duration / 1e6).toFixed(2) }}ms</NDescriptionsItem>
+        <NDescriptionsItem :label="t('dns.client.server')">{{ queryResult.upstream }}</NDescriptionsItem>
+      </NDescriptions>
+
+      <NDataTable
+        :columns="answerColumns"
+        :data="queryResult.answers || []"
+        :bordered="false"
+        size="small"
+      />
+    </NCard>
+
+    <!-- Import answer into a local zone (Technitium DNS Client parity) -->
+    <NModal v-if="showImport" v-model:show="showImport" preset="card" :title="t('dns.client.importToZone')" style="width: 480px;">
+      <NForm :model="importForm" label-placement="left" label-width="100px">
+        <NFormItem :label="t('dns.zones.title')">
+          <NSelect
+            v-model:value="importForm.zone_id"
+            :options="zoneOptions"
+            filterable
+            :placeholder="t('dns.client.selectZone')"
+            style="width: 100%;"
+          />
+        </NFormItem>
+        <NFormItem :label="t('dns.records.recordName')">
+          <NInput v-model:value="importForm.name" />
+        </NFormItem>
+        <NFormItem :label="t('dns.records.recordType')">
+          <NInput v-model:value="importForm.type" disabled />
+        </NFormItem>
+        <NFormItem :label="t('dns.records.recordValue')">
+          <NInput v-model:value="importForm.value" type="textarea" :rows="2" />
+        </NFormItem>
+        <NFormItem :label="t('dns.zones.ttl')">
+          <NInputNumber v-model:value="importForm.ttl" :min="0" />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showImport = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="importing" :disabled="!perm.canWrite('dns')" @click="handleImportSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+  </div>
+</template>

@@ -1,40 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dhcp.reservations.title')">
-      <n-button v-if="perm.canWrite('dhcp')" type="primary" @click="openCreate">{{ t('dhcp.reservations.createReservation') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="reservations"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DHCPReservation) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('dhcp.reservations.editReservation') : t('dhcp.reservations.createReservation')" preset="card" style="width: 500px;">
-      <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('dhcp.leases.ip')"><n-input v-model:value="formData.ip_address" /></n-form-item>
-        <n-form-item :label="t('dhcp.leases.mac')"><n-input v-model:value="formData.mac_address" /></n-form-item>
-        <n-form-item :label="t('dhcp.leases.hostname')"><n-input v-model:value="formData.hostname" /></n-form-item>
-        <n-form-item :label="t('dhcp.leases.scope')" required><n-select v-model:value="formData.scope_id" :options="scopeOptions" filterable /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -118,3 +81,40 @@ async function handleDelete() {
 
 onMounted(() => { loadData(); loadScopes() })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dhcp.reservations.title')">
+      <NButton v-if="perm.canWrite('dhcp')" type="primary" @click="openCreate">{{ t('dhcp.reservations.createReservation') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="reservations"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: DHCPReservation) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('dhcp.reservations.editReservation') : t('dhcp.reservations.createReservation')" preset="card" style="width: 500px;">
+      <NForm :model="formData" label-placement="left" label-width="80px">
+        <NFormItem :label="t('dhcp.leases.ip')"><NInput v-model:value="formData.ip_address" /></NFormItem>
+        <NFormItem :label="t('dhcp.leases.mac')"><NInput v-model:value="formData.mac_address" /></NFormItem>
+        <NFormItem :label="t('dhcp.leases.hostname')"><NInput v-model:value="formData.hostname" /></NFormItem>
+        <NFormItem :label="t('dhcp.leases.scope')" required><NSelect v-model:value="formData.scope_id" :options="scopeOptions" filterable /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="formData.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

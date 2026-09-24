@@ -1,80 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.security.blockedTitle')">
-      <n-space>
-        <n-button v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateBlockList">{{ t('dns.security.createBlockList') }}</n-button>
-      </n-space>
-    </page-header>
-
-    <!-- Temporary disable blocking banner -->
-    <n-alert v-if="blockingStatus && blockingStatus.disabled_until" type="warning" style="margin-bottom: 12px;" closable>
-      <n-space align="center">
-        <span>{{ t('dns.security.blockingDisabledUntil') }} <strong>{{ formatTime(blockingStatus.disabled_until) }}</strong></span>
-        <n-button v-if="perm.canWrite('dns')" size="small" @click="handleResumeBlocking">{{ t('dns.security.resumeBlocking') }}</n-button>
-      </n-space>
-    </n-alert>
-    <n-card v-else size="small" style="margin-bottom: 12px;">
-      <n-space align="center">
-        <span>{{ t('dns.security.temporaryDisable') }}</span>
-        <n-select v-model:value="disableMinutes" :options="disableMinutesOptions" style="width: 140px;" />
-        <n-button v-if="perm.canWrite('dns')" size="small" type="warning" @click="handleTemporaryDisable">{{ t('dns.security.disableNow') }}</n-button>
-      </n-space>
-    </n-card>
-
-    <n-card>
-      <n-data-table :columns="blockListColumns" :data="blockLists" :loading="blockListLoading" :row-key="(row: BlockList) => row.id" />
-
-      <n-card v-if="selectedBlockList" :title="`${selectedBlockList.name} - Rules`" style="margin-top: 16px;">
-        <template #header-extra>
-          <n-button v-if="perm.canWrite('dns')" size="small" @click="showBlockRuleModal = true">{{ t('dns.security.addBlockRule') }}</n-button>
-        </template>
-        <n-data-table :columns="blockRuleColumns" :data="blockRules" :loading="blockRuleLoading" :row-key="(row: BlockRule) => row.id" size="small" />
-      </n-card>
-    </n-card>
-
-    <!-- Block List Modal -->
-    <n-modal v-if="showBlockListModal" v-model:show="showBlockListModal" preset="card" :title="t('dns.security.createBlockList')" style="width: 450px;">
-      <n-form :model="blockListForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="blockListForm.name" /></n-form-item>
-        <n-form-item :label="t('common.type')"><n-select v-model:value="blockListForm.type" :options="[{ label: 'Custom', value: 'custom' }, { label: 'External', value: 'external' }]" /></n-form-item>
-        <n-form-item v-if="blockListForm.type === 'external'" label="URL"><n-input v-model:value="blockListForm.url" placeholder="https://example.com/blocklist.txt" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="blockListForm.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showBlockListModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="blockListSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCreateBlockList">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Block Rule Modal -->
-    <n-modal v-if="showBlockRuleModal" v-model:show="showBlockRuleModal" preset="card" :title="t('dns.security.addBlockRule')" style="width: 450px;">
-      <n-form :model="blockRuleForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('dns.security.pattern')"><n-input v-model:value="blockRuleForm.pattern" /></n-form-item>
-        <n-form-item :label="t('dns.security.matchType')"><n-select v-model:value="blockRuleForm.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></n-form-item>
-        <n-form-item :label="t('dns.security.responseType')"><n-select v-model:value="blockRuleForm.response_type" :options="[{ label: 'NXDOMAIN', value: 'NXDOMAIN' }, { label: 'NODATA', value: 'NODATA' }, { label: 'REFUSED', value: 'REFUSED' }, { label: 'DROP', value: 'DROP' }, { label: 'Custom IP', value: 'CUSTOM_IP' }]" /></n-form-item>
-        <n-form-item v-if="blockRuleForm.response_type === 'CUSTOM_IP'" label="IP"><n-input v-model:value="blockRuleForm.response_data" placeholder="0.0.0.0" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="blockRuleForm.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showBlockRuleModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleAddBlockRule">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog
-      :show="showFlushConfirm"
-      :message="t('dns.security.flushConfirm')"
-      @confirm="handleFlush"
-      @cancel="showFlushConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -255,3 +178,80 @@ onUnmounted(() => {
   if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.security.blockedTitle')">
+      <NSpace>
+        <NButton v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</NButton>
+        <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateBlockList">{{ t('dns.security.createBlockList') }}</NButton>
+      </NSpace>
+    </PageHeader>
+
+    <!-- Temporary disable blocking banner -->
+    <NAlert v-if="blockingStatus && blockingStatus.disabled_until" type="warning" style="margin-bottom: 12px;" closable>
+      <NSpace align="center">
+        <span>{{ t('dns.security.blockingDisabledUntil') }} <strong>{{ formatTime(blockingStatus.disabled_until) }}</strong></span>
+        <NButton v-if="perm.canWrite('dns')" size="small" @click="handleResumeBlocking">{{ t('dns.security.resumeBlocking') }}</NButton>
+      </NSpace>
+    </NAlert>
+    <NCard v-else size="small" style="margin-bottom: 12px;">
+      <NSpace align="center">
+        <span>{{ t('dns.security.temporaryDisable') }}</span>
+        <NSelect v-model:value="disableMinutes" :options="disableMinutesOptions" style="width: 140px;" />
+        <NButton v-if="perm.canWrite('dns')" size="small" type="warning" @click="handleTemporaryDisable">{{ t('dns.security.disableNow') }}</NButton>
+      </NSpace>
+    </NCard>
+
+    <NCard>
+      <NDataTable :columns="blockListColumns" :data="blockLists" :loading="blockListLoading" :row-key="(row: BlockList) => row.id" />
+
+      <NCard v-if="selectedBlockList" :title="`${selectedBlockList.name} - Rules`" style="margin-top: 16px;">
+        <template #header-extra>
+          <NButton v-if="perm.canWrite('dns')" size="small" @click="showBlockRuleModal = true">{{ t('dns.security.addBlockRule') }}</NButton>
+        </template>
+        <NDataTable :columns="blockRuleColumns" :data="blockRules" :loading="blockRuleLoading" :row-key="(row: BlockRule) => row.id" size="small" />
+      </NCard>
+    </NCard>
+
+    <!-- Block List Modal -->
+    <NModal v-if="showBlockListModal" v-model:show="showBlockListModal" preset="card" :title="t('dns.security.createBlockList')" style="width: 450px;">
+      <NForm :model="blockListForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="blockListForm.name" /></NFormItem>
+        <NFormItem :label="t('common.type')"><NSelect v-model:value="blockListForm.type" :options="[{ label: 'Custom', value: 'custom' }, { label: 'External', value: 'external' }]" /></NFormItem>
+        <NFormItem v-if="blockListForm.type === 'external'" label="URL"><NInput v-model:value="blockListForm.url" placeholder="https://example.com/blocklist.txt" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="blockListForm.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showBlockListModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="blockListSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCreateBlockList">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Block Rule Modal -->
+    <NModal v-if="showBlockRuleModal" v-model:show="showBlockRuleModal" preset="card" :title="t('dns.security.addBlockRule')" style="width: 450px;">
+      <NForm :model="blockRuleForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('dns.security.pattern')"><NInput v-model:value="blockRuleForm.pattern" /></NFormItem>
+        <NFormItem :label="t('dns.security.matchType')"><NSelect v-model:value="blockRuleForm.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></NFormItem>
+        <NFormItem :label="t('dns.security.responseType')"><NSelect v-model:value="blockRuleForm.response_type" :options="[{ label: 'NXDOMAIN', value: 'NXDOMAIN' }, { label: 'NODATA', value: 'NODATA' }, { label: 'REFUSED', value: 'REFUSED' }, { label: 'DROP', value: 'DROP' }, { label: 'Custom IP', value: 'CUSTOM_IP' }]" /></NFormItem>
+        <NFormItem v-if="blockRuleForm.response_type === 'CUSTOM_IP'" label="IP"><NInput v-model:value="blockRuleForm.response_data" placeholder="0.0.0.0" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="blockRuleForm.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showBlockRuleModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('dns')" @click="handleAddBlockRule">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog
+      :show="showFlushConfirm"
+      :message="t('dns.security.flushConfirm')"
+      @confirm="handleFlush"
+      @cancel="showFlushConfirm = false"
+    />
+  </div>
+</template>

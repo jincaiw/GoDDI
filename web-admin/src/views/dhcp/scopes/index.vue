@@ -1,42 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dhcp.scopes.title')">
-      <n-button v-if="perm.canWrite('dhcp')" type="primary" @click="openCreateScope">{{ t('dhcp.scopes.createScope') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="scopes"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DHCPScope) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Create/Edit Scope Modal -->
-    <n-modal v-if="showModal" v-model:show="showModal" preset="card" :title="editingScope ? t('dhcp.scopes.editScope') : t('dhcp.scopes.createScope')" style="width: 550px;">
-      <n-form :model="formData" label-placement="left" label-width="100px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" /></n-form-item>
-        <n-form-item :label="t('dhcp.scopes.subnet')"><n-input v-model:value="formData.subnet" placeholder="192.168.1.0/24" /></n-form-item>
-        <n-form-item :label="t('dhcp.scopes.startIp')"><n-input v-model:value="formData.start_ip" /></n-form-item>
-        <n-form-item :label="t('dhcp.scopes.endIp')"><n-input v-model:value="formData.end_ip" /></n-form-item>
-        <n-form-item :label="t('dhcp.scopes.leaseTime')"><n-input-number v-model:value="formData.lease_time" :min="60" style="width: 100%;" /></n-form-item>
-        <n-form-item :label="t('common.description')"><n-input v-model:value="formData.comment" type="textarea" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -132,3 +93,42 @@ async function handleDelete() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dhcp.scopes.title')">
+      <NButton v-if="perm.canWrite('dhcp')" type="primary" @click="openCreateScope">{{ t('dhcp.scopes.createScope') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="scopes"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: DHCPScope) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Create/Edit Scope Modal -->
+    <NModal v-if="showModal" v-model:show="showModal" preset="card" :title="editingScope ? t('dhcp.scopes.editScope') : t('dhcp.scopes.createScope')" style="width: 550px;">
+      <NForm :model="formData" label-placement="left" label-width="100px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" /></NFormItem>
+        <NFormItem :label="t('dhcp.scopes.subnet')"><NInput v-model:value="formData.subnet" placeholder="192.168.1.0/24" /></NFormItem>
+        <NFormItem :label="t('dhcp.scopes.startIp')"><NInput v-model:value="formData.start_ip" /></NFormItem>
+        <NFormItem :label="t('dhcp.scopes.endIp')"><NInput v-model:value="formData.end_ip" /></NFormItem>
+        <NFormItem :label="t('dhcp.scopes.leaseTime')"><NInputNumber v-model:value="formData.lease_time" :min="60" style="width: 100%;" /></NFormItem>
+        <NFormItem :label="t('common.description')"><NInput v-model:value="formData.comment" type="textarea" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="formData.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

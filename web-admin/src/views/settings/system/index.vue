@@ -1,25 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('settings.title')" />
-
-    <n-spin :show="loading">
-      <n-card>
-        <n-form label-placement="left" label-width="200px">
-          <n-form-item v-for="setting in settings" :key="setting.key" :label="settingLabel(setting.key)">
-            <n-switch v-if="setting.type === 'bool'" v-model:value="setting.value" :checked-value="'true'" :unchecked-value="'false'" :disabled="!perm.canWrite('settings')" />
-            <n-input-number v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
-            <n-input v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
-            <n-button v-if="perm.canWrite('settings')" type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</n-button>
-            <template #feedback>
-              <span style="color: var(--n-text-color-3); font-size: 12px;">{{ settingDesc(setting) }}</span>
-            </template>
-          </n-form-item>
-        </n-form>
-      </n-card>
-    </n-spin>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -71,10 +49,6 @@ function effectiveType(setting: SystemSetting): 'bool' | 'int' | 'string' {
   return 'string'
 }
 
-function isBoolSetting(setting: SystemSetting): boolean {
-  return effectiveType(setting) === 'bool'
-}
-
 function isNumberSetting(setting: SystemSetting): boolean {
   return effectiveType(setting) === 'int'
 }
@@ -112,3 +86,25 @@ async function handleSave(setting: SystemSetting) {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('settings.title')" />
+
+    <NSpin :show="loading">
+      <NCard>
+        <NForm label-placement="left" label-width="200px">
+          <NFormItem v-for="setting in settings" :key="setting.key" :label="settingLabel(setting.key)">
+            <NSwitch v-if="setting.type === 'bool'" v-model:value="setting.value" checked-value="true" unchecked-value="false" :disabled="!perm.canWrite('settings')" />
+            <NInputNumber v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
+            <NInput v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
+            <NButton v-if="perm.canWrite('settings')" type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</NButton>
+            <template #feedback>
+              <span style="color: var(--n-text-color-3); font-size: 12px;">{{ settingDesc(setting) }}</span>
+            </template>
+          </NFormItem>
+        </NForm>
+      </NCard>
+    </NSpin>
+  </div>
+</template>

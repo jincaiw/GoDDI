@@ -33,6 +33,7 @@ jobs:
         working-directory: web-admin
         run: |
           pnpm install --frozen-lockfile
+          pnpm audit --registry=https://registry.npmjs.org
           pnpm build
 
       - name: Sync frontend dist into embed directory

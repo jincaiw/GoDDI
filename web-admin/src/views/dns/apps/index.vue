@@ -1,22 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.apps.title')" />
-    <n-card>
-      <template v-if="available">
-        <n-data-table :columns="columns" :data="apps" :row-key="(row: DNSApp) => row.id" />
-      </template>
-      <n-empty v-else :description="t('dns.apps.notAvailable')">
-        <template #icon>
-          <n-icon><apps-outline /></n-icon>
-        </template>
-        <template #extra>
-          <n-text depth="3" style="font-size: 12px;">{{ t('dns.apps.hint') }}</n-text>
-        </template>
-      </n-empty>
-    </n-card>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -48,3 +29,22 @@ onMounted(async () => {
   }
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.apps.title')" />
+    <NCard>
+      <template v-if="available">
+        <NDataTable :columns="columns" :data="apps" :row-key="(row: DNSApp) => row.id" />
+      </template>
+      <NEmpty v-else :description="t('dns.apps.notAvailable')">
+        <template #icon>
+          <NIcon><AppsOutline /></NIcon>
+        </template>
+        <template #extra>
+          <NText depth="3" style="font-size: 12px;">{{ t('dns.apps.hint') }}</NText>
+        </template>
+      </NEmpty>
+    </NCard>
+  </div>
+</template>

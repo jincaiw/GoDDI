@@ -1,63 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.cache.title')">
-      <n-button v-if="perm.canDelete('dns')" type="error" @click="handleFlushCache">{{ t('dns.cache.flushCache') }}</n-button>
-    </page-header>
-
-    <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-      <n-gi span="4 m:2 l:1">
-        <n-card>
-          <n-statistic :label="t('dns.cache.entries')" :value="stats.entries" />
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card>
-          <n-statistic :label="t('dns.cache.maxEntries')" :value="stats.max_entries" />
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card>
-          <n-statistic :label="t('dns.cache.hitRate')">
-            <template #default>{{ (stats.hit_rate ?? 0).toFixed(1) }}%</template>
-          </n-statistic>
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card>
-          <n-statistic :label="t('dns.cache.missRate')">
-            <template #default>{{ (stats.miss_rate ?? 0).toFixed(1) }}%</template>
-          </n-statistic>
-        </n-card>
-      </n-gi>
-    </n-grid>
-
-    <n-card :title="t('dns.cache.entryList')" style="margin-top: 16px;">
-      <template #header-extra>
-        <n-space>
-          <n-input v-model:value="filterQname" :placeholder="t('dns.cache.filterQname')" clearable size="small" style="width: 200px;" @keyup.enter="loadEntries" />
-          <n-button size="small" @click="loadEntries">{{ t('common.search') }}</n-button>
-        </n-space>
-      </template>
-      <n-data-table
-        :columns="entryColumns"
-        :data="entries"
-        :loading="loadingEntries"
-        :bordered="false"
-        size="small"
-        :pagination="entryPagination"
-        remote
-      />
-    </n-card>
-
-    <confirm-dialog
-      :show="showFlushConfirm"
-      :message="t('dns.cache.flushConfirm')"
-      @confirm="confirmFlush"
-      @cancel="showFlushConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { computed, h, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -184,3 +124,63 @@ onMounted(() => {
   loadEntries()
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.cache.title')">
+      <NButton v-if="perm.canDelete('dns')" type="error" @click="handleFlushCache">{{ t('dns.cache.flushCache') }}</NButton>
+    </PageHeader>
+
+    <NGrid :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
+      <NGi span="4 m:2 l:1">
+        <NCard>
+          <NStatistic :label="t('dns.cache.entries')" :value="stats.entries" />
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard>
+          <NStatistic :label="t('dns.cache.maxEntries')" :value="stats.max_entries" />
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard>
+          <NStatistic :label="t('dns.cache.hitRate')">
+            <template #default>{{ (stats.hit_rate ?? 0).toFixed(1) }}%</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard>
+          <NStatistic :label="t('dns.cache.missRate')">
+            <template #default>{{ (stats.miss_rate ?? 0).toFixed(1) }}%</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <NCard :title="t('dns.cache.entryList')" style="margin-top: 16px;">
+      <template #header-extra>
+        <NSpace>
+          <NInput v-model:value="filterQname" :placeholder="t('dns.cache.filterQname')" clearable size="small" style="width: 200px;" @keyup.enter="loadEntries" />
+          <NButton size="small" @click="loadEntries">{{ t('common.search') }}</NButton>
+        </NSpace>
+      </template>
+      <NDataTable
+        :columns="entryColumns"
+        :data="entries"
+        :loading="loadingEntries"
+        :bordered="false"
+        size="small"
+        :pagination="entryPagination"
+        remote
+      />
+    </NCard>
+
+    <ConfirmDialog
+      :show="showFlushConfirm"
+      :message="t('dns.cache.flushConfirm')"
+      @confirm="confirmFlush"
+      @cancel="showFlushConfirm = false"
+    />
+  </div>
+</template>

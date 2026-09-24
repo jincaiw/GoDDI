@@ -22,18 +22,16 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ![Backup management](docs/images/backup.png)
 
-## Version 0.8.2 Scope
+## Version 0.24.0 Scope
 
-GoDDI v0.8.2
+GoDDI v0.24.0 is a self-hosted DDI platform backed by SQLite/WAL. It includes hardened DNS IXFR history handling, durable DHCP-to-IPAM facts replication, and broader least-privilege controls. Its production boundaries remain explicit:
 
-The previous `v0.8.1` release established the same capability-claim baseline; this release adds the staged LeaseStore/WAL implementation contracts without changing the default SQLite data path. is a self-hosted, single-node DDI platform backed by SQLite/WAL. The following boundaries are explicit:
+- **Implemented:** authoritative and recursive DNS, DHCP processing, IPAM, configuration revisions, backup/restore, metrics, the web console, and DoT/DoH/DoQ listener configuration. Real DoT/DoH/DoQ client handshakes still require deployment validation.
+- **Experimental/incomplete:** DHCP HA is not certified as GA. DNSSEC key and DS management does not provide a complete signing chain with RRSIG, DNSKEY, and NSEC/NSEC3 serving.
+- **Reserved APIs (`501 Not Implemented`):** SSO, general multi-node cluster coordination, the application extension runtime, and the management-plane DHCP HA extension.
+- **external-validation-required:** real-secondary IXFR interoperability, multi-host fencing and network partitions, prolonged control database outage recovery, key and power-loss recovery, Prometheus alert delivery, and capacity/stability on target hardware. No RPO, RTO, or capacity target is claimed without those measurements.
 
-- **Implemented in the current release:** authoritative and recursive DNS, DHCP data-plane processing, DHCP lease HA primitives (replication, fencing, takeover and rejoin), IPAM, configuration revisions/release outbox, backup/restore, and DoT/DoH/DoQ listener configuration.
-- **Experimental/incomplete:** DNSSEC key and DS management is available, but the release does not provide a complete signing chain with RRSIG, DNSKEY and NSEC/NSEC3 serving.
-- **Reserved APIs (`501 Not Implemented`):** SSO, general multi-node cluster coordination, the application extension runtime, and the management-plane DHCP HA extension. DHCP data-plane HA must not be confused with the reserved management extension.
-- **External-validation-required (`external-validation-required`):** real relay/Option 82 interoperability, cross-host HA and network-partition behavior, power-loss recovery, enterprise CA lifecycle, real DoT/DoH/DoQ client handshakes, Prometheus alert firing, and target-hardware capacity/soak testing.
-
-The built-in management TLS listener is available but disabled by default; enable it explicitly or place GoDDI behind an HTTPS reverse proxy or trusted private network.
+The built-in management TLS listener is available but disabled by default. Enable it or place GoDDI behind an HTTPS reverse proxy before sending credentials over a shared network.
 
 ## Quick Start
 
@@ -43,7 +41,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.8.3/goddi-v0.8.3-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.24.0/goddi-v0.24.0-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

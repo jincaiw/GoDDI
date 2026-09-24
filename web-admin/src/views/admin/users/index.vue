@@ -1,55 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('admin.users.title')">
-      <n-button v-if="perm.canWrite('user')" type="primary" @click="openCreate">{{ t('admin.users.createUser') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="users"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: User) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Create/Edit User Modal -->
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.users.editUser') : t('admin.users.createUser')" preset="card" style="width: 500px;">
-      <n-form :model="formData" label-placement="left" label-width="100px">
-        <n-form-item :label="t('admin.users.username')"><n-input v-model:value="formData.username" :disabled="!!editing || !perm.canWrite('user')" /></n-form-item>
-        <n-form-item v-if="!editing" :label="t('auth.password')"><n-input v-model:value="formData.password" type="password" show-password-on="click" :minlength="8" :disabled="!perm.canWrite('user')" /></n-form-item>
-        <n-form-item :label="t('admin.users.email')"><n-input v-model:value="formData.email" :disabled="!perm.canWrite('user')" /></n-form-item>
-        <n-form-item :label="t('admin.users.displayName')"><n-input v-model:value="formData.display_name" :disabled="!perm.canWrite('user')" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" :disabled="!perm.canWrite('user')" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('user')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Assign Roles Modal -->
-    <n-modal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.users.assignRoles')" preset="card" style="width: 450px;">
-      <n-checkbox-group v-model:value="selectedRoles">
-        <n-space item-style="display: flex;">
-          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('user') || !perm.canRead('role')" />
-        </n-space>
-      </n-checkbox-group>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showRolesModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('user') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -162,3 +110,55 @@ async function handleAssignRoles() {
 
 onMounted(() => { loadData(); loadRoles() })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('admin.users.title')">
+      <NButton v-if="perm.canWrite('user')" type="primary" @click="openCreate">{{ t('admin.users.createUser') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="users"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: User) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Create/Edit User Modal -->
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.users.editUser') : t('admin.users.createUser')" preset="card" style="width: 500px;">
+      <NForm :model="formData" label-placement="left" label-width="100px">
+        <NFormItem :label="t('admin.users.username')"><NInput v-model:value="formData.username" :disabled="!!editing || !perm.canWrite('user')" /></NFormItem>
+        <NFormItem v-if="!editing" :label="t('auth.password')"><NInput v-model:value="formData.password" type="password" show-password-on="click" :minlength="8" :disabled="!perm.canWrite('user')" /></NFormItem>
+        <NFormItem :label="t('admin.users.email')"><NInput v-model:value="formData.email" :disabled="!perm.canWrite('user')" /></NFormItem>
+        <NFormItem :label="t('admin.users.displayName')"><NInput v-model:value="formData.display_name" :disabled="!perm.canWrite('user')" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="formData.enabled" :disabled="!perm.canWrite('user')" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('user')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Assign Roles Modal -->
+    <NModal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.users.assignRoles')" preset="card" style="width: 450px;">
+      <NCheckboxGroup v-model:value="selectedRoles">
+        <NSpace item-style="display: flex;">
+          <NCheckbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('user') || !perm.canRead('role')" />
+        </NSpace>
+      </NCheckboxGroup>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showRolesModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('user') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

@@ -1,34 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.security.title')">
-      <n-space>
-        <n-button v-if="perm.canWrite('dns')" type="primary" @click="showPolicyModal = true">{{ t('dns.security.createPolicy') }}</n-button>
-      </n-space>
-    </page-header>
-
-    <n-card>
-      <n-data-table :columns="policyColumns" :data="policies" :loading="policyLoading" :row-key="(row: ClientPolicy) => row.id" />
-    </n-card>
-
-    <!-- Policy Modal -->
-    <n-modal v-if="showPolicyModal" v-model:show="showPolicyModal" preset="card" :title="t('dns.security.createPolicy')" style="width: 450px;">
-      <n-form :model="policyForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="policyForm.name" /></n-form-item>
-        <n-form-item :label="t('dns.security.sourceCidr')"><n-input v-model:value="policyForm.source_cidr" placeholder="192.168.1.0/24" /></n-form-item>
-        <n-form-item :label="t('dns.security.action')"><n-select v-model:value="policyForm.action" :options="[{ label: 'Allow', value: 'allow' }, { label: 'Block', value: 'block' }, { label: 'Apply Lists', value: 'apply_lists' }]" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="policyForm.enabled" /></n-form-item>
-        <n-form-item :label="t('common.priority')"><n-input-number v-model:value="policyForm.priority" :min="0" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showPolicyModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleCreatePolicy">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -81,3 +50,34 @@ async function handleDeletePolicy(id: string) {
 
 onMounted(loadPolicies)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.security.title')">
+      <NSpace>
+        <NButton v-if="perm.canWrite('dns')" type="primary" @click="showPolicyModal = true">{{ t('dns.security.createPolicy') }}</NButton>
+      </NSpace>
+    </PageHeader>
+
+    <NCard>
+      <NDataTable :columns="policyColumns" :data="policies" :loading="policyLoading" :row-key="(row: ClientPolicy) => row.id" />
+    </NCard>
+
+    <!-- Policy Modal -->
+    <NModal v-if="showPolicyModal" v-model:show="showPolicyModal" preset="card" :title="t('dns.security.createPolicy')" style="width: 450px;">
+      <NForm :model="policyForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="policyForm.name" /></NFormItem>
+        <NFormItem :label="t('dns.security.sourceCidr')"><NInput v-model:value="policyForm.source_cidr" placeholder="192.168.1.0/24" /></NFormItem>
+        <NFormItem :label="t('dns.security.action')"><NSelect v-model:value="policyForm.action" :options="[{ label: 'Allow', value: 'allow' }, { label: 'Block', value: 'block' }, { label: 'Apply Lists', value: 'apply_lists' }]" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="policyForm.enabled" /></NFormItem>
+        <NFormItem :label="t('common.priority')"><NInputNumber v-model:value="policyForm.priority" :min="0" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showPolicyModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('dns')" @click="handleCreatePolicy">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+  </div>
+</template>

@@ -1,51 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('admin.groups.title')">
-      <n-button v-if="perm.canWrite('group')" type="primary" @click="openCreate">{{ t('admin.groups.createGroup') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="groups"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: Group) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.groups.editGroup') : t('admin.groups.createGroup')" preset="card" style="width: 450px;">
-      <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" :disabled="!perm.canWrite('group')" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('group')" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('group')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Assign Roles Modal -->
-    <n-modal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.groups.assignRoles')" preset="card" style="width: 450px;">
-      <n-checkbox-group v-model:value="selectedRoles">
-        <n-space item-style="display: flex;">
-          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('group') || !perm.canRead('role')" />
-        </n-space>
-      </n-checkbox-group>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showRolesModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('group') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -139,3 +91,51 @@ async function handleAssignRoles() {
 
 onMounted(() => { loadData(); loadRoles() })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('admin.groups.title')">
+      <NButton v-if="perm.canWrite('group')" type="primary" @click="openCreate">{{ t('admin.groups.createGroup') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="groups"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: Group) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.groups.editGroup') : t('admin.groups.createGroup')" preset="card" style="width: 450px;">
+      <NForm :model="formData" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" :disabled="!perm.canWrite('group')" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('group')" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('group')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Assign Roles Modal -->
+    <NModal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.groups.assignRoles')" preset="card" style="width: 450px;">
+      <NCheckboxGroup v-model:value="selectedRoles">
+        <NSpace item-style="display: flex;">
+          <NCheckbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('group') || !perm.canRead('role')" />
+        </NSpace>
+      </NCheckboxGroup>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showRolesModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('group') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

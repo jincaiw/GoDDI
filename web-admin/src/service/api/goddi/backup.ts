@@ -1,4 +1,4 @@
-import client, { getList, post, del } from './client'
+import { getList, getRaw, post, del } from './client'
 
 export interface Backup {
   id: string
@@ -32,7 +32,7 @@ export function deleteBackup(id: string) {
 }
 
 export async function downloadBackup(id: string) {
-  const response = await client.get(`/system/backups/${id}/download`, { responseType: 'blob' })
+  const response = await getRaw(`/system/backups/${id}/download`, { responseType: 'blob' })
   const disposition = response.headers['content-disposition'] as string | undefined
   const encodedName = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
   const fileName = encodedName ? decodeURIComponent(encodedName) : `goddi-backup-${id}.json`
