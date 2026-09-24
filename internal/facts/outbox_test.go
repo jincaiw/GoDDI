@@ -39,6 +39,13 @@ func newFactsOutboxDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = db.Exec(`CREATE TABLE facts_sequence_allocator (
+		domain TEXT PRIMARY KEY,
+		last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return db
 }
 
