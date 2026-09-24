@@ -91,3 +91,21 @@ func (a *SequenceAllocator) Current(ctx context.Context) (int64, error) {
 	}
 	return current, nil
 }
+
+// CurrentOrZero reports the durable high water, treating an allocator that has
+// not yet been initialized as an empty stream. It is intended for snapshot and
+// status reads, not for allocation decisions.
+func (a *SequenceAllocator) CurrentOrZero(ctx context.Context) (int64, error) {
+	if a == nil || a.db == nil {
+		return 0, ErrOutboxClosed
+	}
+	var current int64
+	if err := a.db.QueryRowContext(ctx, `SELECT COALESCE((
+		SELECT last_sequence FROM facts_sequence_allocator WHERE domain=?), 0)`, sequenceAllocatorDomain).Scan(&current); err != nil {
+		return 0, fmt.Errorf("facts: read sequence high water: %w", err)
+	}
+	if current < 0 {
+		return 0, fmt.Errorf("facts: invalid sequence high water %d", current)
+	}
+	return current, nil
+}

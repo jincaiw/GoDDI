@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // These tests are written against the three properties the package claims:
@@ -337,6 +339,84 @@ func TestAResyncRebuildsTheMirrorFromASnapshot(t *testing.T) {
 	// And nothing reaches the mirror that lost its primary.
 	if n := leaseCount(t, firstMirrorStore); n != 1 {
 		t.Errorf("the disconnected mirror has %d rows, want the 1 it had when the primary went away", n)
+	}
+}
+
+func TestSnapshotCopiesFactsOutboxAndConfirmsItsWatermark(t *testing.T) {
+	primaryStore := openStore(t, "facts-primary")
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "ha-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"lease-1"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	primary, _ := startPrimary(t, primaryStore)
+	mirror, mirrorStore, _ := startMirror(t, primary, "facts-mirror")
+	waitFor(t, "the mirror to apply the facts snapshot", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='ha-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && mirror.FactsAppliedSeq() == 1 && primary.FactsAckedSeq() == 1
+	})
+	var markerCount int
+	if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_event_dirty WHERE event_id='ha-fact-1'`).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if markerCount != 1 {
+		t.Fatalf("mirror pending delivery markers = %d, want 1", markerCount)
+	}
+}
+
+func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
+	store := openStore(t, "manifest-mirror")
+	insertLease(t, store, "existing", "192.0.2.10", "02:00:00:00:00:10", "active")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator, err := facts.NewReplicaSnapshotAccumulator(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &incomingSnapshot{
+		id: "invalid-manifest", leaseSeq: 1, factsSeq: 0,
+		leases:      []LeaseRow{{ID: "replacement", ScopeID: "scope-1", IPAddress: "192.0.2.11", MACAddress: "02:00:00:00:00:11", Status: "active"}},
+		accumulator: accumulator,
+	}
+	badManifest := facts.ReplicaSnapshotManifest{LastSequence: 0, ChunkCount: 1, EventCount: 1, Digest: "not-the-empty-snapshot-digest"}
+	err = mirror.finishSnapshot(context.Background(), snapshot, Frame{Type: FrameSnapshotEnd, SnapshotID: snapshot.id, FactsManifest: &badManifest})
+	if err == nil {
+		t.Fatal("finishing a snapshot with an invalid manifest succeeded")
+	}
+	if leaseCount(t, store) != 1 || !mirrorHas(t, store, "existing", "active") {
+		t.Fatal("invalid facts manifest changed the active lease snapshot")
+	}
+	if mirrorHas(t, store, "replacement", "active") {
+		t.Fatal("invalid facts manifest applied replacement lease rows")
 	}
 }
 

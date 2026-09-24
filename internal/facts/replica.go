@@ -75,11 +75,11 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 		limit = 256
 	}
 	var page ReplicaPage
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((
-		SELECT last_sequence FROM facts_sequence_allocator WHERE domain = ?), 0)`, sequenceAllocatorDomain).
-		Scan(&page.LastSequence); err != nil {
+	highWater, err := o.ReplicaHighWaterTx(ctx, tx)
+	if err != nil {
 		return ReplicaPage{}, fmt.Errorf("facts: read replica sequence: %w", err)
 	}
+	page.LastSequence = highWater
 	if after > page.LastSequence {
 		return ReplicaPage{}, fmt.Errorf("facts: replica cursor %d exceeds sequence %d", after, page.LastSequence)
 	}
@@ -153,6 +153,28 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 	}
 	page.Complete = page.NextAfter == page.LastSequence
 	return page, nil
+}
+
+// ReplicaHighWaterTx reads the canonical facts allocator from a caller-owned
+// transaction. Callers use it to bind companion data, such as leases, to the
+// same stable snapshot cut.
+func (o *ObservationOutbox) ReplicaHighWaterTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if o == nil || o.db == nil {
+		return 0, ErrOutboxClosed
+	}
+	if tx == nil {
+		return 0, errors.New("facts: nil replica snapshot transaction")
+	}
+	var highWater int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((
+		SELECT last_sequence FROM facts_sequence_allocator WHERE domain = ?), 0)`, sequenceAllocatorDomain).
+		Scan(&highWater); err != nil {
+		return 0, fmt.Errorf("facts: read replica sequence: %w", err)
+	}
+	if highWater < 0 {
+		return 0, fmt.Errorf("facts: invalid replica sequence %d", highWater)
+	}
+	return highWater, nil
 }
 
 // StreamReplicaSnapshotTx reads one stable snapshot in bounded chunks from a

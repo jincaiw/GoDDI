@@ -523,7 +523,7 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 	// wait immediately and a binding would be acknowledged with no second copy
 	// at all. Nothing has been confirmed by the mirror this node does not yet
 	// have, so the honest value is none.
-	if err := clearMetaTx(ctx, tx, metaAppliedSeq, metaAckedSeq); err != nil {
+	if err := clearMetaTx(ctx, tx, metaAppliedSeq, metaAckedSeq, metaFactsAckedSeq); err != nil {
 		return out, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -620,7 +620,7 @@ func (o *Operator) Rejoin(opts RejoinOptions) error {
 	// the reason a promotion clears it: a stale figure can outrank the sequence
 	// a future promotion resumes from, and every wait would then be satisfied
 	// on the spot.
-	if err := clearMeta(o.store.DB, metaFencedAt, metaAppliedSeq, metaAckedSeq); err != nil {
+	if err := clearMeta(o.store.DB, metaFencedAt, metaAppliedSeq, metaAckedSeq, metaFactsAckedSeq); err != nil {
 		return err
 	}
 	o.audit(auditlog.ActionHARejoin, "returned to the pair as a standby",

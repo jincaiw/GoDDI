@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // Protocol is the version of the peer wire format. It is carried in the
 // handshake so that two nodes running different builds refuse each other
 // instead of exchanging frames one of them reads as something else.
-const Protocol = 1
+const Protocol = 2
 
 // maxFrameBytes bounds one frame on the wire.
 //
@@ -32,9 +34,14 @@ const (
 	// watermarks, and the token on the side that dialled.
 	FrameHello FrameType = "hello"
 	// FrameSnapshot is the whole mirror, taken at one sequence. It is sent by
-	// the primary on every new connection, which is what makes an incremental
-	// catch-up path unnecessary.
+	// the primary on every new connection and starts a facts snapshot transfer.
 	FrameSnapshot FrameType = "snapshot"
+	// FrameFactsChunk carries one bounded facts outbox chunk belonging to the
+	// active snapshot ID.
+	FrameFactsChunk FrameType = "facts_chunk"
+	// FrameSnapshotEnd carries the complete facts manifest. The standby applies
+	// the lease and facts snapshot only after validating it.
+	FrameSnapshotEnd FrameType = "snapshot_end"
 	// FrameOps is a batch of lease changes in sequence order.
 	FrameOps FrameType = "ops"
 	// FrameApplied is the standby's confirmation: everything up to Seq is
@@ -54,11 +61,13 @@ const (
 // was not sent, and the difference between the two numbers is exactly the set
 // of promises that may exist on one side and not the other.
 type Watermarks struct {
-	NodeID     string `json:"node_id"`
-	Role       string `json:"role"`
-	AppliedSeq int64  `json:"applied_seq"`
-	AckedSeq   int64  `json:"acked_seq"`
-	UptimeMS   int64  `json:"uptime_ms"`
+	NodeID          string `json:"node_id"`
+	Role            string `json:"role"`
+	AppliedSeq      int64  `json:"applied_seq"`
+	AckedSeq        int64  `json:"acked_seq"`
+	FactsAppliedSeq int64  `json:"facts_applied_seq"`
+	FactsAckedSeq   int64  `json:"facts_acked_seq"`
+	UptimeMS        int64  `json:"uptime_ms"`
 }
 
 // Frame is one message. The optional fields are not a union by accident: each
@@ -76,6 +85,15 @@ type Frame struct {
 	// the highest sequence applied.
 	Seq    int64      `json:"seq,omitempty"`
 	Leases []LeaseRow `json:"leases,omitempty"`
+	// SnapshotID and FactsSeq are set on FrameSnapshot; FactsSeq is the
+	// allocator high water from the same database read transaction.
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	FactsSeq   int64  `json:"facts_seq,omitempty"`
+	// FactsChunk is set only on FrameFactsChunk; FactsManifest only on
+	// FrameSnapshotEnd. A frame's unrelated optional fields are rejected by the
+	// protocol handler before any snapshot mutation.
+	FactsChunk    *facts.ReplicaSnapshotChunk    `json:"facts_chunk,omitempty"`
+	FactsManifest *facts.ReplicaSnapshotManifest `json:"facts_manifest,omitempty"`
 }
 
 // LeaseRow is one lease as it travels between the nodes.
@@ -127,10 +145,50 @@ var (
 	// is a mirror and neither would stop serving.
 	ErrRoleMismatch = errors.New("ha: peer is not the role this node expects")
 	// ErrFrameTooLarge means the peer announced a frame beyond the cap.
-	ErrFrameTooLarge = errors.New("ha: peer announced a frame larger than the limit")
+	ErrFrameTooLarge  = errors.New("ha: peer announced a frame larger than the limit")
+	ErrMalformedFrame = errors.New("ha: malformed peer frame")
 )
 
+func (f Frame) validate() error {
+	malformed := func(reason string) error { return fmt.Errorf("%w: %s frame: %s", ErrMalformedFrame, f.Type, reason) }
+	if f.Seq < 0 || f.FactsSeq < 0 {
+		return malformed("negative sequence")
+	}
+	switch f.Type {
+	case FrameHello:
+		if f.Protocol <= 0 || f.Watermarks == nil || f.SnapshotID != "" || f.FactsChunk != nil || f.FactsManifest != nil || len(f.Leases) != 0 || f.Seq != 0 || f.FactsSeq != 0 {
+			return malformed("invalid handshake fields")
+		}
+	case FrameSnapshot:
+		if f.SnapshotID == "" || len(f.SnapshotID) > 128 || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.FactsChunk != nil || f.FactsManifest != nil {
+			return malformed("invalid snapshot fields")
+		}
+	case FrameFactsChunk:
+		if f.SnapshotID == "" || f.FactsChunk == nil || f.FactsManifest != nil || len(f.Leases) != 0 || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.Seq != 0 || f.FactsSeq != 0 {
+			return malformed("invalid facts chunk fields")
+		}
+	case FrameSnapshotEnd:
+		if f.SnapshotID == "" || f.FactsManifest == nil || f.FactsChunk != nil || len(f.Leases) != 0 || f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.Seq != 0 || f.FactsSeq != 0 {
+			return malformed("invalid snapshot end fields")
+		}
+	case FrameOps:
+		if f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.SnapshotID != "" || f.FactsChunk != nil || f.FactsManifest != nil || f.FactsSeq != 0 {
+			return malformed("invalid operations fields")
+		}
+	case FrameApplied, FramePing:
+		if f.Protocol != 0 || f.Token != "" || f.Watermarks != nil || f.SnapshotID != "" || len(f.Leases) != 0 || f.FactsChunk != nil || f.FactsManifest != nil {
+			return malformed("invalid watermark fields")
+		}
+	default:
+		return malformed("unknown frame type")
+	}
+	return nil
+}
+
 func writeFrame(w io.Writer, f Frame) error {
+	if err := f.validate(); err != nil {
+		return err
+	}
 	body, err := json.Marshal(f)
 	if err != nil {
 		return fmt.Errorf("ha: encoding a %s frame: %w", f.Type, err)
@@ -166,6 +224,9 @@ func readFrame(r io.Reader, limit int) (Frame, error) {
 	var f Frame
 	if err := json.Unmarshal(body, &f); err != nil {
 		return Frame{}, fmt.Errorf("ha: decoding a frame: %w", err)
+	}
+	if err := f.validate(); err != nil {
+		return Frame{}, err
 	}
 	return f, nil
 }

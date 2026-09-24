@@ -45,12 +45,11 @@ HA facts 在下列协议与验收条件全部实现前保持关闭。当前观�
 
 ## 实施顺序
 
-1. 为 facts 包增加可校验、可分块的 replica snapshot 编解码与完整性检查，不改 HA 服务装配。代码已提供 `ObservationOutbox.ReadReplicaPageTx` 与 `StreamReplicaSnapshotTx`：调用方持有单一只读事务时，按 allocator 水位有界读取 envelope 和 producer delivery state，并对 sequence 缺口 fail closed；每个 chunk 经回调持久接收后，才继续流式读取，全部成功后返回 manifest。`ReplicaSnapshotAccumulator` 校验跨页游标、固定高水位、chunk 序号与首尾边界，并对按序事件生成 SHA-256 manifest；接收侧可核对 manifest，且摘要不受传输分块大小影响。单页最多 1000 个事件且 JSON 编码总量不超过 16 MiB。定向测试覆盖状态保真、缺口拒绝、高水位一致、分块边界与不完整快照拒绝。HA wire 和主备服务接入尚未实现。
-2. 升级 HA wire protocol 与 handshake 水位，接入已实现的 `StageReplicaChunkTx`/`ApplyStagedReplicaSnapshotTx`：standby 分块持久化不可见 staging 数据，校验 manifest 后在 lease/facts 同一事务中原子应用，并覆盖故障中断恢复。当前仅有存储原语，尚未接入 HA 服务或 wire protocol。
-3. 将 DHCP facts mutation identity/sequence 返回至 HA replicator；把事实复制确认纳入 REQUEST/续租 ACK gate，并覆盖 release/decline/expiry。
-4. 将 takeover/rejoin/fence/readiness 与双水位绑定；确保 promoted primary 装配 facts producer 和 control inbox delivery。
-5. 完成断开、进程崩溃、部分 snapshot、重复 envelope、sequence 冲突/缺口、control DB 长时间不可用及 takeover/replay 的自动化故障矩阵。
-6. 在真实双主机网络环境验证 fencing、分区、旧主回归、control DB 恢复与 IPAM 对账后，再考虑关闭兼容 observer 或发布 HA facts 能力。
+1. **已实现快照原语与 HA 重连快照接入（未发布）**：`ObservationOutbox.ReadReplicaPageTx`/`StreamReplicaSnapshotTx` 在调用方单一只读事务中有界读取 envelope 与 producer delivery state，并按 allocator 水位对 sequence 缺口 fail closed；`ReplicaSnapshotAccumulator` 校验跨页游标、chunk 边界并生成 SHA-256 manifest。HA protocol v2 在每次连接发送同一 SQLite read snapshot 上的 lease rows、facts outbox 与 allocator 水位；standby 分块 staging，验证 manifest 后在单一事务中联合应用 lease/facts，并返回 facts applied watermark。定向 HA/facts 测试、`go vet` 及 staging migration 检查通过；集成回归还验证坏 manifest 不会替换既有租约。
+2. **仍待实现**：将 DHCP facts mutation identity/sequence 返回至 HA replicator；把事实复制确认纳入 REQUEST/续租 ACK gate，并覆盖 release/decline/expiry。当前 HA DHCP producer 仍关闭，因此快照复制已有 facts 历史，但还不构成 HA mutation durability。
+3. 将 takeover/rejoin/fence/readiness 与双水位绑定；明确并记录 lease gap 与 facts gap 的运维接受语义，确保 promoted primary 装配 facts producer 和 control inbox delivery。
+4. 完成断开、进程崩溃、部分 snapshot、重复 envelope、sequence 冲突/缺口、control DB 长时间不可用及 takeover/replay 的自动化故障矩阵。
+5. 在真实双主机网络环境验证 fencing、分区、旧主回归、control DB 恢复与 IPAM 对账后，再考虑关闭兼容 observer 或发布 HA facts 能力。
 
 ## 结果与边界
 

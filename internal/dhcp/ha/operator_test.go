@@ -333,7 +333,7 @@ func TestAShortfallMustBeNamedToBeAccepted(t *testing.T) {
 	// The two watermarks that describe a mirror this node does not have are
 	// gone. A leftover acknowledged figure above the resumed sequence would
 	// satisfy every confirmation wait on the spot.
-	for _, key := range []string{metaAppliedSeq, metaAckedSeq} {
+	for _, key := range []string{metaAppliedSeq, metaAckedSeq, metaFactsAckedSeq} {
 		if v, _ := readWatermark(store.DB, key); v != 0 {
 			t.Errorf("%s = %d after the promotion, want it cleared", key, v)
 		}
@@ -538,7 +538,7 @@ func TestAFencedNodeComesBackOnlyAsAMirror(t *testing.T) {
 	if v, _ := store.Meta(metaFencedAt); v != "" {
 		t.Errorf("the fence marker survived the rejoin: %q", v)
 	}
-	for _, key := range []string{metaAppliedSeq, metaAckedSeq} {
+	for _, key := range []string{metaAppliedSeq, metaAckedSeq, metaFactsAckedSeq} {
 		if v, _ := readWatermark(store.DB, key); v != 0 {
 			t.Errorf("%s = %d after the rejoin, want it cleared", key, v)
 		}
