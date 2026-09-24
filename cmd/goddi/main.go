@@ -717,6 +717,7 @@ func runServer(configPath string) error {
 	//	        records. It is a log, not configuration, and it rides on its own
 	//	        counter so lease churn cannot look like a zone edit.
 	var dnsRunner *dataplane.Runner
+	var dnsConsumer *dhcpinternal.DNSConsumer
 	if servesDNS {
 		runner := dataplane.NewRunner(
 			dataplane.NewReplicator(db.DB, dnsStore),
@@ -748,6 +749,9 @@ func runServer(configPath string) error {
 							}()
 						}
 					}
+					if d == dataplane.DomainDDNS && dnsConsumer != nil {
+						dnsConsumer.Wake()
+					}
 				},
 			})
 		if err := runner.Prime(context.Background()); err != nil {
@@ -763,7 +767,6 @@ func runServer(configPath string) error {
 	// withdrawal has to be decided by the process that was serving the name.
 	// Its input is this store's replica of the queue, so the DHCP plane may be
 	// restarting while these entries are still applied.
-	var dnsConsumer *dhcpinternal.DNSConsumer
 	if servesDNS {
 		link := dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
 		link.SetNotifyHook(func(zoneName string) {

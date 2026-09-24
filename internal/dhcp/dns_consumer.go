@@ -22,12 +22,10 @@ import (
 // process that was serving the name -- no round trip to ask the DHCP side
 // whether a binding still exists.
 
-// How often the queue is polled, and how much of it one wake-up takes.
-//
-// The poll is deliberately not tuned for latency: an entry reaches this store
-// only after the DHCP plane has pushed it up and this plane has pulled it down,
-// so both of those polls bound the latency and polling this queue faster than
-// once a second buys nothing an operator could observe.
+// How often the durable queue is polled as a recovery fallback, and how much
+// of it one wake-up takes. The normal path wakes the consumer when the
+// replicated DDNS snapshot is applied; this timer covers missed or coalesced
+// signals and work written by other paths.
 const (
 	dnsEventInterval  = time.Second
 	dnsEventBatchSize = 64
@@ -45,11 +43,25 @@ const (
 type DNSConsumer struct {
 	link   *DNSLink
 	outbox *DNSOutbox
+	wake   chan struct{}
 }
 
 // NewDNSConsumer builds a consumer for the store the link writes to.
 func NewDNSConsumer(db *sql.DB, link *DNSLink) *DNSConsumer {
-	return &DNSConsumer{link: link, outbox: NewDNSOutbox(db)}
+	return &DNSConsumer{link: link, outbox: NewDNSOutbox(db), wake: make(chan struct{}, 1)}
+}
+
+// Wake asks the consumer to drain newly replicated DNS work without waiting
+// for the fallback poll. Signals are coalesced because Drain always reads the
+// durable queue, not an in-memory event payload.
+func (c *DNSConsumer) Wake() {
+	if c == nil || c.wake == nil {
+		return
+	}
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Run drains the queue and sweeps for drift until the context is cancelled.
@@ -64,6 +76,8 @@ func (c *DNSConsumer) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-drain.C:
+			c.Drain()
+		case <-c.wake:
 			c.Drain()
 		case <-sweep.C:
 			c.Sweep()
