@@ -36,6 +36,17 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 		WHERE sequence=2`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`UPDATE dhcp_ipam_observation_event_dirty
+		SET attempts=1, next_attempt_at='2026-09-24 10:00:00', last_error='control unavailable'
+		WHERE event_id='replica-event-2'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE dhcp_ipam_observation_events SET status='done' WHERE sequence=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM dhcp_ipam_observation_event_dirty WHERE event_id='replica-event-1'`); err != nil {
+		t.Fatal(err)
+	}
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -53,6 +64,14 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 		first.Events[1].Attempts != 2 || first.Events[1].LastError != "offline" ||
 		first.Events[1].NextAttemptAt != "2026-09-24T10:00:00Z" {
 		t.Fatalf("replicated producer state = %+v", first.Events[1])
+	}
+	if first.Events[0].Status != ReplicaEventDone || first.Events[0].Delivery != nil {
+		t.Fatalf("completed event retains a delivery marker: %+v", first.Events[0])
+	}
+	if first.Events[1].Delivery == nil || first.Events[1].Delivery.Attempts != 1 ||
+		first.Events[1].Delivery.LastError != "control unavailable" || first.Events[1].Delivery.NextAttemptAt == nil ||
+		*first.Events[1].Delivery.NextAttemptAt != "2026-09-24T10:00:00Z" {
+		t.Fatalf("replicated delivery marker = %+v", first.Events[1].Delivery)
 	}
 	last, err := outbox.ReadReplicaPageTx(ctx, tx, first.NextAfter, 2)
 	if err != nil {
