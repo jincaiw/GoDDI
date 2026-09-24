@@ -216,7 +216,7 @@ func (o *ObservationOutbox) StreamReplicaChangesTx(
 		chunkLimit = 256
 	}
 	var accumulator *ReplicaSnapshotAccumulator
-	var after int64
+	after := afterSequence
 	var highWater int64
 	var initialized bool
 	var chunkIndex int64
@@ -235,7 +235,6 @@ func (o *ObservationOutbox) StreamReplicaChangesTx(
 				return ReplicaSnapshotManifest{}, err
 			}
 			initialized = true
-			after = afterSequence
 		} else if page.LastSequence != highWater {
 			return ReplicaSnapshotManifest{}, fmt.Errorf("facts: replica snapshot high water changed: expected=%d got=%d", highWater, page.LastSequence)
 		}

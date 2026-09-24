@@ -139,6 +139,19 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 	if streamedManifest.Digest != manifest.Digest || streamedManifest.ChunkCount != 3 || len(streamedChunks) != 3 {
 		t.Fatalf("streamed snapshot = %+v chunks=%d; want same digest and three one-event chunks", streamedManifest, len(streamedChunks))
 	}
+	var suffixChunks []ReplicaSnapshotChunk
+	suffixManifest, err := outbox.StreamReplicaChangesTx(ctx, tx, 1, 1, func(chunk ReplicaSnapshotChunk) error {
+		suffixChunks = append(suffixChunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if suffixManifest.AfterSequence != 1 || suffixManifest.LastSequence != 3 || suffixManifest.EventCount != 2 ||
+		suffixManifest.ChunkCount != 2 || len(suffixChunks) != 2 || suffixChunks[0].FirstSequence != 2 ||
+		suffixChunks[1].LastSequence != 3 {
+		t.Fatalf("streamed facts suffix = manifest %+v chunks=%+v; want sequence 2..3", suffixManifest, suffixChunks)
+	}
 	stopStreaming := errors.New("stop stream")
 	if _, err := outbox.StreamReplicaSnapshotTx(ctx, tx, 1, func(ReplicaSnapshotChunk) error {
 		return stopStreaming
