@@ -80,11 +80,13 @@ test('read-only role cannot open write actions across modules and administration
   const stamp = Date.now()
   const username = `dns_reader_${stamp}`
   const roleName = `dns_reader_role_${stamp}`
+  const secondRoleName = `dhcp_reader_role_${stamp}`
   const zoneName = `dns-reader-${stamp}.example`
   const password = 'OnlyForUi-Test-123!'
   const api = await playwrightRequest.newContext({ baseURL: process.env.GODDI_TEST_BASE_URL || 'http://127.0.0.1:16090' })
   test.setTimeout(60000)
   let roleID = ''
+  let secondRoleID = ''
   let userID = ''
   let zoneID = ''
 
@@ -115,6 +117,19 @@ test('read-only role cannot open write actions across modules and administration
     })
     expect(roleResponse.status()).toBe(201)
     roleID = (await roleResponse.json()).data.id
+
+    const secondRoleResponse = await api.post('/api/v1/roles', {
+      headers,
+      data: { name: secondRoleName, description: 'Second role for permission union regression' }
+    })
+    expect(secondRoleResponse.status()).toBe(201)
+    secondRoleID = (await secondRoleResponse.json()).data.id
+    const dhcpReadPermission = readResources.find(item => item.resource === 'dhcp')!
+    const secondGrantResponse = await api.put(`/api/v1/roles/${secondRoleID}/permissions`, {
+      headers,
+      data: { permission_ids: [dhcpReadPermission.id] }
+    })
+    expect(secondGrantResponse.ok()).toBe(true)
 
     const grantResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
       headers,
@@ -169,6 +184,31 @@ test('read-only role cannot open write actions across modules and administration
       data: { permission_ids: readPermissions }
     })
     expect(restoreRoleResponse.ok()).toBe(true)
+
+    const dnsReadPermission = readResources.find(item => item.resource === 'dns')!
+    const dnsOnlyResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: [dnsReadPermission.id] }
+    })
+    expect(dnsOnlyResponse.ok()).toBe(true)
+    const assignSecondRoleResponse = await api.post(`/api/v1/users/${userID}/roles`, {
+      headers,
+      data: { role_ids: [roleID, secondRoleID] }
+    })
+    expect(assignSecondRoleResponse.ok()).toBe(true)
+
+    const mixedLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
+    expect(mixedLogin.ok()).toBe(true)
+    const mixedUser = (await mixedLogin.json()).data
+    const mixedHeaders = { Authorization: `Bearer ${mixedUser.token}` }
+    const mixedResponses = await Promise.all(readPaths.map(path => api.get(path, { headers: mixedHeaders })))
+    expect(mixedResponses.map(response => response.status()), 'multiple roles must union their resource reads')
+      .toEqual([200, 200, 403, 403, 403, 403, 403, 403, 403])
+    const restoreMixedRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: readPermissions }
+    })
+    expect(restoreMixedRoleResponse.ok()).toBe(true)
 
     const readerLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
     expect(readerLogin.ok()).toBe(true)
@@ -254,6 +294,7 @@ test('read-only role cannot open write actions across modules and administration
     if (admin) {
       const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
       if (userID) await api.delete(`/api/v1/users/${userID}`, { headers }).catch(() => {})
+      if (secondRoleID) await api.delete(`/api/v1/roles/${secondRoleID}`, { headers }).catch(() => {})
       if (roleID) await api.delete(`/api/v1/roles/${roleID}`, { headers }).catch(() => {})
       if (zoneID) await api.delete(`/api/v1/dns/zones/${zoneID}`, { headers }).catch(() => {})
     }
