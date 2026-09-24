@@ -157,7 +157,7 @@ func validateReplicaSnapshotChunk(chunk ReplicaSnapshotChunk) error {
 			return fmt.Errorf("facts: encode replica event %s: %w", event.Envelope.EventID, err)
 		}
 		encodedBytes += len(encoded)
-		if encodedBytes > maxReplicaPageBytes {
+		if encodedBytes > maxReplicaPageBytes-2048 {
 			return errors.New("facts: replica snapshot chunk exceeds byte limit")
 		}
 		expected++

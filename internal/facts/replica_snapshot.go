@@ -87,7 +87,9 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 			return fmt.Errorf("facts: encode replica event %s: %w", event.Envelope.EventID, err)
 		}
 		encodedBytes += len(encoded)
-		if encodedBytes > maxReplicaPageBytes {
+		// Reserve room for the chunk object, JSON array delimiters, and
+		// separators so the serialized chunk remains under the same cap.
+		if encodedBytes > maxReplicaPageBytes-2048 {
 			return errors.New("facts: replica snapshot page exceeds byte limit")
 		}
 		encodedEvents = append(encodedEvents, encoded)
