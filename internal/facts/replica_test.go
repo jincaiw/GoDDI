@@ -80,6 +80,36 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 	if last.LastSequence != 3 || last.NextAfter != 3 || !last.Complete || len(last.Events) != 1 {
 		t.Fatalf("last replica page = %+v", last)
 	}
+	accumulator, err := NewReplicaSnapshotAccumulator(first.LastSequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accumulator.AddPage(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accumulator.Manifest(); err == nil {
+		t.Fatal("incomplete snapshot produced a manifest")
+	}
+	if err := accumulator.AddPage(last); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := accumulator.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != ReplicaSnapshotVersion || manifest.LastSequence != 3 || manifest.EventCount != 3 || len(manifest.Digest) != 64 {
+		t.Fatalf("snapshot manifest = %+v", manifest)
+	}
+}
+
+func TestReplicaSnapshotAccumulatorRejectsChangedHighWater(t *testing.T) {
+	accumulator, err := NewReplicaSnapshotAccumulator(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accumulator.AddPage(ReplicaPage{LastSequence: 3, NextAfter: 0}); err == nil {
+		t.Fatal("page with changed allocator high water was accepted")
+	}
 }
 
 func TestReadReplicaPageRejectsAllocatedSequenceGap(t *testing.T) {

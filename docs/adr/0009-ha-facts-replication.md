@@ -45,7 +45,7 @@ HA facts 在下列协议与验收条件全部实现前保持关闭。当前观�
 
 ## 实施顺序
 
-1. 为 facts 包增加可校验、可分块的 replica snapshot 编解码与完整性检查，不改 HA 服务装配。首个代码切片已提供 `ObservationOutbox.ReadReplicaPageTx`：调用方持有单一只读事务时，按 allocator 水位分页读取 envelope 与 producer delivery state，并对 sequence 缺口 fail closed；定向测试覆盖状态保真和缺口拒绝。分块 wire 编码、digest 校验和 standby 应用仍未实现。
+1. 为 facts 包增加可校验、可分块的 replica snapshot 编解码与完整性检查，不改 HA 服务装配。代码已提供 `ObservationOutbox.ReadReplicaPageTx`：调用方持有单一只读事务时，按 allocator 水位分页读取 envelope 与 producer delivery state，并对 sequence 缺口 fail closed；`ReplicaSnapshotAccumulator` 校验跨页游标与固定高水位，并对按序事件生成 SHA-256 manifest。定向测试覆盖状态保真、缺口拒绝、高水位一致和不完整快照拒绝。分块 wire 编码、standby staging/原子应用仍未实现。
 2. 升级 HA wire protocol 与 handshake 水位，加入 standby 的事务化 staging、原子应用和故障中断恢复。
 3. 将 DHCP facts mutation identity/sequence 返回至 HA replicator；把事实复制确认纳入 REQUEST/续租 ACK gate，并覆盖 release/decline/expiry。
 4. 将 takeover/rejoin/fence/readiness 与双水位绑定；确保 promoted primary 装配 facts producer 和 control inbox delivery。
