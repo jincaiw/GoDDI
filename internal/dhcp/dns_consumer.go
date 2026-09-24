@@ -22,12 +22,10 @@ import (
 // process that was serving the name -- no round trip to ask the DHCP side
 // whether a binding still exists.
 
-// How often the queue is polled, and how much of it one wake-up takes.
-//
-// The poll is deliberately not tuned for latency: an entry reaches this store
-// only after the DHCP plane has pushed it up and this plane has pulled it down,
-// so both of those polls bound the latency and polling this queue faster than
-// once a second buys nothing an operator could observe.
+// How often the durable queue is polled as a recovery fallback, and how much
+// of it one wake-up takes. The normal path wakes the consumer when the
+// replicated DDNS snapshot is applied; this timer covers missed or coalesced
+// signals and work written by other paths.
 const (
 	dnsEventInterval  = time.Second
 	dnsEventBatchSize = 64

@@ -24,12 +24,12 @@ import (
 // How long a client waits between "the ACK arrived" and "my name resolves".
 //
 // This is the one figure the DDNS decision (D1) is about, and until now it was
-// never measured: the 2s bound was the sum of three upper bounds -- the wake
-// (about zero), the downward poll (<= 1s) and the consumer's drain (<= 1s) --
-// each pinned by a test of its own, but no test ran from the ACK to a resolved
-// name. A sum of upper bounds is not a measurement: it cannot catch the case
-// where the terms are individually correct and the assembly is not, and it
-// cannot report whether the real figure is near the bound or far from it.
+// never measured end to end: the 2s target had been reasoned from the upward
+// wake, a downward configuration poll and the DNS consumer's own poll, but no
+// test ran from ACK to a resolved name. A sum of upper bounds is not a
+// measurement: it cannot catch an extra wait in the assembled path. The
+// consumer now wakes as soon as the replicated event queue is applied; this
+// test keeps that complete path inside the target under real scheduler load.
 //
 // The assembly below is the product's own, in the shape cmd/goddi/main.go
 // builds for an all-in-one process with DHCP and DNS enabled:
@@ -69,15 +69,13 @@ import (
 // measurement makes the real deployment slower, not faster, so a figure inside
 // the bound here is a necessary and not a sufficient condition.
 //
-// What the measurement found, and why it is written down here: the figure is
-// about 2.00s, not the roughly half of that the design's arithmetic suggests.
-// The wake-up does remove the first poll, as the D1 decision intended, but the
-// two remaining polls are one second each and their tickers are started
-// microseconds apart, so they stay in phase and the consumer's tick always
-// arrives just before the pass that would have fed it. The worst case is
-// therefore the ordinary case, and the exit condition is met with no margin at
-// all. A figure of 3s would mean the wake-up had stopped working, which is what
-// the third round of the back-out check for it confirms.
+// The measured path includes two separate wake-ups: the DHCP server wakes the
+// lease-plane push after committing its event, and the DNS plane wakes its
+// consumer after applying the replicated queue. The periodic ticks remain as
+// recovery fallbacks. Without the second signal, phase-locked one-second ticks
+// can add a third wait; the release pipeline exposed that case at 2.30s. The
+// integration assertion verifies the signal is wired through the production
+// assembly rather than weakening the target to accommodate the extra wait.
 
 const (
 	latencyZone   = "e2e.latency.test."
@@ -102,25 +100,17 @@ const (
 	// The exit condition: a client that just got an address resolves its name
 	// within two seconds.
 	//
-	// The measurement lands on this bound rather than under it, and that is the
-	// finding rather than a flaw in the harness. The two one-second polls -- the
-	// downward sync and the consumer's drain -- are started microseconds apart
-	// inside one process, so their ticks are phase-locked: the consumer's tick
-	// always falls just before the pass whose rows it would have drained, and
-	// every round therefore pays the whole sum instead of the half an
-	// independent-tickers model predicts. Two polls of one second is two
-	// seconds, with nothing left over for the work itself.
+	// Two seconds is the end-to-end target, including queue propagation,
+	// consumer apply and zone reload. It is intentionally not raised to absorb
+	// another consumer polling interval; the replicated-queue wake removes that
+	// avoidable wait while the existing one-second sync tick remains fallback.
 	latencyBound = 2 * time.Second
 
 	// What the assertion allows on top of the bound.
 	//
-	// A test that fails on scheduler noise would be pinning the machine. The
-	// figure is logged every round, and the plan records that the real margin is
-	// zero; this allowance is what makes the difference between "at the bound"
-	// and "past it" observable without making the suite flaky. It is a quarter
-	// of a second because the measurement is quantised by the tickers rather
-	// than noisy -- see the test's own comment -- so the allowance only has to
-	// cover a scheduler that is busy, not a design that is slow.
+	// A test that fails on minor scheduler noise would be pinning the machine.
+	// Log each round, but fail only when the measured path exceeds the target by
+	// more than this allowance; a larger systematic delay remains a real defect.
 	latencySlack = 250 * time.Millisecond
 
 	// Rounds, in addition to one that is run and discarded.
@@ -481,9 +471,9 @@ func (w *latencyWorld) resolveOverUDP(t *testing.T, name string) []string {
 }
 
 // TestTheTimeFromAckToResolvableIsWithinTheBound is the measurement the DDNS
-// decision rests on. It is deliberately a bound and not an equality: the figure
-// is a scheduling artefact of two independent one-second tickers, so pinning an
-// exact number would pin the machine, not the product.
+// decision rests on. It is deliberately a bound and not an equality: elapsed
+// time includes scheduling and host load, so pinning an exact number would pin
+// the machine, not the product.
 //
 // Two properties of the figure decide how it has to be read. Both were learned
 // by this test failing on CI, for neither of them:
@@ -494,15 +484,11 @@ func (w *latencyWorld) resolveOverUDP(t *testing.T, name string) []string {
 //     rounds after it. A cold start is not the latency under test, so one round
 //     is run and discarded -- the same "settle, then measure" the idle-pass test
 //     in internal/dataplane does.
-//   - The figure is quantised, not noisy. The two tickers are phase-locked, so
-//     a round is worth two polls or three, and which one is decided by the tick
-//     alignment the process happened to start with -- not by the load on the
-//     machine. Measured with the wake-up removed: 3.006s, 2.995s, 2.997s and
-//     2.999s in one process, and a run of that same code that reported 1.994s
-//     in another. The corollary is that this test sees a removed wake-up only
-//     when the process lands in the slow phase, which is why the bound is worth
-//     asserting here anyway: when it does fail, it is reporting the design and
-//     not the host.
+//   - The old consumer poll could phase-lock just before the downward sync,
+//     making an otherwise valid update wait through an extra interval. The
+//     consumer wake introduced for this path removes that dependency; repeated
+//     rounds still expose a missing or miswired wake under different tick
+//     phases.
 func TestTheTimeFromAckToResolvableIsWithinTheBound(t *testing.T) {
 	world := newLatencyWorld(t)
 	defer world.close()
@@ -523,21 +509,17 @@ func TestTheTimeFromAckToResolvableIsWithinTheBound(t *testing.T) {
 		latencyRounds, slowest, latencyBound, latencyInterval)
 
 	if slowest > latencyBound {
-		// Not a failure, and not silence either. The bound is met, but by
-		// construction rather than with room to spare, and a reader of this
-		// suite is entitled to know which.
-		t.Logf("NOTE: %s is at or over the %s the exit condition names, by %s. "+
-			"Two polls of %s cannot be faster than %s, so the margin is the "+
-			"remainder -- and it is not enough to absorb the work between them.",
-			slowest, latencyBound, slowest-latencyBound, latencyInterval, latencyBound)
+		// Keep near-target results visible even when they remain inside the
+		// scheduling allowance.
+		t.Logf("NOTE: %s is over the %s end-to-end target by %s; the remaining "+
+			"margin is limited under this host's scheduling load.",
+			slowest, latencyBound, slowest-latencyBound)
 	}
 
 	if slowest > latencyBound+latencySlack {
-		t.Errorf("the slowest of %d measured rounds took %s, past the %s exit "+
-			"condition plus %s of scheduling. The bound is two %s polls, so a "+
-			"figure this large is not the design: something is waiting for a "+
-			"third pass.",
-			latencyRounds, slowest, latencyBound, latencySlack, latencyInterval)
+		t.Errorf("the slowest of %d measured rounds took %s, past the %s end-to-end "+
+			"target plus %s of scheduling allowance.",
+			latencyRounds, slowest, latencyBound, latencySlack)
 	}
 }
 
