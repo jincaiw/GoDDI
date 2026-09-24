@@ -373,11 +373,11 @@ func runServer(configPath string) error {
 
 	// Which planes this process runs.
 	//
-	// The default is still one process doing everything. Separating them is a
-	// deployment choice an operator makes when the console being restarted must
-	// not interrupt the addresses clients are already using: a data-plane
-	// process has no management API and no control-plane database to migrate,
-	// so nothing on the console's startup path is on the client's path.
+	// The default is still one process doing everything. A split role removes
+	// unrelated listeners, but is not yet full process fault isolation: data
+	// plane roles still open and migrate the control database. The warning
+	// below makes that startup dependency visible instead of implying that a
+	// console restart can never affect the serving process.
 	role := cfg.EffectiveRole()
 	controlPlane := cfg.IsControlPlane()
 	servesDNS := cfg.ServesDNS() && cfg.DNS.Enabled
