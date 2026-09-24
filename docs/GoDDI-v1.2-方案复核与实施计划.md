@@ -79,7 +79,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W13 产品体验 | IP 地址详情抽屉、子网导入与建池向导、DNS CSV/BIND 预检导入均已有实现；建池冲突服务端闸门和跨模块详情权限隔离已接通；DNS、DHCP、IPAM、RBAC、备份、系统配置和 token 页面操作入口及处理器已完成静态权限逐项核对；只读 UI 场景覆盖九类资源页面、关键 RBAC 按钮及九类写入拒绝；API 浏览器回归覆盖九类单资源读取隔离、双角色权限并集和受限管理员的 user/role/group 授权工作流；本地真实服务用例通过 | 最新提交 CI 待完成；授权写入流程覆盖 API 工作流，未覆盖每个管理对话框的 UI 点击路径 |
 | W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
 
-W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `bf6d5f9` 的 CI 全通过；W13 真实浏览器/API 权限场景在本地通过。HA 增量提交在本地 `go test ./...`、`go test -race ./internal/dhcp/ha ./internal/facts`、`go vet ./...`、golangci-lint v2.13.2 和 `git diff --check` 均通过。PR #1 的 `e1a1f45` 远端 lint 报 `internal/facts/replica.go` 的无效游标初始化；复核发现它同时令非零 facts base 从错误游标读取。`4bba613` 已修正为从 `afterSequence` 读取并新增非零 base 回归；该提交远端 lint 与 vulncheck 已通过，完整 CI 测试仍在运行。现场/部署退出条件仍未满足，当前分支保持 draft，未达正式发布门槛。
+W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `bf6d5f9` 的 CI 全通过；W13 真实浏览器/API 权限场景在本地通过。提交 `6341d00` 的远端 CI 全通过。最新提交 `3225a32` 增加 HA facts lag 指标和告警，本地 `go test ./...`、`go test -race ./internal/metrics ./internal/dhcp/ha ./internal/facts ./cmd/goddi`、`go vet ./...`、golangci-lint v2.13.2 和 `git diff --check` 均通过；其远端 lint、test、vulncheck 仍在运行。此前 `e1a1f45` lint 暴露的非零 base 游标错误已由 `4bba613` 修正，并由 `6341d00` 全量 CI 验证。现场/部署退出条件仍未满足，当前分支保持 draft，未达正式发布门槛。
 
 ## 调整后的实施计划
 
