@@ -301,3 +301,130 @@ test('read-only role cannot open write actions across modules and administration
     await api.dispose()
   }
 })
+
+test('authorized operator can manage users, roles, and groups within assigned permissions', async () => {
+  const stamp = Date.now()
+  const operatorName = `rbac_operator_${stamp}`
+  const operatorRoleName = `rbac_operator_role_${stamp}`
+  const delegatedRoleName = `rbac_delegated_role_${stamp}`
+  const delegatedUserName = `rbac_managed_user_${stamp}`
+  const groupName = `rbac_managed_group_${stamp}`
+  const password = 'OnlyForUi-Test-123!'
+  const api = await playwrightRequest.newContext({ baseURL: process.env.GODDI_TEST_BASE_URL || 'http://127.0.0.1:16090' })
+  test.setTimeout(60000)
+  let operatorRoleID = ''
+  let operatorID = ''
+  let delegatedRoleID = ''
+  let delegatedUserID = ''
+  let groupID = ''
+
+  try {
+    const adminLogin = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    })
+    expect(adminLogin.ok()).toBe(true)
+    const admin = (await adminLogin.json()).data
+    const adminHeaders = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+    const permissionResponse = await api.get('/api/v1/permissions', { headers: adminHeaders })
+    expect(permissionResponse.ok()).toBe(true)
+    const permissions = (await permissionResponse.json()).data as Array<{ id: string; resource: string; action: string }>
+    const permissionID = (resource: string, action: string) => {
+      const permission = permissions.find(item => item.resource === resource && item.action === action)
+      expect(permission, `${resource}:${action} permission must exist`).toBeDefined()
+      return permission!.id
+    }
+
+    const operatorRoleResponse = await api.post('/api/v1/roles', {
+      headers: adminHeaders,
+      data: { name: operatorRoleName, description: 'Scoped user, role, and group administrator' }
+    })
+    expect(operatorRoleResponse.status()).toBe(201)
+    operatorRoleID = (await operatorRoleResponse.json()).data.id
+    const operatorPermissions = [
+      permissionID('user', 'read'), permissionID('user', 'write'),
+      permissionID('role', 'read'), permissionID('role', 'write'),
+      permissionID('group', 'read'), permissionID('group', 'write')
+    ]
+    const grantResponse = await api.put(`/api/v1/roles/${operatorRoleID}/permissions`, {
+      headers: adminHeaders, data: { permission_ids: operatorPermissions }
+    })
+    expect(grantResponse.ok()).toBe(true)
+    const operatorResponse = await api.post('/api/v1/users', {
+      headers: adminHeaders,
+      data: { username: operatorName, password, display_name: operatorName, enabled: true, must_change_password: false }
+    })
+    expect(operatorResponse.status()).toBe(201)
+    operatorID = (await operatorResponse.json()).data.id
+    const assignOperatorRole = await api.post(`/api/v1/users/${operatorID}/roles`, {
+      headers: adminHeaders, data: { role_ids: [operatorRoleID] }
+    })
+    expect(assignOperatorRole.ok()).toBe(true)
+
+    const operatorLogin = await api.post('/api/v1/auth/login', { data: { username: operatorName, password } })
+    expect(operatorLogin.ok()).toBe(true)
+    const operator = (await operatorLogin.json()).data
+    const operatorHeaders = { Authorization: `Bearer ${operator.token}`, 'X-CSRF-Token': operator.csrf_token }
+
+    const delegatedRoleResponse = await api.post('/api/v1/roles', {
+      headers: operatorHeaders, data: { name: delegatedRoleName, description: 'Delegated DNS reader' }
+    })
+    expect(delegatedRoleResponse.status()).toBe(201)
+    delegatedRoleID = (await delegatedRoleResponse.json()).data.id
+    const delegatedGrant = await api.put(`/api/v1/roles/${delegatedRoleID}/permissions`, {
+      headers: operatorHeaders, data: { permission_ids: [permissionID('dns', 'read')] }
+    })
+    expect(delegatedGrant.ok()).toBe(true)
+
+    const groupResponse = await api.post('/api/v1/groups', {
+      headers: operatorHeaders, data: { name: groupName, description: 'Managed by scoped RBAC regression' }
+    })
+    expect(groupResponse.status()).toBe(201)
+    groupID = (await groupResponse.json()).data.id
+    const assignGroupRole = await api.post(`/api/v1/groups/${groupID}/roles`, {
+      headers: operatorHeaders, data: { role_ids: [delegatedRoleID] }
+    })
+    expect(assignGroupRole.ok()).toBe(true)
+
+    const delegatedUserResponse = await api.post('/api/v1/users', {
+      headers: operatorHeaders,
+      data: { username: delegatedUserName, password, display_name: delegatedUserName, enabled: true, must_change_password: false }
+    })
+    expect(delegatedUserResponse.status()).toBe(201)
+    delegatedUserID = (await delegatedUserResponse.json()).data.id
+    const assignManagedGroup = await api.post(`/api/v1/users/${delegatedUserID}/groups`, {
+      headers: operatorHeaders, data: { group_id: groupID }
+    })
+    expect(assignManagedGroup.ok()).toBe(true)
+    const assignManagedRole = await api.post(`/api/v1/users/${delegatedUserID}/roles`, {
+      headers: operatorHeaders, data: { role_ids: [delegatedRoleID] }
+    })
+    expect(assignManagedRole.ok()).toBe(true)
+
+    const managedLogin = await api.post('/api/v1/auth/login', { data: { username: delegatedUserName, password } })
+    expect(managedLogin.ok()).toBe(true)
+    const managed = (await managedLogin.json()).data
+    const managedHeaders = { Authorization: `Bearer ${managed.token}` }
+    expect((await api.get('/api/v1/dns/zones', { headers: managedHeaders })).status()).toBe(200)
+    expect((await api.get('/api/v1/dhcp/scopes', { headers: managedHeaders })).status()).toBe(403)
+  } finally {
+    const adminLogin = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    }).catch(() => null)
+    const admin = adminLogin?.ok() ? (await adminLogin.json()).data : null
+    if (admin) {
+      const adminHeaders = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+      if (delegatedUserID) await api.delete(`/api/v1/users/${delegatedUserID}`, { headers: adminHeaders }).catch(() => {})
+      if (operatorID) await api.delete(`/api/v1/users/${operatorID}`, { headers: adminHeaders }).catch(() => {})
+      if (groupID) await api.delete(`/api/v1/groups/${groupID}`, { headers: adminHeaders }).catch(() => {})
+      if (delegatedRoleID) await api.delete(`/api/v1/roles/${delegatedRoleID}`, { headers: adminHeaders }).catch(() => {})
+      if (operatorRoleID) await api.delete(`/api/v1/roles/${operatorRoleID}`, { headers: adminHeaders }).catch(() => {})
+    }
+    await api.dispose()
+  }
+})
