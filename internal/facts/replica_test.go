@@ -128,6 +128,23 @@ func TestReadReplicaPagesPreserveEnvelopeAndDeliveryState(t *testing.T) {
 	if rechunkedManifest.Digest != manifest.Digest || rechunkedManifest.ChunkCount != 1 {
 		t.Fatalf("digest changed with transport chunking: split=%+v combined=%+v", manifest, rechunkedManifest)
 	}
+	var streamedChunks []ReplicaSnapshotChunk
+	streamedManifest, err := outbox.StreamReplicaSnapshotTx(ctx, tx, 1, func(chunk ReplicaSnapshotChunk) error {
+		streamedChunks = append(streamedChunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamedManifest.Digest != manifest.Digest || streamedManifest.ChunkCount != 3 || len(streamedChunks) != 3 {
+		t.Fatalf("streamed snapshot = %+v chunks=%d; want same digest and three one-event chunks", streamedManifest, len(streamedChunks))
+	}
+	stopStreaming := errors.New("stop stream")
+	if _, err := outbox.StreamReplicaSnapshotTx(ctx, tx, 1, func(ReplicaSnapshotChunk) error {
+		return stopStreaming
+	}); !errors.Is(err, stopStreaming) {
+		t.Fatalf("stream callback error = %v, want %v", err, stopStreaming)
+	}
 }
 
 func TestReplicaSnapshotAccumulatorRejectsChangedHighWater(t *testing.T) {

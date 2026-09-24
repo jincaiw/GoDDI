@@ -155,6 +155,71 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 	return page, nil
 }
 
+// StreamReplicaSnapshotTx reads one stable snapshot in bounded chunks from a
+// caller-owned read transaction. emit must durably accept each chunk before
+// returning nil; the returned manifest is available only after every chunk was
+// accepted and the allocator high water was covered.
+func (o *ObservationOutbox) StreamReplicaSnapshotTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	chunkLimit int,
+	emit func(ReplicaSnapshotChunk) error,
+) (ReplicaSnapshotManifest, error) {
+	if o == nil || o.db == nil {
+		return ReplicaSnapshotManifest{}, ErrOutboxClosed
+	}
+	if tx == nil {
+		return ReplicaSnapshotManifest{}, errors.New("facts: nil replica snapshot transaction")
+	}
+	if emit == nil {
+		return ReplicaSnapshotManifest{}, errors.New("facts: nil replica snapshot chunk handler")
+	}
+	if chunkLimit <= 0 || chunkLimit > maxReplicaPageEvents {
+		chunkLimit = 256
+	}
+	var accumulator *ReplicaSnapshotAccumulator
+	var after int64
+	var highWater int64
+	var initialized bool
+	var chunkIndex int64
+	for {
+		page, err := o.ReadReplicaPageTx(ctx, tx, after, chunkLimit)
+		if err != nil {
+			return ReplicaSnapshotManifest{}, err
+		}
+		if !initialized {
+			highWater = page.LastSequence
+			accumulator, err = NewReplicaSnapshotAccumulator(highWater)
+			if err != nil {
+				return ReplicaSnapshotManifest{}, err
+			}
+			initialized = true
+		} else if page.LastSequence != highWater {
+			return ReplicaSnapshotManifest{}, fmt.Errorf("facts: replica snapshot high water changed: expected=%d got=%d", highWater, page.LastSequence)
+		}
+		if len(page.Events) > 0 {
+			chunk := ReplicaSnapshotChunk{
+				Index: chunkIndex, FirstSequence: page.Events[0].Envelope.Sequence,
+				LastSequence: page.Events[len(page.Events)-1].Envelope.Sequence, Events: page.Events,
+			}
+			if err := accumulator.AddChunk(chunk); err != nil {
+				return ReplicaSnapshotManifest{}, err
+			}
+			if err := emit(chunk); err != nil {
+				return ReplicaSnapshotManifest{}, fmt.Errorf("facts: emit replica snapshot chunk %d: %w", chunkIndex, err)
+			}
+			chunkIndex++
+		}
+		after = page.NextAfter
+		if page.Complete {
+			return accumulator.Manifest()
+		}
+		if len(page.Events) == 0 {
+			return ReplicaSnapshotManifest{}, errors.New("facts: replica snapshot reader made no progress")
+		}
+	}
+}
+
 func validReplicaEventStatus(status ReplicaEventStatus) bool {
 	switch status {
 	case ReplicaEventPending, ReplicaEventDone, ReplicaEventFailed:

@@ -263,7 +263,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
 - HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管：现有 HA 复制只镜像 lease rows，不复制 facts 序列和 outbox；启用后会在接管时造成序列断档。新增 ADR-0009 固化双水位、复制确认、分块快照完整性和接管约束；这些是实施约束而非完成功能。W04 仍需实现 HA 故障转移时的事实复制、控制库与 DHCP 数据库分离时的故障恢复及真实网络端到端演练。本批接通非 HA 默认生产者和消费者，但不发布版本。
-- W04 HA 快照存储原语新增 `StageReplicaChunkTx`、`ApplyStagedReplicaSnapshotTx` 与 staging migration：相同 chunk 可幂等重放，冲突 chunk 拒绝；应用前二次有界读取并校验 manifest，之后在调用方事务整体替换 outbox、delivery markers 和 allocator；坏快照不会触碰活动副本。补充已中断快照的显式清理 API。分页/分块每块最多 1000 个事件且不超过 16 MiB。facts 定向测试、vet、data-plane 迁移启动测试及 migration contract 检查通过；尚无 HA wire 集成、lease/facts 联合快照调用、水位确认和 takeover 接线，因此没有改变 HA 部署行为或发布边界。
+- W04 HA 快照存储原语新增 `StreamReplicaSnapshotTx`：在调用方单只读事务内按有界页读取，逐 chunk 同步交给持久化回调，完整覆盖 allocator 水位后才返回 manifest；回调或中途读取失败则不产生成功 manifest。结合已有 `StageReplicaChunkTx`、`ApplyStagedReplicaSnapshotTx` 与 staging migration，覆盖可重放暂存、manifest 校验和调用方事务整体替换 outbox/markers/allocator。分页/分块每块最多 1000 个事件且不超过 16 MiB。facts 定向测试与 vet 通过；尚无 HA wire 集成、lease/facts 联合快照调用、水位确认和 takeover 接线，因此没有改变 HA 部署行为或发布边界。
 
 ### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 
