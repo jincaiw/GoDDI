@@ -268,3 +268,21 @@ jobs:
           done
           curl -fsS "http://127.0.0.1:${port}/health" >/dev/null
           curl -fsS "http://127.0.0.1:${port}/" | grep -q '<div id="app">'
+
+  arm64-smoke:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: true
+
+      - name: Build Linux arm64 binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.24.1" -o /tmp/goddi-arm64 ./cmd/goddi
+
+      - name: Smoke test Linux arm64 binary
+        run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.24.1
