@@ -52,7 +52,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | DHCP→DNS durable outbox | 最新工作计划记录 generation、consumer、retry/reconciliation 和进程级追平演练已经存在 | 范围内已实现，统一事实源仍未完成 | DHCP-DNS-IPAM 统一 sequence、producer 真实接入、跨库 replay 和完整 lag/gap 监测继续单独跟踪 |
 | DHCP 内存选址和租约索引 | 当前代码已有快照重建、租约索引和索引更新失败后的 readiness 降级路径 | 代码已存在，异常恢复与真实运行态待验收 | 启动重建失败、写入后索引失败、冲突并发和池变化下不误发 OFFER/ACK；必须与持久租约源对照 |
 | DHCP ACK 持久性 | DHCP 独立 lease data-plane store 单连接运行；`internal/dataplane/store.go` 启动设置并读回 WAL、`synchronous=FULL`；REQUEST 路径先提交 lease，再做 HA 确认，最后构建 ACK | 代码边界存在，物理耐久性未验收 | 在目标驱动、文件系统与硬件上分别验收进程崩溃、主机断电、复制链路分区；`FULL` 是应用请求的同步边界，不替代介质掉电演练 |
-| DHCP→IPAM 持久事件 | 非 HA 默认路径已将 REQUEST/续租/释放/管理释放/拒绝/过期写入本地事实 outbox，经幂等上行复制到 control inbox，由默认控制端 consumer 原子投影 IPAM；分离数据库端到端回归通过 | 非 HA 实现已接通，未发布；HA 仍走兼容观察路径 | HA 接管的事件/序列连续性、首事件丢失与重放、端到端对账及真实运行态恢复验收；未完成前不发布 W04 版本 |
+| DHCP→IPAM 持久事件 | 非 HA 默认路径已写入 durable facts outbox 并由 control inbox 原子投影；HA primary 使用 lease/facts 双水位，协议 v3 传输增量 facts，备端校验后事务应用；离线重连、断点 staging 清理和 apply 失败回滚已有集成回归 | 仓内主要实现及本地故障用例已接通；远端 CI 待最新提交完成，部署/现场验收未完成 | promoted primary 首事件连续性、control DB 长期故障重放、端到端对账及真实双节点运行态恢复 |
 | DNS DDNS 与 IPAM 统一所有权 | v1.1 识别的生命周期、generation、DNS serial 和所有权风险依然需要核对 | 需按最新代码重新验收 | 旧 RELEASE/过期事件不能删除新代记录；A/PTR、zone 发布和 serial 的失败恢复保持一致 |
 | DNS secondary | 最新基线已有周期扫描、健康状态及 EXPIRE 相关实现，优于 v1.1 描述的初始缺口 | 代码存在，待验证 | 完整检查启动接线、运行态发布、恢复失败、EXPIRE 临界点和重新同步行为 |
 | IPAM 分配与跨 scope 唯一性 | 最新工作树的事实消费接口已强调目标缺失不得当作成功；不能据此推定规划分配 CAS 和跨池唯一性全部完成 | 部分解决 | 比较最新迁移、地址状态迁移、space 作用域唯一索引、导入和并发分配路径 |
@@ -67,7 +67,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W01 IXFR | primary serial 作者写入者均记录完整 SOA 分界；连续 journal 链服务已实现，缺链回退 AXFR | 真实 secondary、多消息 TCP framing、pruning 临界点与恢复互通 |
 | W02 架构边界 | 单写、双副本确认、无见证时暂停、显式降级/接管操作已有实现与 ADR | 生产围栏设备、跨主机分区、主备恢复演练；不得据此启用自动接管 |
 | W03 DHCP 协议 | REQUEST 分类、server-id、relay allowlist、有界队列及负向用例已有代码 | 真实 relay、多种客户端/多网卡的现场交互和 ACK 行为 |
-| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer、跨库幂等传送/水位和 readiness 已接通；HA protocol v3 已接入运行期 facts delta、连续序列校验、备端事务应用和双水位 ACK gate | 完成断连/重启/写入中断自动化故障矩阵；验证接管后首事件连续性、控制库故障重放及真实网络演练 |
+| W04 DHCP→IPAM facts | 非 HA 默认 producer/consumer 与跨库幂等投影已接通；HA protocol v3 已接入运行期 facts delta、连续序列校验、备端事务应用和双水位 ACK gate；本地覆盖断连、重连追平、失效 staging 清理及 apply 失败原子回滚 | 继续补齐主进程/备进程重启组合和 control DB 长期不可用/恢复自动化矩阵；验证接管后首事件连续性及真实网络演练 |
 | W05 配置发布 | revision、CAS、幂等与 release outbox 已有实现 | 多节点 applied 确认、部分节点失败时保留 LKG 的部署级协调验收 |
 | W06 DNS/IPAM 不变量 | CNAME owner 规范化、catalog 自动 PTR 与 zone rename 冲突已修复；CSV 与 BIND 导入 dry-run 聚合冲突 | 多 DNS 关系源及并发地址分配仍需完整验收 |
 | W07 进程隔离/恢复 | 数据面快照重建和 readiness gate 已接线 | 坏快照、旧 schema、磁盘满、控制进程退出与重启故障注入 |
@@ -79,7 +79,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W13 产品体验 | IP 地址详情抽屉、子网导入与建池向导、DNS CSV/BIND 预检导入均已有实现；建池冲突服务端闸门和跨模块详情权限隔离已接通；DNS、DHCP、IPAM、RBAC、备份、系统配置和 token 页面操作入口及处理器已完成静态权限逐项核对；只读 UI 场景覆盖九类资源页面、关键 RBAC 按钮及九类写入拒绝；API 浏览器回归覆盖九类单资源读取隔离、双角色权限并集和受限管理员的 user/role/group 授权工作流；本地真实服务用例通过 | 最新提交 CI 待完成；授权写入流程覆盖 API 工作流，未覆盖每个管理对话框的 UI 点击路径 |
 | W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
 
-W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代码提交 `bf6d5f9` 的 CI 均全通过：Go 全量 race 测试、Go vet、DNS/API 集成、两组浏览器回归、lint 和漏洞检查均成功；W13 最新真实浏览器/API 权限场景也在本地通过。上述表中仍标为未关闭的现场/部署退出条件没有被仓内检查代替。当前分支只作为草稿 PR 评审，未满足正式发布门槛。
+W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `bf6d5f9` 的 CI 全通过；W13 真实浏览器/API 权限场景在本地通过。最新 HA 增量提交的本地 `go test ./...`、`go test -race ./internal/dhcp/ha ./internal/facts`、`go vet ./...` 和 `git diff --check` 通过；PR #1 最新 head `50b4136` 的 lint、test、vulncheck 尚待远端完成。仍标为未关闭的现场/部署退出条件没有被仓内检查代替，当前分支仍是 draft，未满足正式发布门槛。
 
 ## 调整后的实施计划
 
@@ -262,7 +262,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 地址无法映射到本地 IPAM space 时，DHCP 操作沿用现有 lease 路径，到期仍会清理租约；不会伪造 facts。映射数据库出现其他错误时，单次 facts mutation 回滚并返回错误。
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
-- **2026-09-24 更新**：HA protocol v3 已接入 lease/facts 双水位、分块全量重连快照和运行期增量 facts 帧；增量从备端 durable ACK 水位开始，验证连续 sequence、chunk manifest 与 base watermark 后才原子追加。HA primary 默认装配 mapped lease facts producer，REQUEST/续租在 lease 与 facts 双水位均确认后才 ACK；standby 接管遇 facts gap 会 fail closed。坏 manifest 和 live delta 已有集成回归。W04/W09 的主要代码链路已接通，但故障矩阵、控制库长期故障下重放、promoted primary/旧主回归对账及真实双主机 fencing/分区演练仍未验收；因此不发布版本、不宣称 HA GA。
+- **2026-09-24 更新**：HA protocol v3 已接入 lease/facts 双水位、分块全量重连快照和运行期增量 facts 帧；增量从备端 durable ACK 水位开始，验证连续 sequence、chunk manifest 与 base watermark 后才原子追加。HA primary 默认装配 mapped lease facts producer，REQUEST/续租在 lease 与 facts 双水位均确认后才 ACK；standby 接管遇 facts gap 会 fail closed。自动化已覆盖坏 manifest、live delta、delta apply 数据库故障回滚、断开后 stale staging 清理和备端离线期间 facts 的重连追平。W04/W09 的主要代码链路已接通，但主备进程重启组合、控制库长期故障下重放、promoted primary/旧主回归对账及真实双主机 fencing/分区演练仍未验收；因此不发布版本、不宣称 HA GA。
 
 ### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 

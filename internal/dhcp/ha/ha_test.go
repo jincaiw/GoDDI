@@ -552,6 +552,69 @@ func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	}
 }
 
+func TestFactsDeltaApplyFailureLeavesWatermarkAndEventsUnchanged(t *testing.T) {
+	store := openStore(t, "delta-apply-failure")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	snapshot, err := mirror.beginFactsDelta(ctx, Frame{
+		Type: FrameFactsDeltaStart, SnapshotID: "delta-apply-failure", Seq: 0, FactsSeq: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := facts.ReplicaSnapshotChunk{
+		Index: 0, FirstSequence: 1, LastSequence: 1,
+		Events: []facts.ReplicaEvent{{
+			Envelope: facts.Envelope{
+				EventID: "delta-apply-failure-event", Version: facts.CurrentEnvelopeVersion,
+				Entity: "lease", Action: "activate", Generation: 1, Sequence: 1,
+				Source: "dhcp", OccurredAt: time.Date(2026, 9, 24, 13, 0, 0, 0, time.UTC),
+				PayloadVersion: 1, Payload: json.RawMessage(`{"lease_id":"delta-failure"}`),
+			},
+			NextAttemptAt: "2026-09-24T13:00:00Z", Status: facts.ReplicaEventPending,
+			Delivery: &facts.ReplicaDeliveryMarker{QueuedAt: "2026-09-24T13:00:00Z"},
+		}},
+	}
+	if err := mirror.stageSnapshotChunk(ctx, snapshot, Frame{Type: FrameFactsChunk, SnapshotID: snapshot.id, FactsChunk: &chunk}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := snapshot.accumulator.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`CREATE TRIGGER reject_facts_apply BEFORE INSERT ON dhcp_ipam_observation_events
+		BEGIN SELECT RAISE(ABORT, 'injected facts apply failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mirror.finishFactsDelta(ctx, snapshot, Frame{
+		Type: FrameFactsDeltaEnd, SnapshotID: snapshot.id, FactsManifest: &manifest,
+	}); err == nil {
+		t.Fatal("facts delta apply succeeded despite the injected database failure")
+	}
+	var eventCount, stagingCount int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='delta-apply-failure-event'`).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.QueryRow(`SELECT COUNT(*) FROM facts_replica_snapshot_chunks WHERE snapshot_id='delta-apply-failure'`).Scan(&stagingCount); err != nil {
+		t.Fatal(err)
+	}
+	allocator, err := facts.NewSequenceAllocator(store.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := allocator.CurrentOrZero(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 || stagingCount != 1 || allocated != 0 || mirror.FactsAppliedSeq() != 0 {
+		t.Fatalf("failed delta changed active state: events=%d staging=%d allocator=%d applied=%d",
+			eventCount, stagingCount, allocated, mirror.FactsAppliedSeq())
+	}
+}
+
 func TestReconnectSnapshotDiscardsInterruptedFactsDeltaStaging(t *testing.T) {
 	store := openStore(t, "interrupted-delta")
 	mirror, err := NewMirror(testConfig(t, "standby"), store)
