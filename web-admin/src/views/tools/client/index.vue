@@ -14,7 +14,7 @@
           <n-input v-model:value="queryForm.upstream" placeholder="Optional" style="width: 200px;" clearable />
         </n-form-item>
         <n-form-item>
-          <n-button type="primary" :loading="querying" @click="handleQuery">{{ t('dns.client.execute') }}</n-button>
+          <n-button type="primary" :loading="querying" :disabled="!perm.canRead('dns')" @click="handleQuery">{{ t('dns.client.execute') }}</n-button>
         </n-form-item>
       </n-form>
     </n-card>
@@ -61,7 +61,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="importing" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
+            <n-button type="primary" :loading="importing" :disabled="!perm.canWrite('dns')" @click="handleImportSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -123,6 +123,7 @@ const answerColumns = [
 ]
 
 async function handleQuery() {
+  if (!perm.canRead('dns')) return
   if (!queryForm.name) {
     message.warning('Please enter a domain name')
     return
@@ -145,6 +146,7 @@ async function handleQuery() {
 }
 
 async function openImport(row: DNSQueryAnswer) {
+  if (!perm.canWrite('dns')) return
   importForm.name = row.name
   importForm.type = row.type
   importForm.value = row.data
@@ -164,6 +166,7 @@ async function openImport(row: DNSQueryAnswer) {
 }
 
 async function handleImportSubmit() {
+  if (!perm.canWrite('dns')) return
   if (!importForm.zone_id || !importForm.name || !importForm.value) {
     message.warning(t('common.required'))
     return

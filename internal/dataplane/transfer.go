@@ -420,12 +420,116 @@ func (r *Replicator) pendingLeases(ctx context.Context, limit int) ([]pendingLea
 // filled. TestEveryMarkerTableIsInTheUpwardQueueList reads the schema and
 // fails if a seventh queue is ever added without landing here.
 var upwardQueues = []struct{ table, key string }{
+	{"dhcp_ipam_observation_event_dirty", "event_id"},
 	{"dhcp_lease_dirty", "lease_id"},
 	{"dhcp_dns_event_dirty", "event_id"},
 	{"dhcp_log_dirty", "log_id"},
 	{"dns_record_dirty", "record_id"},
 	{"dns_zone_serial_dirty", "zone_id"},
 	{"audit_log_dirty", "log_id"},
+}
+
+var factTransferColumns = []string{"event_id", "version", "entity", "action", "generation", "sequence", "source", "occurred_at", "payload_version", "payload"}
+
+// PushFacts copies immutable lease facts to the control database. The control
+// copy owns consumer status; this store only marks delivery after the remote
+// transaction commits. Replaying after a crash is safe because event identity
+// and sequence uniqueness are checked against the persisted payload.
+func (r *Replicator) PushFacts(ctx context.Context, limit int) (int, error) {
+	if r.control == nil {
+		return 0, ErrControlUnavailable
+	}
+	if limit <= 0 {
+		limit = pushBatchDefault
+	}
+	pending, err := r.pendingRows(ctx, pendingQuery{
+		markerTable: "dhcp_ipam_observation_event_dirty", markerKey: "event_id",
+		sourceTable: "dhcp_ipam_observation_events", sourceKey: "event_id",
+		columns: factTransferColumns, limit: limit,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(pending) == 0 {
+		return 0, nil
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%w: beginning fact push: %v", ErrControlUnavailable, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`INSERT INTO dhcp_ipam_observation_events (%s) VALUES (%s) ON CONFLICT(event_id) DO NOTHING`, strings.Join(factTransferColumns, ", "), strings.TrimSuffix(strings.Repeat("?, ", len(factTransferColumns)), ", ")))
+	if err != nil {
+		return 0, fmt.Errorf("dataplane: preparing fact insert: %w", err)
+	}
+	defer stmt.Close()
+	done := make([]string, 0, len(pending))
+	var refused []pushFailure
+	n := 0
+	for _, p := range pending {
+		if p.gone {
+			refused = append(refused, pushFailure{key: p.key, err: errors.New("source fact disappeared while queued")})
+			continue
+		}
+		res, pushErr := stmt.ExecContext(ctx, p.values...)
+		if pushErr == nil {
+			if affected, e := res.RowsAffected(); e == nil {
+				n += int(affected)
+			}
+			// event_id conflicts are expected replays; verify the complete immutable envelope.
+			got := make([]interface{}, len(factTransferColumns))
+			ptrs := make([]interface{}, len(got))
+			for i := range got {
+				ptrs[i] = &got[i]
+			}
+			row := tx.QueryRowContext(ctx, "SELECT "+strings.Join(factTransferColumns, ", ")+" FROM dhcp_ipam_observation_events WHERE event_id = ?", p.key)
+			if e := row.Scan(ptrs...); e != nil {
+				pushErr = e
+			} else {
+				for i := range got {
+					if fmt.Sprint(got[i]) != fmt.Sprint(p.values[i]) {
+						pushErr = fmt.Errorf("fact %s conflicts with an existing envelope", p.key)
+						break
+					}
+				}
+			}
+		}
+		if pushErr != nil {
+			refused = append(refused, pushFailure{key: p.key, err: pushErr})
+			continue
+		}
+		done = append(done, p.key)
+	}
+	if err := tx.Commit(); err != nil {
+		return n, fmt.Errorf("dataplane: committing fact push: %w", err)
+	}
+	if err := r.finishFactDelivery(ctx, done); err != nil {
+		return n, err
+	}
+	if err := r.recordPushFailures("dhcp_ipam_observation_event_dirty", "event_id", refused); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+func (r *Replicator) finishFactDelivery(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := r.store.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE dhcp_ipam_observation_events SET status='done', updated_at=datetime('now') WHERE event_id=?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM dhcp_ipam_observation_event_dirty WHERE event_id=?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // pushBackoff is how long a row waits after its nth consecutive refusal.
@@ -491,7 +595,7 @@ func (r *Replicator) recordPushFailures(markerTable, markerKey string, failures 
 
 	write, err := tx.Prepare(fmt.Sprintf(`
 		UPDATE %s
-		   SET attempts = ?, last_error = ?, next_attempt_at = datetime('now', ?)
+		   SET attempts = ?, last_error = ?, next_attempt_at = strftime('%%Y-%%m-%%d %%H:%%M:%%f', 'now', ?)
 		 WHERE %s = ?`, markerTable, markerKey))
 	if err != nil {
 		return fmt.Errorf("dataplane: preparing the refusal write: %w", err)
@@ -1090,6 +1194,13 @@ func (r *Replicator) PendingEvents() (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// PendingFacts counts durable observation events still owed to the control inbox.
+func (r *Replicator) PendingFacts() (int, error) {
+	var n int
+	err := r.store.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_event_dirty`).Scan(&n)
+	return n, err
 }
 
 // PendingLogs counts the event log entries owed to the control database.

@@ -54,10 +54,9 @@ func newControlDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest is the property the
-// whole lease store exists for. SQLite's WAL default (synchronous=NORMAL)
-// acknowledges a commit before it is durable, so a power loss can leave a
-// client believing it holds an address the server has never heard of.
+// TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest checks the SQLite
+// commit settings required by the lease ACK boundary. The setting is necessary
+// but physical power-loss durability still depends on the storage stack.
 func TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest(t *testing.T) {
 	for _, role := range []config.DataPlaneRole{config.DataPlaneLease, config.DataPlaneZone} {
 		s := newStore(t, role)

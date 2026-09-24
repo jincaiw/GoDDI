@@ -44,7 +44,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showBlockListModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="blockListSubmitting" @click="handleCreateBlockList">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="blockListSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCreateBlockList">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -61,7 +61,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showBlockRuleModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAddBlockRule">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleAddBlockRule">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -122,6 +122,7 @@ async function loadBlockingStatus() {
 }
 
 async function handleTemporaryDisable() {
+  if (!perm.canWrite('dns')) return
   try {
     blockingStatus.value = await temporaryDisableBlocking(disableMinutes.value)
     message.success(t('dns.security.disableSuccess'))
@@ -129,6 +130,7 @@ async function handleTemporaryDisable() {
 }
 
 async function handleResumeBlocking() {
+  if (!perm.canWrite('dns')) return
   try {
     await temporaryDisableBlocking(0)
     blockingStatus.value = await getBlockingStatus()
@@ -137,6 +139,7 @@ async function handleResumeBlocking() {
 }
 
 async function handleRefreshBlockList(id: string) {
+  if (!perm.canWrite('dns')) return
   refreshingId.value = id
   try {
     await refreshBlockList(id)
@@ -194,11 +197,13 @@ async function loadBlockRules(listId: string) {
 
 // Handlers
 function openCreateBlockList() {
+  if (!perm.canWrite('dns')) return
   Object.assign(blockListForm, { name: '', type: 'custom', url: '', enabled: true })
   showBlockListModal.value = true
 }
 
 async function handleCreateBlockList() {
+  if (!perm.canWrite('dns')) return
   blockListSubmitting.value = true
   try {
     await createBlockList(blockListForm)
@@ -209,10 +214,12 @@ async function handleCreateBlockList() {
 }
 
 async function handleDeleteBlockList(id: string) {
+  if (!perm.canDelete('dns')) return
   try { await deleteBlockList(id); message.success(t('common.deleteSuccess')); loadBlockLists() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 
 async function handleAddBlockRule() {
+  if (!perm.canWrite('dns')) return
   if (!selectedBlockList.value) return
   try {
     await addBlockRule(selectedBlockList.value.id, blockRuleForm)
@@ -223,10 +230,12 @@ async function handleAddBlockRule() {
 }
 
 async function handleDeleteBlockRule(listId: string, ruleId: string) {
+  if (!perm.canDelete('dns')) return
   try { await deleteBlockRule(listId, ruleId); message.success(t('common.deleteSuccess')); if (selectedBlockList.value) loadBlockRules(selectedBlockList.value.id) } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 
 async function handleFlush() {
+  if (!perm.canDelete('dns')) return
   showFlushConfirm.value = false
   try {
     const res = await flushBlockLists()

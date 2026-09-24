@@ -18,6 +18,10 @@
       </n-alert>
 
       <template v-else-if="plan">
+        <n-alert v-if="!perm.canWrite('dhcp')" type="warning" :title="t('ipam.pool.noDhcpPermission')" style="margin-bottom: 14px;">
+          {{ t('ipam.pool.noDhcpPermissionHint') }}
+        </n-alert>
+
         <!-- The world moved between the plan and the create. The operator is
              holding an approval of something that is no longer true, so the
              only useful action is to look again. -->
@@ -125,7 +129,7 @@
         >
           {{ t('ipam.pool.next') }}
         </n-button>
-        <n-button v-else type="primary" :loading="creating" @click="create">
+        <n-button v-else type="primary" :loading="creating" :disabled="!perm.canWrite('dhcp')" @click="create">
           {{ t('ipam.pool.create') }}
         </n-button>
       </n-space>
@@ -137,6 +141,7 @@
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NTag, useMessage } from 'naive-ui'
+import { usePermission } from '@/composables/usePermission'
 import SectionTitle from '@/components/ipam/SectionTitle.vue'
 import { ApiError } from '@/service/api/goddi/client'
 import { getIPAMPoolPlan, type DHCPScopePlan, type PlanAddress, type ScopeDraft } from '@/service/api/goddi/ipam'
@@ -155,6 +160,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 const step = ref<'plan' | 'confirm'>('plan')
 const loading = ref(false)
@@ -166,12 +172,7 @@ const loadFailed = ref('')
 /** True when the create was refused because the plan no longer describes disk. */
 const stale = ref(false)
 
-/**
- * A plan with conflicts is a plan the operator should not approve, and the
- * refusal to offer "next" is the point of asking IPAM in the first place. The
- * backend would still accept the create -- it checks the fingerprint, not the
- * conflicts -- so nothing else stops this.
- */
+/** A conflicting plan cannot advance in the UI; the API enforces this too. */
 const hasBlockingErrors = computed(() => (plan.value?.conflicts.length ?? 0) > 0)
 
 const routerSourceText = computed(() => {
@@ -240,6 +241,7 @@ async function load() {
 }
 
 async function create() {
+  if (!perm.canWrite('dhcp')) return
   if (!plan.value || !draft.value) return
   creating.value = true
   stale.value = false

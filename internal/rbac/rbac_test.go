@@ -467,6 +467,108 @@ func TestRemovePermissionFromRole(t *testing.T) {
 	}
 }
 
+func TestAssignPermissionsToRoleBatchIsValidatedAndIdempotent(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	rm := NewRBACManager(db)
+	if err := rm.InitializePredefinedData(); err != nil {
+		t.Fatal(err)
+	}
+	role, err := rm.CreateRole("batch-reader", "Batch permission assignment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions, err := rm.ListPermissions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(permissions) < 2 {
+		t.Fatal("expected predefined permissions")
+	}
+	permissionIDs := []string{permissions[0].ID, permissions[1].ID}
+
+	if err := rm.AssignPermissionsToRole(role.ID, []string{permissionIDs[0], ""}); err == nil {
+		t.Fatal("batch with empty permission ID should fail")
+	}
+	rolePermissions, err := rm.GetRolePermissions(role.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolePermissions) != 0 {
+		t.Fatalf("invalid batch partially assigned permissions: %d", len(rolePermissions))
+	}
+
+	if err := rm.AssignPermissionsToRole(role.ID, permissionIDs); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.AssignPermissionsToRole(role.ID, permissionIDs); err != nil {
+		t.Fatalf("repeating batch assignment should be idempotent: %v", err)
+	}
+	rolePermissions, err = rm.GetRolePermissions(role.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolePermissions) != len(permissionIDs) {
+		t.Fatalf("assigned permissions = %d, want %d", len(rolePermissions), len(permissionIDs))
+	}
+}
+
+func TestSetRolePermissionsReplacesAndClearsAtomically(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	rm := NewRBACManager(db)
+	if err := rm.InitializePredefinedData(); err != nil {
+		t.Fatal(err)
+	}
+	role, err := rm.CreateRole("replace-reader", "Permission replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions, err := rm.ListPermissions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(permissions) < 2 {
+		t.Fatal("expected predefined permissions")
+	}
+	initial := []string{permissions[0].ID, permissions[1].ID}
+	if err := rm.SetRolePermissions(role.ID, initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.SetRolePermissions(role.ID, []string{permissions[0].ID, ""}); err == nil {
+		t.Fatal("replacement containing an empty permission ID should fail")
+	}
+	rolePermissions, err := rm.GetRolePermissions(role.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolePermissions) != 2 {
+		t.Fatalf("failed replacement changed existing permissions: got %d", len(rolePermissions))
+	}
+	if err := rm.SetRolePermissions(role.ID, []string{permissions[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	rolePermissions, err = rm.GetRolePermissions(role.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolePermissions) != 1 || rolePermissions[0].ID != permissions[0].ID {
+		t.Fatalf("replacement permissions = %+v, want only %s", rolePermissions, permissions[0].ID)
+	}
+	if err := rm.SetRolePermissions(role.ID, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	rolePermissions, err = rm.GetRolePermissions(role.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolePermissions) != 0 {
+		t.Fatalf("empty replacement left %d permissions", len(rolePermissions))
+	}
+}
+
 func TestPredefinedPermissions_Count(t *testing.T) {
 	t.Parallel()
 

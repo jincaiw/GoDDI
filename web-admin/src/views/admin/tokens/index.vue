@@ -17,14 +17,14 @@
     <!-- Create Token Modal -->
     <n-modal v-if="showCreateModal" v-model:show="showCreateModal" :title="t('admin.tokens.createToken')" preset="card" style="width: 450px;">
       <n-form :model="createForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('admin.tokens.tokenName')"><n-input v-model:value="createForm.name" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="createForm.description" type="textarea" /></n-form-item>
-        <n-form-item :label="t('admin.tokens.expiresAt')"><n-date-picker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" /></n-form-item>
+        <n-form-item :label="t('admin.tokens.tokenName')"><n-input v-model:value="createForm.name" :disabled="!perm.canWrite('token')" /></n-form-item>
+        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="createForm.description" type="textarea" :disabled="!perm.canWrite('token')" /></n-form-item>
+        <n-form-item :label="t('admin.tokens.expiresAt')"><n-date-picker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" :disabled="!perm.canWrite('token')" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="creating" @click="handleCreate">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="creating" :disabled="!perm.canWrite('token')" @click="handleCreate">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -76,7 +76,7 @@ const columns = [
   { title: () => t('admin.users.username'), key: 'username' },
   { title: () => t('admin.tokens.expiresAt'), key: 'expires_at', width: 160 },
   { title: () => t('admin.tokens.lastUsedAt'), key: 'last_used_at', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('token'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('token'), onClick: () => { if (!perm.canDelete('token')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
 ]
 
 async function loadData() {
@@ -92,11 +92,13 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('token')) return
   Object.assign(createForm, { name: '', description: '', expires_at: null })
   showCreateModal.value = true
 }
 
 async function handleCreate() {
+  if (!perm.canWrite('token')) return
   creating.value = true
   try {
     const result = await createAPIToken({
@@ -112,6 +114,7 @@ async function handleCreate() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('token')) return
   try { await deleteAPIToken(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
@@ -177,6 +178,14 @@ func TestApplyCreate_PublishesForwardAndReverse(t *testing.T) {
 	seedLinkage(t, db)
 	seedLease(t, db, "lease-1", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:01",
 		"host1", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	initialSerials := make(map[string]uint32, 2)
+	for _, zoneID := range []string{"zone-forward", "zone-reverse"} {
+		var serial uint32
+		if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = ?`, zoneID).Scan(&serial); err != nil {
+			t.Fatalf("read initial %s serial: %v", zoneID, err)
+		}
+		initialSerials[zoneID] = serial
+	}
 
 	reloader := &recordingReloader{}
 	link := NewDNSLink(Same(db), reloader)
@@ -227,12 +236,129 @@ func TestApplyCreate_PublishesForwardAndReverse(t *testing.T) {
 	if ptr[0].Value != "host1.example.test." {
 		t.Errorf("PTR value = %q, want host1.example.test.", ptr[0].Value)
 	}
+	for _, zoneID := range []string{"zone-forward", "zone-reverse"} {
+		var serial uint32
+		var changes int
+		if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = ?`, zoneID).Scan(&serial); err != nil {
+			t.Fatalf("read %s serial: %v", zoneID, err)
+		}
+		if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ?`, zoneID).Scan(&changes); err != nil {
+			t.Fatalf("count %s journal: %v", zoneID, err)
+		}
+		if serial != zone.NextSerial(initialSerials[zoneID]) || changes != 3 {
+			t.Errorf("%s serial/journal = %d/%d, want %d/3 (SOA delimiters and RR change)", zoneID, serial, changes, zone.NextSerial(initialSerials[zoneID]))
+		}
+		var soaRows int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM dns_zone_changes WHERE zone_id = ? AND type = 'SOA' AND serial = ?`, zoneID, serial).Scan(&soaRows); err != nil {
+			t.Fatalf("count %s SOA delimiters: %v", zoneID, err)
+		}
+		if soaRows != 2 {
+			t.Errorf("%s SOA journal rows = %d, want delete/add pair", zoneID, soaRows)
+		}
+	}
 
 	// The record is written to the database, but queries are answered from the
 	// in-memory store: without this reload the name stays unresolvable and the
 	// whole linkage is decorative.
 	if reloader.count() != 1 {
 		t.Errorf("reload calls = %d, want 1", reloader.count())
+	}
+}
+
+func TestApplyCreate_FailsClosedOnForwardCNAMEConflict(t *testing.T) {
+	db := newLinkageDB(t)
+	seedLinkage(t, db)
+	if _, err := db.Exec(`INSERT INTO dns_records
+		(id, zone_id, name, type, value, ttl, enabled)
+		VALUES ('existing-cname', 'zone-forward', 'host1.example.test.', 'CNAME', 'other.example.test.', 300, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	seedLease(t, db, "lease-1", "scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:01",
+		"host1", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	link := NewDNSLink(Same(db), nil)
+	if err := link.ApplyEvent(DNSEvent{
+		LeaseID: "lease-1", Generation: 1, Action: DNSEventCreate,
+		ScopeID: "scope-1", IPAddress: "192.0.2.10", Hostname: "host1",
+	}); err == nil {
+		t.Fatal("DHCP published an A record alongside an existing CNAME")
+	}
+	if rows := recordsFor(t, db, "zone-forward", "host1.example.test.", "A"); len(rows) != 0 {
+		t.Fatalf("failed DHCP publication left %d A records", len(rows))
+	}
+	if rows := recordsFor(t, db, "zone-forward", "host1.example.test.", "CNAME"); len(rows) != 1 {
+		t.Fatalf("CNAME records after failed DHCP publication = %d, want one", len(rows))
+	}
+}
+
+func TestApplyCreate_RejectsConflictingTTLInForwardRRset(t *testing.T) {
+	db := newLinkageDB(t)
+	seedLinkage(t, db)
+	seedLease(t, db, "lease-ttl", "scope-1", "192.0.2.70", "aa:bb:cc:dd:ee:70",
+		"host-ttl", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	if _, err := db.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, owner)
+		VALUES ('manual-ttl', 'zone-forward', 'host-ttl.example.test.', 'A', '192.0.2.99', 600, 1, 'api')`); err != nil {
+		t.Fatalf("seed conflicting manual record: %v", err)
+	}
+
+	link := NewDNSLink(Same(db), nil)
+	err := link.ApplyEvent(DNSEvent{
+		LeaseID: "lease-ttl", Generation: 1, Action: DNSEventCreate,
+		ScopeID: "scope-1", IPAddress: "192.0.2.70",
+		MACAddress: "aa:bb:cc:dd:ee:70", Hostname: "host-ttl",
+	})
+	if err == nil {
+		t.Fatal("DHCP projection with conflicting A RRset TTL unexpectedly succeeded")
+	}
+	rows := recordsFor(t, db, "zone-forward", "host-ttl.example.test.", "A")
+	if len(rows) != 1 || rows[0].ID != "manual-ttl" {
+		t.Fatalf("forward RRset after rejected projection = %+v, want original row only", rows)
+	}
+}
+
+func TestApplyCreate_PTRConflictRollsBackForwardRecordAndSerial(t *testing.T) {
+	db := newLinkageDB(t)
+	seedLinkage(t, db)
+	seedLease(t, db, "lease-ptr-ttl", "scope-1", "192.0.2.70", "aa:bb:cc:dd:ee:70",
+		"host-ptr-ttl", lease.LeaseStatusActive, 1, leaseEndTime(t))
+	if _, err := db.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, owner)
+		VALUES ('manual-ptr-ttl', 'zone-reverse', '70.2.0.192.in-addr.arpa.', 'PTR', 'other.example.', 600, 1, 'api')`); err != nil {
+		t.Fatalf("seed conflicting manual PTR: %v", err)
+	}
+	var forwardSerial, reverseSerial uint32
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-forward'`).Scan(&forwardSerial); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-reverse'`).Scan(&reverseSerial); err != nil {
+		t.Fatal(err)
+	}
+
+	link := NewDNSLink(Same(db), nil)
+	err := link.ApplyEvent(DNSEvent{
+		LeaseID: "lease-ptr-ttl", Generation: 1, Action: DNSEventCreate,
+		ScopeID: "scope-1", IPAddress: "192.0.2.70", Hostname: "host-ptr-ttl",
+	})
+	if err == nil {
+		t.Fatal("DHCP projection with conflicting PTR RRset TTL unexpectedly succeeded")
+	}
+	if rows := recordsFor(t, db, "zone-forward", "host-ptr-ttl.example.test.", "A"); len(rows) != 0 {
+		t.Fatalf("forward A records after PTR rejection = %+v, want none", rows)
+	}
+	ptrs := recordsFor(t, db, "zone-reverse", "70.2.0.192.in-addr.arpa.", "PTR")
+	if len(ptrs) != 1 || ptrs[0].ID != "manual-ptr-ttl" {
+		t.Fatalf("reverse PTR RRset after rejection = %+v, want original manual row", ptrs)
+	}
+	var gotForwardSerial, gotReverseSerial uint32
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-forward'`).Scan(&gotForwardSerial); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-reverse'`).Scan(&gotReverseSerial); err != nil {
+		t.Fatal(err)
+	}
+	if gotForwardSerial != forwardSerial || gotReverseSerial != reverseSerial {
+		t.Fatalf("serials after rolled back projection = %d/%d, want unchanged %d/%d",
+			gotForwardSerial, gotReverseSerial, forwardSerial, reverseSerial)
 	}
 }
 

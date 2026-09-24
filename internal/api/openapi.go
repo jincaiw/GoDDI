@@ -45,6 +45,14 @@ type apiOperationContract struct {
 // need a precise query schema. Other legacy rows retain their existing path
 // parameter declaration until their DTOs are documented.
 var documentedOperationContracts = map[string]apiOperationContract{
+	"POST /roles/{id}/permissions": {
+		RequestContentType: "application/json",
+		RequestDescription: "Append one permission_id or a permission_ids list to the role.",
+	},
+	"PUT /roles/{id}/permissions": {
+		RequestContentType: "application/json",
+		RequestDescription: "Replace the role's complete permission set with permission_ids; an empty list clears it.",
+	},
 	"POST /dns/zones/{id}/import": {
 		RequestContentType: "multipart/form-data",
 		RequestDescription: "Zone file upload. The file field contains BIND-compatible zone text.",
@@ -268,8 +276,12 @@ var routeDocs = []apiRouteDoc{
 
 	{"/roles", "GET", "Roles", "角色列表", true, nil},
 	{"/roles", "POST", "Roles", "创建角色", true, nil},
+	{"/roles/{id}", "GET", "Roles", "角色详情", true, []string{"id"}},
 	{"/roles/{id}", "PUT", "Roles", "更新角色", true, []string{"id"}},
 	{"/roles/{id}", "DELETE", "Roles", "删除角色", true, []string{"id"}},
+	{"/roles/{id}/permissions", "POST", "Roles", "向角色追加权限", true, []string{"id"}},
+	{"/roles/{id}/permissions", "PUT", "Roles", "替换角色权限集合", true, []string{"id"}},
+	{"/roles/{id}/permissions/{permId}", "DELETE", "Roles", "移除角色权限", true, []string{"id", "permId"}},
 
 	{"/tokens", "GET", "Tokens", "API 令牌列表", true, nil},
 	{"/tokens", "POST", "Tokens", "创建 API 令牌", true, nil},

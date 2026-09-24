@@ -160,19 +160,23 @@ func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Ms
 	before := h.snapshotRecords(z.ID, ops)
 
 	// Apply prerequisites, changes and the SOA serial bump as one unit.
-	rcode = h.applyAtomic(z.ID, msg, ops)
+	var changed bool
+	rcode, changed = h.applyAtomic(z.ID, msg, ops)
 	if rcode != dns.RcodeSuccess {
 		slog.Warn("dynamic_update: update rejected",
 			"zone", zoneName, "rcode", dns.RcodeToString[rcode], "ops", len(ops))
 		return h.makeResponse(msg, rcode), nil
 	}
 
-	if len(ops) > 0 {
+	if changed {
 		// Only publish the new data after the durable commit: reloading the
 		// in-memory store first could serve records that a later rollback
 		// erased.
 		if h.zoneStore != nil {
-			h.zoneStore.Reload()
+			h.zoneStore.ReloadNow()
+		}
+		if h.recordMgr != nil {
+			h.recordMgr.NotifyPrimaryZone(z.ID)
 		}
 		h.auditLog(z.ID, zoneName, tsig.Hdr.Name, before, h.snapshotRecords(z.ID, ops), len(ops))
 	}
@@ -203,7 +207,6 @@ func (h *UpdateHandler) snapshotRecords(zoneID string, ops []updateOp) string {
 		return ""
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
 	args := make([]any, 0, len(names)+1)
 	args = append(args, zoneID)
 	for _, n := range names {
@@ -214,7 +217,7 @@ func (h *UpdateHandler) snapshotRecords(zoneID string, ops []updateOp) string {
 	// that follows on the same connection cannot find it still open.
 	rows, err := h.db.Query(
 		`SELECT name, type, value FROM dns_records
-		 WHERE zone_id = ? AND name IN (`+placeholders+`)
+		 WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) IN (`+strings.TrimSuffix(strings.Repeat("LOWER(RTRIM(?, '.')),", len(names)), ",")+`)
 		 ORDER BY name, type, value`, args...)
 	if err != nil {
 		slog.Error("dynamic_update: could not read records for the audit entry", "error", err)
@@ -295,18 +298,21 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 		if hdr.Name == "" {
 			return nil, dns.RcodeFormatError
 		}
+		// DNS owner names are case-insensitive. Canonicalise owners for storage
+		// and make operations differing only by case address the same name.
+		owner := strings.ToLower(hdr.Name)
 		rtype := dns.TypeToString[hdr.Rrtype]
 
 		switch hdr.Class {
 		case dns.ClassANY:
 			if hdr.Rrtype == dns.TypeANY {
-				ops = append(ops, updateOp{kind: opDeleteName, name: hdr.Name})
+				ops = append(ops, updateOp{kind: opDeleteName, name: owner})
 				continue
 			}
 			if rtype == "" {
 				return nil, dns.RcodeFormatError
 			}
-			ops = append(ops, updateOp{kind: opDeleteRRset, name: hdr.Name, rtype: rtype})
+			ops = append(ops, updateOp{kind: opDeleteRRset, name: owner, rtype: rtype})
 
 		case dns.ClassNONE:
 			// A value-dependent delete must name a concrete type; TYPE ANY
@@ -315,10 +321,15 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 				return nil, dns.RcodeFormatError
 			}
 			value := rrValue(rr)
-			if value == "" {
-				return nil, dns.RcodeFormatError
+			if txt, ok := rr.(*dns.TXT); ok && !zone.TXTStringsRepresentable(txt.Txt) {
+				return nil, dns.RcodeNotImplemented
 			}
-			ops = append(ops, updateOp{kind: opDeleteRR, name: hdr.Name, rtype: rtype, value: value})
+			if value == "" {
+				if hdr.Rrtype != dns.TypeTXT {
+					return nil, dns.RcodeFormatError
+				}
+			}
+			ops = append(ops, updateOp{kind: opDeleteRR, name: owner, rtype: rtype, value: value})
 
 		case dns.ClassINET:
 			if !dynamicUpdateTypes[rtype] {
@@ -328,11 +339,16 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 				return nil, dns.RcodeNotImplemented
 			}
 			value := rrValue(rr)
+			if txt, ok := rr.(*dns.TXT); ok && !zone.TXTStringsRepresentable(txt.Txt) {
+				// The value column concatenates character strings. Refuse a
+				// message when splitting the stored value would alter its RDATA.
+				return nil, dns.RcodeNotImplemented
+			}
 			if err := validateRecordValue(rtype, value); err != nil {
 				return nil, dns.RcodeFormatError
 			}
 			ops = append(ops, updateOp{
-				kind: opAdd, name: hdr.Name, rtype: rtype,
+				kind: opAdd, name: owner, rtype: rtype,
 				value: value, ttl: int(hdr.Ttl),
 			})
 
@@ -352,54 +368,69 @@ func planUpdateOps(rrs []dns.RR) ([]updateOp, int) {
 // Every statement goes through tx and never through h.db: the SQLite pool is
 // capped at a single connection, so a nested query on h.db while this
 // transaction holds that connection would block forever rather than error.
-func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp) int {
+func (h *UpdateHandler) applyAtomic(zoneID string, msg *dns.Msg, ops []updateOp) (int, bool) {
 	tx, err := h.db.Begin()
 	if err != nil {
 		slog.Error("dynamic_update: begin transaction failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 	// Rollback is a no-op once the transaction has been committed.
 	defer func() { _ = tx.Rollback() }()
+	beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		slog.Error("dynamic_update: reading prior SOA state failed", "error", err)
+		return dns.RcodeServerFailure, false
+	}
 
 	if rc := h.checkPrerequisites(tx, zoneID, msg); rc != dns.RcodeSuccess {
-		return rc
+		return rc, false
 	}
 
 	// A prerequisite-only update is legal and must not bump the serial.
 	if len(ops) == 0 {
-		return dns.RcodeSuccess
+		return dns.RcodeSuccess, false
 	}
 
 	changes, rc, err := applyOps(tx, zoneID, ops)
 	if err != nil {
 		slog.Error("dynamic_update: applying update section failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
 	if rc != dns.RcodeSuccess {
-		return rc
+		return rc, false
 	}
 	if len(changes) == 0 {
 		// Every operation was a no-op (e.g. re-adding an identical RR);
 		// leave the serial alone so secondaries are not woken for nothing.
-		return dns.RcodeSuccess
+		return dns.RcodeSuccess, false
 	}
 
 	newSerial, err := nextZoneSerial(tx, zoneID)
 	if err != nil {
 		slog.Error("dynamic_update: serial bump failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
+	}
+	if err := zone.LogSOARecordTx(tx, zoneID, newSerial, "delete", beforeSOA); err != nil {
+		slog.Error("dynamic_update: journaling prior SOA failed", "error", err)
+		return dns.RcodeServerFailure, false
 	}
 
 	if err := logChanges(tx, zoneID, newSerial, changes); err != nil {
 		slog.Error("dynamic_update: zone change journal write failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
+	}
+	afterSOA := beforeSOA
+	afterSOA.Serial = newSerial
+	if err := zone.LogSOARecordTx(tx, zoneID, newSerial, "add", afterSOA); err != nil {
+		slog.Error("dynamic_update: journaling updated SOA failed", "error", err)
+		return dns.RcodeServerFailure, false
 	}
 
 	if err := tx.Commit(); err != nil {
 		slog.Error("dynamic_update: commit failed", "error", err)
-		return dns.RcodeServerFailure
+		return dns.RcodeServerFailure, false
 	}
-	return dns.RcodeSuccess
+	return dns.RcodeSuccess, true
 }
 
 // change is one journal entry destined for dns_zone_changes, used to answer
@@ -427,7 +458,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				return nil, 0, err
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ?", zoneID, op.name); err != nil {
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))", zoneID, op.name); err != nil {
 				return nil, 0, err
 			}
 			changes = append(changes, existing...)
@@ -438,7 +469,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				return nil, 0, err
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ?",
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ?",
 				zoneID, op.name, op.rtype); err != nil {
 				return nil, 0, err
 			}
@@ -456,25 +487,20 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 				changes = append(changes, c)
 			}
 			if _, err := tx.Exec(
-				"DELETE FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ?",
+				"DELETE FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND value = ?",
 				zoneID, op.name, op.rtype, op.value); err != nil {
 				return nil, 0, err
 			}
 
 		case opAdd:
-			added, rc, err := addRecord(tx, zoneID, op)
+			changed, rc, err := addRecord(tx, zoneID, op)
 			if err != nil {
 				return nil, 0, err
 			}
 			if rc != dns.RcodeSuccess {
 				return nil, rc, nil
 			}
-			if added {
-				changes = append(changes, change{
-					changeType: "add", name: op.name,
-					rtype: op.rtype, value: op.value, ttl: op.ttl,
-				})
-			}
+			changes = append(changes, changed...)
 		}
 	}
 
@@ -486,7 +512,7 @@ func applyOps(tx *sql.Tx, zoneID string, ops []updateOp) ([]change, int, error) 
 // and closed before the caller issues its DELETE: the single-connection SQLite
 // pool deadlocks if a nested statement runs while a cursor is still open.
 func matchingRecords(tx *sql.Tx, zoneID, name, rtype string) ([]change, error) {
-	query := "SELECT name, type, value, ttl FROM dns_records WHERE zone_id = ? AND name = ?"
+	query := "SELECT name, type, value, ttl FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))"
 	args := []interface{}{zoneID, name}
 	if rtype != "" {
 		query += " AND type = ?"
@@ -514,30 +540,39 @@ func matchingRecords(tx *sql.Tx, zoneID, name, rtype string) ([]change, error) {
 	return out, nil
 }
 
-// addRecord inserts one RR from an update operation. It reports added=false
-// when the exact RR already exists (an RRset is a set, so the add is a no-op)
-// and returns YXRRSET when the name would end up with both a CNAME and another
+// addRecord applies one RR from an update operation. A matching RDATA with
+// the same TTL is a no-op; a different TTL replaces the TTL across its RRset.
+// It returns YXRRSET when the name would end up with both a CNAME and another
 // RRset, which DNS forbids (RFC 1034 §3.6.2, enforced by RFC 2136 §3.4.2.2).
-func addRecord(tx *sql.Tx, zoneID string, op updateOp) (bool, int, error) {
-	exists, err := rdataExists(tx, zoneID, op.name, op.rtype, op.value)
+func addRecord(tx *sql.Tx, zoneID string, op updateOp) ([]change, int, error) {
+	rrset, err := matchingRecords(tx, zoneID, op.name, op.rtype)
 	if err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
-	if exists {
-		return false, dns.RcodeSuccess, nil
+	var changes []change
+	for _, member := range rrset {
+		if member.value == op.value {
+			if err := replaceRRsetTTL(tx, zoneID, op.name, op.rtype, rrset, op.ttl, &changes); err != nil {
+				return nil, 0, err
+			}
+			return changes, dns.RcodeSuccess, nil
+		}
 	}
 
 	otherTypes, cnameCount, err := recordKindsAtName(tx, zoneID, op.name)
 	if err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
 	if op.rtype == "CNAME" {
 		// At most one CNAME per name, and nothing else alongside it.
 		if cnameCount > 0 || otherTypes > 0 {
-			return false, dns.RcodeYXRrset, nil
+			return nil, dns.RcodeYXRrset, nil
 		}
 	} else if cnameCount > 0 {
-		return false, dns.RcodeYXRrset, nil
+		return nil, dns.RcodeYXRrset, nil
+	}
+	if err := replaceRRsetTTL(tx, zoneID, op.name, op.rtype, rrset, op.ttl, &changes); err != nil {
+		return nil, 0, err
 	}
 
 	// authored_locally marks the row as this plane's, which is what the
@@ -548,9 +583,43 @@ func addRecord(tx *sql.Tx, zoneID string, op updateOp) (bool, int, error) {
 		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled, authored_locally)
 		VALUES (?, ?, ?, ?, ?, ?, 1, 1)
 	`, uuid.New().String(), zoneID, op.name, op.rtype, op.value, op.ttl); err != nil {
-		return false, 0, err
+		return nil, 0, err
 	}
-	return true, dns.RcodeSuccess, nil
+	changes = append(changes, change{
+		changeType: "add", name: op.name,
+		rtype: op.rtype, value: op.value, ttl: op.ttl,
+	})
+	return changes, dns.RcodeSuccess, nil
+}
+
+// replaceRRsetTTL applies the TTL from an RFC 2136 addition to the entire
+// RRset. RFC 2181 requires one TTL per RRset; recording each old and new row
+// keeps the change journal aligned with the transaction's actual changes.
+func replaceRRsetTTL(tx *sql.Tx, zoneID, name, rtype string, rrset []change, ttl int, changes *[]change) error {
+	needsUpdate := false
+	for _, member := range rrset {
+		if member.ttl != ttl {
+			needsUpdate = true
+			break
+		}
+	}
+	if !needsUpdate {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE dns_records SET ttl = ?
+		WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ?`, ttl, zoneID, name, rtype); err != nil {
+		return fmt.Errorf("updating %s RRset TTL: %w", rtype, err)
+	}
+	for _, member := range rrset {
+		deleted := member
+		deleted.changeType = "delete"
+		*changes = append(*changes, deleted)
+		added := member
+		added.changeType = "add"
+		added.ttl = ttl
+		*changes = append(*changes, added)
+	}
+	return nil
 }
 
 // recordKindsAtName reports how many records at a name are non-CNAME and how
@@ -560,7 +629,7 @@ func recordKindsAtName(tx *sql.Tx, zoneID, name string) (otherTypes, cnameCount 
 		SELECT
 			COALESCE(SUM(CASE WHEN type <> 'CNAME' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN type =  'CNAME' THEN 1 ELSE 0 END), 0)
-		FROM dns_records WHERE zone_id = ? AND name = ?`, zoneID, name,
+		FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.'))`, zoneID, name,
 	).Scan(&otherTypes, &cnameCount)
 	return otherTypes, cnameCount, err
 }
@@ -741,7 +810,7 @@ func (h *UpdateHandler) checkPrerequisites(tx *sql.Tx, zoneID string, msg *dns.M
 func nameInUse(tx *sql.Tx, zoneID, name string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND enabled = 1",
 		zoneID, name).Scan(&count); err != nil {
 		return false, err
 	}
@@ -752,7 +821,7 @@ func nameInUse(tx *sql.Tx, zoneID, name string) (bool, error) {
 func rrsetExists(tx *sql.Tx, zoneID, name, rtype string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND enabled = 1",
 		zoneID, name, rtype).Scan(&count); err != nil {
 		return false, err
 	}
@@ -763,7 +832,7 @@ func rrsetExists(tx *sql.Tx, zoneID, name, rtype string) (bool, error) {
 func rdataExists(tx *sql.Tx, zoneID, name, rtype, value string) (bool, error) {
 	var count int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND name = ? AND type = ? AND value = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM dns_records WHERE zone_id = ? AND LOWER(RTRIM(name, '.')) = LOWER(RTRIM(?, '.')) AND type = ? AND value = ? AND enabled = 1",
 		zoneID, name, rtype, value).Scan(&count); err != nil {
 		return false, err
 	}

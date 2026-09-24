@@ -33,8 +33,8 @@ type LeaseObservationFact struct {
 	Tombstone bool   `json:"tombstone,omitempty"`
 }
 
-// FactsConsumer is an opt-in, restartable IPAM projection consumer. It does
-// not alter the default DHCP path; callers explicitly drive Replay/ProcessOne.
+// FactsConsumer is a restartable IPAM projection consumer. Callers explicitly
+// own its lifecycle and it projects only durable facts from the control inbox.
 type FactsConsumer struct {
 	linkage   *Linkage
 	outbox    *facts.ObservationOutbox
@@ -62,8 +62,12 @@ func NewFactsConsumerWithOptions(linkage *Linkage, outbox *facts.ObservationOutb
 	if linkage == nil || linkage.db == nil || outbox == nil || outbox.Database() == nil {
 		return nil, errors.New("ipam facts consumer: invalid dependencies")
 	}
+	// The supplied outbox is the consumer-side inbox. It must live with the
+	// projection because ProcessOne commits inbox completion, watermark, and
+	// IPAM writes in one transaction. Producer databases are separate and reach
+	// this inbox through the data-plane relay.
 	if linkage.db != outbox.Database() {
-		return nil, errors.New("ipam facts consumer: producer outbox and control projection must share a database until split transport is implemented")
+		return nil, errors.New("ipam facts consumer: control inbox and projection must share a database")
 	}
 	wm, err := facts.NewWatermarkStore(linkage.db)
 	if err != nil {

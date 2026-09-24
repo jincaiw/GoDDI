@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -11,8 +12,99 @@ import (
 	"github.com/miekg/dns"
 )
 
+// CSVImportPreview summarizes a fully parsed CSV import without writing it.
+type CSVImportPreview struct {
+	RecordCount int                 `json:"record_count"`
+	Creates     int                 `json:"creates"`
+	Unchanged   int                 `json:"unchanged"`
+	RecordTypes map[string]int      `json:"record_types"`
+	Valid       bool                `json:"valid"`
+	Conflicts   []CSVImportConflict `json:"conflicts,omitempty"`
+}
+
+// ZoneFileImportPreview summarizes a BIND zone-file import validated against
+// the target zone without committing any rows or journal changes.
+type ZoneFileImportPreview struct {
+	RecordCount int                      `json:"record_count"`
+	RecordTypes map[string]int           `json:"record_types"`
+	Valid       bool                     `json:"valid"`
+	Conflicts   []ZoneFileImportConflict `json:"conflicts,omitempty"`
+}
+
+// ZoneFileImportConflict identifies one BIND record that conflicts with the
+// zone or another record in the same file. Record is the one-based parsed
+// record number (SOA records excluded), since the zone parser does not expose
+// source line positions.
+type ZoneFileImportConflict struct {
+	Record  int    `json:"record"`
+	Owner   string `json:"owner"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ZoneFileImportConflictError reports data conflicts found during preflight.
+type ZoneFileImportConflictError struct {
+	Conflicts []ZoneFileImportConflict
+}
+
+type zoneFileImportRR struct {
+	id       string
+	name     string
+	rtype    string
+	value    string
+	ttl      int
+	priority *int
+	weight   *int
+	port     *int
+	flag     *int
+	tag      string
+}
+
+func (e *ZoneFileImportConflictError) Error() string {
+	if e == nil || len(e.Conflicts) == 0 {
+		return "zone-file import contains conflicts"
+	}
+	return fmt.Sprintf("zone-file import contains %d conflict(s)", len(e.Conflicts))
+}
+
+// CSVImportConflict identifies an import row that cannot be applied without
+// violating an existing or incoming RRset invariant.
+type CSVImportConflict struct {
+	Row     int    `json:"row"`
+	Owner   string `json:"owner"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// CSVImportConflictError indicates that a syntactically valid import contains
+// one or more records that conflict with the target zone or each other.
+type CSVImportConflictError struct {
+	Conflicts []CSVImportConflict
+}
+
+func (e *CSVImportConflictError) Error() string {
+	if e == nil || len(e.Conflicts) == 0 {
+		return "CSV import contains conflicts"
+	}
+	return fmt.Sprintf("CSV import contains %d conflict(s)", len(e.Conflicts))
+}
+
 // ImportZoneFile parses a BIND zone file and imports records into the specified zone.
 func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
+	return m.importZoneFile(zoneID, content, false, nil)
+}
+
+// PreviewZoneFile runs the same parsing, validation, insert, serial, and
+// journal operations as an import, then rolls the transaction back.
+func (m *RecordManager) PreviewZoneFile(zoneID, content string) (ZoneFileImportPreview, error) {
+	var preview ZoneFileImportPreview
+	err := m.importZoneFile(zoneID, content, true, &preview)
+	return preview, err
+}
+
+func (m *RecordManager) importZoneFile(zoneID string, content string, dryRun bool, preview *ZoneFileImportPreview) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
 	}
@@ -30,24 +122,16 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	zp := dns.NewZoneParser(strings.NewReader(content), zone.Name, "")
 
 	// Collect all records first, then insert in a transaction.
-	type importRR struct {
-		id       string
-		name     string
-		rtype    string
-		value    string
-		ttl      int
-		priority *int
-		weight   *int
-		port     *int
-	}
-
-	var records []importRR
+	var records []zoneFileImportRR
 	for rr, ok := zp.Next(); ok; rr, ok = zp.Next() {
 		hdr := rr.Header()
 
 		// Skip SOA records - they are managed by the zone itself.
 		if hdr.Rrtype == dns.TypeSOA {
 			continue
+		}
+		if !recordNameInZone(hdr.Name, zone.Name) {
+			return fmt.Errorf("zone-file record owner %q is outside zone %q", hdr.Name, zone.Name)
 		}
 
 		name := hdr.Name
@@ -58,15 +142,18 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		}
 
 		rtype := dns.TypeToString[hdr.Rrtype]
+		if rtype == "" {
+			return fmt.Errorf("zone-file import contains an unsupported RR type %d", hdr.Rrtype)
+		}
 		value := rrToString(rr)
-		if value == "" {
-			continue
+		if value == "" && rtype != "TXT" {
+			return fmt.Errorf("zone-file import cannot represent %s record at %s", rtype, hdr.Name)
 		}
 
 		id := uuid.New().String()
 		priority, weight, port := extractRRMeta(rr)
 
-		rec := importRR{
+		rec := zoneFileImportRR{
 			id:    id,
 			name:  name,
 			rtype: rtype,
@@ -82,11 +169,23 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 		if port != 0 {
 			rec.port = &port
 		}
+		if caa, ok := rr.(*dns.CAA); ok {
+			flag := int(caa.Flag)
+			rec.flag = &flag
+			rec.tag = caa.Tag
+		}
 		records = append(records, rec)
 	}
 
 	if err := zp.Err(); err != nil {
 		return fmt.Errorf("zone file parse error: %w", err)
+	}
+	if preview != nil {
+		preview.RecordCount = len(records)
+		preview.RecordTypes = make(map[string]int)
+		for _, rec := range records {
+			preview.RecordTypes[rec.rtype]++
+		}
 	}
 
 	// Insert all records in a single transaction.
@@ -97,29 +196,95 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
-	for _, rec := range records {
+	conflicts := zoneFileIntraFileConflicts(records)
+	conflictedRecords := make(map[int]struct{}, len(conflicts))
+	for _, conflict := range conflicts {
+		conflictedRecords[conflict.Record-1] = struct{}{}
+	}
+	for index, rec := range records {
+		priority, weight, port, flag := intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port), intOrZero(rec.flag)
+		if err := validateRecordTTL(rec.ttl); err != nil {
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "invalid_ttl", err))
+			continue
+		}
+		if err := validateRecordValue(rec.rtype, rec.value, &priority, &weight, &port, rec.tag, &flag); err != nil {
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "invalid_value", err))
+			continue
+		}
+		if _, conflicted := conflictedRecords[index]; conflicted {
+			continue
+		}
+		if err := ValidateRRsetTTLTx(tx, zoneID, rec.name, rec.rtype, rec.ttl, ""); err != nil {
+			if !strings.HasPrefix(err.Error(), "RRset TTL conflict:") {
+				return fmt.Errorf("zone-file import: %w", err)
+			}
+			conflicts = append(conflicts, zoneFileConflict(index, rec, "rrset_ttl_mismatch", err))
+			continue
+		}
+		if err := ValidateCNAMEExclusivityTx(tx, zoneID, rec.name, rec.rtype, rec.value, ""); err != nil {
+			var code string
+			switch {
+			case strings.HasPrefix(err.Error(), "CNAME conflict at "):
+				code = "cname_exclusive_type"
+			case strings.HasPrefix(err.Error(), "multiple CNAME targets at "):
+				code = "multiple_cname_targets"
+			default:
+				return fmt.Errorf("zone-file import: %w", err)
+			}
+			conflicts = append(conflicts, zoneFileConflict(index, rec, code, err))
+			continue
+		}
 		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl,
-			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port))
+			nullInt(rec.priority), nullInt(rec.weight), nullInt(rec.port), nullInt(rec.flag), rec.tag)
 		if err != nil {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
 		}
+	}
+	if len(conflicts) > 0 {
+		if preview != nil {
+			preview.Valid = false
+			preview.Conflicts = append([]ZoneFileImportConflict(nil), conflicts...)
+		}
+		return &ZoneFileImportConflictError{Conflicts: conflicts}
+	}
+	if len(records) > 0 {
+		serial, err := bumpZoneSerialTx(tx, zoneID)
+		if err != nil {
+			return fmt.Errorf("bumping zone serial: %w", err)
+		}
+		for _, rec := range records {
+			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
+				intOrZero(rec.priority), intOrZero(rec.weight), intOrZero(rec.port), intOrZero(rec.flag), rec.tag); err != nil {
+				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
+			}
+		}
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+			return fmt.Errorf("journaling updated SOA: %w", err)
+		}
+	}
+	if dryRun {
+		if err := tx.Rollback(); err != nil {
+			return fmt.Errorf("rollback zone-file preview: %w", err)
+		}
+		if preview != nil {
+			preview.Valid = true
+		}
+		return nil
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
-
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(zoneID); err != nil {
-		_ = err
+	if len(records) > 0 {
+		m.notifyPrimary(zoneID)
 	}
 
 	// Reload in-memory zone store.
@@ -128,6 +293,116 @@ func (m *RecordManager) ImportZoneFile(zoneID string, content string) error {
 	}
 
 	return nil
+}
+
+func zoneFileConflict(index int, rec zoneFileImportRR, code string, err error) ZoneFileImportConflict {
+	return ZoneFileImportConflict{
+		Record: index + 1, Owner: dns.Fqdn(rec.name), Type: rec.rtype,
+		Code: code, Message: err.Error(),
+	}
+}
+
+func zoneFileIntraFileConflicts(records []zoneFileImportRR) []ZoneFileImportConflict {
+	type ownerRecords struct {
+		indices []int
+		types   map[string]map[string][]int
+	}
+	owners := make(map[string]*ownerRecords)
+	for i, rec := range records {
+		owner := strings.ToLower(dns.Fqdn(rec.name))
+		group := owners[owner]
+		if group == nil {
+			group = &ownerRecords{types: make(map[string]map[string][]int)}
+			owners[owner] = group
+		}
+		group.indices = append(group.indices, i)
+		typeName := strings.ToUpper(rec.rtype)
+		if group.types[typeName] == nil {
+			group.types[typeName] = make(map[string][]int)
+		}
+		valueKey := rec.value
+		if typeName == "CNAME" {
+			valueKey = strings.ToLower(dns.Fqdn(rec.value))
+		}
+		group.types[typeName][valueKey] = append(group.types[typeName][valueKey], i)
+	}
+
+	var conflicts []ZoneFileImportConflict
+	seen := make(map[string]struct{})
+	appendConflict := func(index int, code, message string) {
+		key := fmt.Sprintf("%d/%s", index, code)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		conflicts = append(conflicts, zoneFileConflict(index, records[index], code, fmt.Errorf("%s", message)))
+	}
+	for owner, group := range owners {
+		for typeName := range group.types {
+			var firstTTL int
+			hasTTL := false
+			for _, index := range group.indices {
+				rec := records[index]
+				if !strings.EqualFold(rec.rtype, typeName) {
+					continue
+				}
+				if !hasTTL {
+					firstTTL, hasTTL = rec.ttl, true
+				} else if rec.ttl != firstTTL {
+					// Include records that use the first TTL too, so the report
+					// marks every member of the inconsistent RRset.
+					for _, priorIndex := range group.indices {
+						if strings.EqualFold(records[priorIndex].rtype, typeName) {
+							appendConflict(priorIndex, "rrset_ttl_mismatch", fmt.Sprintf("%s %s RRset contains different TTL values", typeName, owner))
+						}
+					}
+					break
+				}
+			}
+		}
+		cnameValues := group.types["CNAME"]
+		if len(cnameValues) == 0 {
+			continue
+		}
+		hasOtherType := false
+		for typeName := range group.types {
+			if typeName != "CNAME" {
+				hasOtherType = true
+				break
+			}
+		}
+		if hasOtherType {
+			for typeName := range group.types {
+				if typeName == "CNAME" {
+					continue
+				}
+				for _, indices := range cnameValues {
+					for _, index := range indices {
+						appendConflict(index, "cname_exclusive_type", fmt.Sprintf("CNAME conflicts with %s at %s", typeName, owner))
+					}
+				}
+				for _, indices := range group.types[typeName] {
+					for _, index := range indices {
+						appendConflict(index, "cname_exclusive_type", fmt.Sprintf("%s conflicts with CNAME at %s", typeName, owner))
+					}
+				}
+			}
+		}
+		if len(cnameValues) > 1 {
+			for _, indices := range cnameValues {
+				for _, index := range indices {
+					appendConflict(index, "multiple_cname_targets", fmt.Sprintf("owner %s has multiple CNAME targets", owner))
+				}
+			}
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool {
+		if conflicts[i].Record != conflicts[j].Record {
+			return conflicts[i].Record < conflicts[j].Record
+		}
+		return conflicts[i].Code < conflicts[j].Code
+	})
+	return conflicts
 }
 
 // ExportZoneFile generates a BIND zone file format for the specified zone.
@@ -181,12 +456,23 @@ func (m *RecordManager) ExportZoneFile(zoneID string) (string, error) {
 
 // ImportRecordsCSV imports records from CSV data into the specified zone.
 func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
+	return m.importRecordsCSV(zoneID, csvData, false, nil)
+}
+
+// PreviewRecordsCSV validates a CSV import and reports its size without writing records.
+func (m *RecordManager) PreviewRecordsCSV(zoneID string, csvData []byte) (CSVImportPreview, error) {
+	var preview CSVImportPreview
+	err := m.importRecordsCSV(zoneID, csvData, true, &preview)
+	return preview, err
+}
+
+func (m *RecordManager) importRecordsCSV(zoneID string, csvData []byte, dryRun bool, preview *CSVImportPreview) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
 	}
 
 	// Verify zone exists.
-	_, err := m.zoneMgr.GetZone(zoneID)
+	zone, err := m.zoneMgr.GetZone(zoneID)
 	if err != nil {
 		return err
 	}
@@ -200,6 +486,7 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	// Collect all records first, then insert in a transaction.
 	type csvRecord struct {
 		id       string
+		row      int
 		name     string
 		rtype    string
 		value    string
@@ -207,58 +494,98 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 		priority int
 		weight   int
 		port     int
+		flag     int
+		tag      string
 	}
 
 	var records []csvRecord
+	rowNumber := 1 // The header occupies the first CSV row.
 	for {
 		record, err := r.Read()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			continue
+			return fmt.Errorf("reading CSV record: %w", err)
 		}
+		rowNumber++
 
-		// CSV format: name, type, value, ttl, priority, weight, port
+		// CSV format: name, type, value, ttl, priority, weight, port, flag, tag.
 		if len(record) < 3 {
-			continue
+			return fmt.Errorf("CSV record must contain at least name, type, and value")
+		}
+		if len(record) > 9 {
+			return fmt.Errorf("CSV record has %d columns; at most 9 are supported", len(record))
 		}
 
-		name := record[0]
+		name := normalizeRecordName(record[0], zone.Name)
+		if !recordNameInZone(name, zone.Name) {
+			return fmt.Errorf("CSV record owner %q is outside zone %q", record[0], zone.Name)
+		}
 		rtype := strings.ToUpper(record[1])
 		value := record[2]
+		if rtype == "NAPTR" {
+			value = normalizeNAPTRValue(value)
+		}
 		ttl := 3600
 		priority := 0
 		weight := 0
 		port := 0
+		flag := 0
+		tag := ""
 
 		if len(record) > 3 && record[3] != "" {
-			if v, err := strconv.Atoi(record[3]); err == nil {
-				ttl = v
+			v, err := strconv.Atoi(record[3])
+			if err != nil || v < 0 {
+				return fmt.Errorf("invalid CSV TTL %q", record[3])
 			}
+			ttl = v
+		}
+		if err := validateRecordTTL(ttl); err != nil {
+			return fmt.Errorf("invalid CSV TTL: %w", err)
 		}
 		if len(record) > 4 && record[4] != "" {
-			if v, err := strconv.Atoi(record[4]); err == nil {
-				priority = v
+			v, err := strconv.Atoi(record[4])
+			if err != nil {
+				return fmt.Errorf("invalid CSV priority %q", record[4])
 			}
+			priority = v
 		}
 		if len(record) > 5 && record[5] != "" {
-			if v, err := strconv.Atoi(record[5]); err == nil {
-				weight = v
+			v, err := strconv.Atoi(record[5])
+			if err != nil {
+				return fmt.Errorf("invalid CSV weight %q", record[5])
 			}
+			weight = v
 		}
 		if len(record) > 6 && record[6] != "" {
-			if v, err := strconv.Atoi(record[6]); err == nil {
-				port = v
+			v, err := strconv.Atoi(record[6])
+			if err != nil {
+				return fmt.Errorf("invalid CSV port %q", record[6])
 			}
+			port = v
 		}
-
 		if !SupportedRecordTypes[rtype] {
-			continue
+			return fmt.Errorf("CSV contains unsupported record type %q", rtype)
+		}
+		if rtype == "CAA" {
+			if len(record) < 9 {
+				return fmt.Errorf("CSV CAA record requires flag and tag columns")
+			}
+			flag, err = strconv.Atoi(record[7])
+			if err != nil || flag < 0 || flag > 255 || strings.TrimSpace(record[8]) == "" {
+				return fmt.Errorf("CSV CAA record requires a flag from 0 to 255 and a non-empty tag")
+			}
+			// Validate against the same CAA tag/value rules as API writes.
+			tag = record[8]
+		}
+		if err := validateRecordValue(rtype, value, &priority, &weight, &port, tag, &flag); err != nil {
+			return fmt.Errorf("invalid CSV %s record: %w", rtype, err)
 		}
 
 		records = append(records, csvRecord{
 			id:       uuid.New().String(),
+			row:      rowNumber,
 			name:     name,
 			rtype:    rtype,
 			value:    value,
@@ -266,19 +593,152 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 			priority: priority,
 			weight:   weight,
 			port:     port,
+			flag:     flag,
+			tag:      tag,
 		})
 	}
-
-	// Insert all records in a single transaction.
+	// Classify duplicates and CNAME conflicts against one database snapshot,
+	// then insert the accepted rows in that same transaction.
 	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
+	existingRows, err := tx.Query(`
+		SELECT name, type, value, ttl, COALESCE(priority, 0), COALESCE(weight, 0),
+			COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
+		FROM dns_records WHERE zone_id = ? AND enabled = 1
+			AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))`, zoneID)
+	if err != nil {
+		return fmt.Errorf("querying existing records: %w", err)
+	}
+	existing := make(map[string]int)
+	ownerTypes := make(map[string]map[string]struct{})
+	rrsetTTLs := make(map[string]map[int]struct{})
+	for existingRows.Next() {
+		var name, rtype, value, tag string
+		var ttl, priority, weight, port, flag int
+		if err := existingRows.Scan(&name, &rtype, &value, &ttl, &priority, &weight, &port, &flag, &tag); err != nil {
+			existingRows.Close()
+			return fmt.Errorf("scanning existing record: %w", err)
+		}
+		owner := dns.Fqdn(strings.ToLower(name))
+		existing[csvRecordIdentity(owner, rtype, value, priority, weight, port, flag, tag)] = ttl
+		if ownerTypes[owner] == nil {
+			ownerTypes[owner] = make(map[string]struct{})
+		}
+		ownerTypes[owner][rtype] = struct{}{}
+		rrsetKey := csvRRsetIdentity(owner, rtype)
+		if rrsetTTLs[rrsetKey] == nil {
+			rrsetTTLs[rrsetKey] = make(map[int]struct{})
+		}
+		rrsetTTLs[rrsetKey][ttl] = struct{}{}
+	}
+	if err := existingRows.Err(); err != nil {
+		existingRows.Close()
+		return fmt.Errorf("reading existing records: %w", err)
+	}
+	if err := existingRows.Close(); err != nil {
+		return fmt.Errorf("closing existing records: %w", err)
+	}
+
+	if preview != nil {
+		preview.RecordCount = len(records)
+		preview.RecordTypes = make(map[string]int)
+		preview.Creates = 0
+		preview.Unchanged = 0
+		for _, rec := range records {
+			preview.RecordTypes[rec.rtype]++
+		}
+	}
+	creates := make([]csvRecord, 0, len(records))
+	var conflicts []CSVImportConflict
+	for _, rec := range records {
+		owner := dns.Fqdn(strings.ToLower(rec.name))
+		types := ownerTypes[owner]
+		rrsetKey := csvRRsetIdentity(owner, rec.rtype)
+		conflicted := false
+		for existingTTL := range rrsetTTLs[rrsetKey] {
+			if existingTTL != rec.ttl {
+				conflicts = append(conflicts, CSVImportConflict{
+					Row: rec.row, Owner: owner, Type: rec.rtype, Code: "rrset_ttl_mismatch",
+					Message: fmt.Sprintf("RRset TTL is %d; incoming record uses %d", existingTTL, rec.ttl),
+				})
+				conflicted = true
+				break
+			}
+		}
+		if rec.rtype == "CNAME" {
+			for existingType := range types {
+				if existingType != "CNAME" {
+					conflicts = append(conflicts, CSVImportConflict{
+						Row: rec.row, Owner: owner, Type: rec.rtype, Code: "cname_exclusive_type",
+						Message: fmt.Sprintf("CNAME conflicts with %s at this owner", existingType),
+					})
+					conflicted = true
+					break
+				}
+			}
+		} else if _, hasCNAME := types["CNAME"]; hasCNAME {
+			conflicts = append(conflicts, CSVImportConflict{
+				Row: rec.row, Owner: owner, Type: rec.rtype, Code: "cname_exclusive_type",
+				Message: fmt.Sprintf("%s conflicts with CNAME at this owner", rec.rtype),
+			})
+			conflicted = true
+		}
+		if conflicted {
+			continue
+		}
+		identity := csvRecordIdentity(owner, rec.rtype, rec.value, rec.priority, rec.weight, rec.port, rec.flag, rec.tag)
+		if previousTTL, duplicate := existing[identity]; duplicate {
+			if previousTTL != rec.ttl {
+				conflicts = append(conflicts, CSVImportConflict{
+					Row: rec.row, Owner: owner, Type: rec.rtype, Code: "duplicate_ttl_mismatch",
+					Message: fmt.Sprintf("duplicate value uses TTL %d; incoming record uses %d", previousTTL, rec.ttl),
+				})
+				continue
+			}
+			if preview != nil {
+				preview.Unchanged++
+			}
+			continue
+		}
+		if rec.rtype == "CNAME" && len(types) > 0 {
+			conflicts = append(conflicts, CSVImportConflict{
+				Row: rec.row, Owner: owner, Type: rec.rtype, Code: "multiple_cname_targets",
+				Message: "owner has more than one distinct CNAME target",
+			})
+			continue
+		}
+		if types == nil {
+			types = make(map[string]struct{})
+			ownerTypes[owner] = types
+		}
+		types[rec.rtype] = struct{}{}
+		if rrsetTTLs[rrsetKey] == nil {
+			rrsetTTLs[rrsetKey] = make(map[int]struct{})
+		}
+		rrsetTTLs[rrsetKey][rec.ttl] = struct{}{}
+		existing[identity] = rec.ttl
+		creates = append(creates, rec)
+	}
+	if preview != nil {
+		preview.Creates = len(creates)
+		preview.Valid = len(conflicts) == 0
+		preview.Conflicts = append([]CSVImportConflict(nil), conflicts...)
+	}
+	if len(conflicts) > 0 {
+		return &CSVImportConflictError{Conflicts: conflicts}
+	}
+	if dryRun {
+		return nil
+	}
+	records = creates
+
 	stmt, err := tx.Prepare(`
-		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, priority, weight, port, flag, tag, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
@@ -286,19 +746,32 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
-		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl, rec.priority, rec.weight, rec.port)
+		_, err := stmt.Exec(rec.id, zoneID, rec.name, rec.rtype, rec.value, rec.ttl, rec.priority, rec.weight, rec.port, rec.flag, rec.tag)
 		if err != nil {
 			return fmt.Errorf("insert record %s: %w", rec.id, err)
+		}
+	}
+	if len(records) > 0 {
+		serial, err := bumpZoneSerialTx(tx, zoneID)
+		if err != nil {
+			return fmt.Errorf("bumping zone serial: %w", err)
+		}
+		for _, rec := range records {
+			if err := logChangeTx(tx, zoneID, serial, "add", rec.name, rec.rtype, rec.value, rec.ttl,
+				rec.priority, rec.weight, rec.port, rec.flag, rec.tag); err != nil {
+				return fmt.Errorf("journaling imported record %s: %w", rec.id, err)
+			}
+		}
+		if err := logCurrentSOAStateTx(tx, zoneID, serial); err != nil {
+			return fmt.Errorf("journaling updated SOA: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
-
-	// Increment zone serial.
-	if _, err := m.zoneMgr.IncrementSerial(zoneID); err != nil {
-		_ = err
+	if len(records) > 0 {
+		m.notifyPrimary(zoneID)
 	}
 
 	// Reload in-memory zone store.
@@ -307,6 +780,16 @@ func (m *RecordManager) ImportRecordsCSV(zoneID string, csvData []byte) error {
 	}
 
 	return nil
+}
+
+func csvRecordIdentity(name, rtype, value string, priority, weight, port, flag int, tag string) string {
+	return fmt.Sprintf("%q|%q|%q|%d|%d|%d|%d|%q",
+		dns.Fqdn(strings.ToLower(name)), strings.ToUpper(rtype), value,
+		priority, weight, port, flag, tag)
+}
+
+func csvRRsetIdentity(owner, rtype string) string {
+	return strings.ToLower(dns.Fqdn(owner)) + "\x00" + strings.ToUpper(rtype)
 }
 
 // ExportRecordsCSV exports records from the specified zone as CSV data.
@@ -319,16 +802,52 @@ func (m *RecordManager) ExportRecordsCSV(zoneID string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	zone, err := m.zoneMgr.GetZone(zoneID)
+	if err != nil {
+		return nil, err
+	}
 
 	var sb strings.Builder
-	sb.WriteString("name,type,value,ttl,priority,weight,port\n")
+	w := csv.NewWriter(&sb)
+	if err := w.Write([]string{"name", "type", "value", "ttl", "priority", "weight", "port", "flag", "tag"}); err != nil {
+		return nil, err
+	}
 
 	for _, r := range records {
-		sb.WriteString(fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d\n",
-			r.Name, r.Type, r.Value, r.TTL, r.Priority, r.Weight, r.Port))
+		name, ok := zoneRelativeRecordName(r.Name, zone.Name)
+		if !ok {
+			return nil, fmt.Errorf("record owner %q is outside zone %q", r.Name, zone.Name)
+		}
+		if err := w.Write([]string{name, r.Type, r.Value, strconv.Itoa(r.TTL), strconv.Itoa(r.Priority),
+			strconv.Itoa(r.Weight), strconv.Itoa(r.Port), strconv.Itoa(r.Flag), r.Tag}); err != nil {
+			return nil, err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, err
 	}
 
 	return []byte(sb.String()), nil
+}
+
+func zoneRelativeRecordName(name, zoneName string) (string, bool) {
+	name = dns.Fqdn(strings.ToLower(name))
+	zoneName = dns.Fqdn(strings.ToLower(zoneName))
+	if name == zoneName {
+		return "@", true
+	}
+	if !recordNameInZone(name, zoneName) {
+		return "", false
+	}
+	relative := strings.TrimSuffix(name, "."+strings.TrimSuffix(zoneName, "."))
+	return strings.TrimSuffix(relative, "."), true
+}
+
+func recordNameInZone(name, zoneName string) bool {
+	name = dns.Fqdn(strings.ToLower(name))
+	zoneName = dns.Fqdn(strings.ToLower(zoneName))
+	return name == zoneName || strings.HasSuffix(name, "."+zoneName)
 }
 
 // rrToString converts a dns.RR to a string value suitable for database storage.
@@ -355,7 +874,10 @@ func rrToString(rr dns.RR) string {
 	case *dns.CAA:
 		return v.Value
 	case *dns.NAPTR:
-		return v.Replacement
+		return strings.Join([]string{
+			quoteDNSCharacterString(v.Flags), quoteDNSCharacterString(v.Service),
+			quoteDNSCharacterString(v.Regexp), v.Replacement,
+		}, " ")
 	case *dns.URI:
 		return v.Target
 	case *dns.SSHFP:
@@ -371,6 +893,26 @@ func rrToString(rr dns.RR) string {
 	}
 }
 
+func quoteDNSCharacterString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 0x20 || c >= 0x7f:
+			fmt.Fprintf(&b, "\\%03d", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // extractRRMeta extracts priority, weight, port from a dns.RR.
 func extractRRMeta(rr dns.RR) (priority, weight, port int) {
 	switch v := rr.(type) {
@@ -380,6 +922,9 @@ func extractRRMeta(rr dns.RR) (priority, weight, port int) {
 		priority = int(v.Priority)
 		weight = int(v.Weight)
 		port = int(v.Port)
+	case *dns.NAPTR:
+		priority = int(v.Order)
+		weight = int(v.Preference)
 	case *dns.URI:
 		priority = int(v.Priority)
 		weight = int(v.Weight)

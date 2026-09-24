@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { request as playwrightRequest, test, expect, type Locator, type Page } from '@playwright/test'
 
 // The language switch is a hover-triggered dropdown. The test body reloads
 // the dashboard between the route loop and the switches so the menu's hide
@@ -74,4 +74,357 @@ test('mobile login fits viewport', async ({ page }) => {
   await page.goto('/login')
   await expect(page.getByRole('button', { name: 'Login', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
+})
+
+test('read-only role cannot open write actions across modules and administration', async ({ page }) => {
+  const stamp = Date.now()
+  const username = `dns_reader_${stamp}`
+  const roleName = `dns_reader_role_${stamp}`
+  const secondRoleName = `dhcp_reader_role_${stamp}`
+  const zoneName = `dns-reader-${stamp}.example`
+  const password = 'OnlyForUi-Test-123!'
+  const api = await playwrightRequest.newContext({ baseURL: process.env.GODDI_TEST_BASE_URL || 'http://127.0.0.1:16090' })
+  test.setTimeout(60000)
+  let roleID = ''
+  let secondRoleID = ''
+  let userID = ''
+  let zoneID = ''
+
+  try {
+    const login = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    })
+    expect(login.ok()).toBe(true)
+    const admin = (await login.json()).data
+    const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+
+    const permissionsResponse = await api.get('/api/v1/permissions', { headers })
+    expect(permissionsResponse.ok()).toBe(true)
+    const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
+    const readResources = ['dns', 'dhcp', 'ipam', 'settings', 'backup', 'token', 'user', 'role', 'group'].map(resource => {
+      const permission = permissions.find(item => item.resource === resource && item.action === 'read')
+      expect(permission, `the ${resource} read permission must exist`).toBeDefined()
+      return { resource, id: permission!.id }
+    })
+    const readPermissions = readResources.map(item => item.id)
+
+    const roleResponse = await api.post('/api/v1/roles', {
+      headers,
+      data: { name: roleName, description: 'Read-only browser permission regression' }
+    })
+    expect(roleResponse.status()).toBe(201)
+    roleID = (await roleResponse.json()).data.id
+
+    const secondRoleResponse = await api.post('/api/v1/roles', {
+      headers,
+      data: { name: secondRoleName, description: 'Second role for permission union regression' }
+    })
+    expect(secondRoleResponse.status()).toBe(201)
+    secondRoleID = (await secondRoleResponse.json()).data.id
+    const dhcpReadPermission = readResources.find(item => item.resource === 'dhcp')!
+    const secondGrantResponse = await api.put(`/api/v1/roles/${secondRoleID}/permissions`, {
+      headers,
+      data: { permission_ids: [dhcpReadPermission.id] }
+    })
+    expect(secondGrantResponse.ok()).toBe(true)
+
+    const grantResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: readPermissions }
+    })
+    expect(grantResponse.ok()).toBe(true)
+
+    const userResponse = await api.post('/api/v1/users', {
+      headers,
+      data: {
+        username,
+        password,
+        display_name: username,
+        enabled: true,
+        must_change_password: false
+      }
+    })
+    expect(userResponse.status()).toBe(201)
+    userID = (await userResponse.json()).data.id
+
+    const assignResponse = await api.post(`/api/v1/users/${userID}/roles`, {
+      headers,
+      data: { role_ids: [roleID] }
+    })
+    expect(assignResponse.ok()).toBe(true)
+
+    const readPaths = [
+      '/api/v1/dns/zones', '/api/v1/dhcp/scopes', '/api/v1/ipam/spaces',
+      '/api/v1/settings', '/api/v1/backup', '/api/v1/tokens',
+      '/api/v1/users', '/api/v1/roles', '/api/v1/groups'
+    ]
+    for (const [allowedIndex, permission] of readResources.entries()) {
+      const replaceResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+        headers,
+        data: { permission_ids: [permission.id] }
+      })
+      expect(replaceResponse.ok(), `setting the ${permission.resource}:read grant must succeed`).toBe(true)
+
+      const loginResponse = await api.post('/api/v1/auth/login', { data: { username, password } })
+      expect(loginResponse.ok()).toBe(true)
+      const loginData = (await loginResponse.json()).data
+      const readHeaders = { Authorization: `Bearer ${loginData.token}` }
+      const responses = await Promise.all(readPaths.map(path => api.get(path, { headers: readHeaders })))
+      const expected = Array(readPaths.length).fill(403)
+      expected[allowedIndex] = 200
+      expect(responses.map(response => response.status()), `${permission.resource}:read must grant only its own resource`)
+        .toEqual(expected)
+    }
+
+    const restoreRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: readPermissions }
+    })
+    expect(restoreRoleResponse.ok()).toBe(true)
+
+    const dnsReadPermission = readResources.find(item => item.resource === 'dns')!
+    const dnsOnlyResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: [dnsReadPermission.id] }
+    })
+    expect(dnsOnlyResponse.ok()).toBe(true)
+    const assignSecondRoleResponse = await api.post(`/api/v1/users/${userID}/roles`, {
+      headers,
+      data: { role_ids: [roleID, secondRoleID] }
+    })
+    expect(assignSecondRoleResponse.ok()).toBe(true)
+
+    const mixedLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
+    expect(mixedLogin.ok()).toBe(true)
+    const mixedUser = (await mixedLogin.json()).data
+    const mixedHeaders = { Authorization: `Bearer ${mixedUser.token}` }
+    const mixedResponses = await Promise.all(readPaths.map(path => api.get(path, { headers: mixedHeaders })))
+    expect(mixedResponses.map(response => response.status()), 'multiple roles must union their resource reads')
+      .toEqual([200, 200, 403, 403, 403, 403, 403, 403, 403])
+    const restoreMixedRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+      headers,
+      data: { permission_ids: readPermissions }
+    })
+    expect(restoreMixedRoleResponse.ok()).toBe(true)
+
+    const readerLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
+    expect(readerLogin.ok()).toBe(true)
+    const reader = (await readerLogin.json()).data
+    const readerHeaders = { Authorization: `Bearer ${reader.token}`, 'X-CSRF-Token': reader.csrf_token }
+    const deniedWrites = await Promise.all([
+      api.post('/api/v1/dns/zones', { headers: readerHeaders, data: { name: `blocked-${stamp}.example`, type: 'primary', enabled: true } }),
+      api.post('/api/v1/dhcp/scopes', { headers: readerHeaders, data: { name: 'blocked', subnet: '192.0.2.0/24' } }),
+      api.post('/api/v1/ipam/spaces', { headers: readerHeaders, data: { name: `blocked-${stamp}` } }),
+      api.post('/api/v1/backup', { headers: readerHeaders, data: { description: 'must be denied' } }),
+      api.post('/api/v1/tokens', { headers: readerHeaders, data: { name: 'must be denied' } }),
+      api.put('/api/v1/settings', { headers: readerHeaders, data: { settings: {} } }),
+      api.post('/api/v1/users', { headers: readerHeaders, data: { username: `blocked_${stamp}`, password } }),
+      api.post('/api/v1/roles', { headers: readerHeaders, data: { name: `blocked_${stamp}` } }),
+      api.post('/api/v1/groups', { headers: readerHeaders, data: { name: `blocked_${stamp}` } })
+    ])
+    expect(deniedWrites.map(response => response.status()), 'read-only API writes must all be forbidden')
+      .toEqual(Array(deniedWrites.length).fill(403))
+
+    const zoneResponse = await api.post('/api/v1/dns/zones', {
+      headers,
+      data: { name: zoneName, type: 'primary', enabled: true }
+    })
+    expect(zoneResponse.status()).toBe(201)
+    zoneID = (await zoneResponse.json()).data.id
+
+    await test.step('sign in as the read-only user', async () => {
+      await page.addInitScript(() => { localStorage.setItem('GODDI_lang', JSON.stringify('en-US')) })
+      await page.goto('/login')
+      await page.getByRole('textbox').nth(0).fill(username)
+      await page.getByRole('textbox').nth(1).fill(password)
+      await page.getByRole('button', { name: 'Login', exact: true }).click()
+      await expect(page).toHaveURL(/dashboard$/)
+    })
+
+    await test.step('read module pages while write actions stay hidden', async () => {
+      const readOnlyPages = [
+        { path: '/dns/zones', createButton: 'Create Zone' },
+        { path: '/dhcp/scopes', createButton: 'Create Scope' },
+        { path: '/ipam/spaces', createButton: 'Create Space' },
+        { path: '/settings/backup', createButton: 'Create Backup' },
+        { path: '/admin/tokens', createButton: 'Create Token' },
+        { path: '/admin/users', createButton: 'Create User' },
+        { path: '/admin/roles', createButton: 'Create Role' },
+        { path: '/admin/groups', createButton: 'Create Group' }
+      ]
+      for (const item of readOnlyPages) {
+        await page.goto(item.path, { waitUntil: 'domcontentloaded', timeout: 15000 })
+        await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+        await expect(page.getByRole('button', { name: item.createButton, exact: true })).toHaveCount(0)
+      }
+
+      await page.goto('/settings/system', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0)
+
+      await page.goto('/admin/users', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      const userRow = page.locator('tbody tr').filter({ hasText: username })
+      await expect(userRow).toBeVisible({ timeout: 10000 })
+      await expect(userRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+
+      await page.goto('/admin/roles', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      const roleRow = page.locator('tbody tr').filter({ hasText: roleName })
+      await expect(roleRow).toBeVisible({ timeout: 10000 })
+      await expect(roleRow.getByRole('button', { name: 'Edit', exact: true })).toBeDisabled()
+      await expect(roleRow.getByRole('button', { name: 'Assign Permissions', exact: true })).toBeDisabled()
+      await expect(roleRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+
+      await page.goto('/dns/zones', { waitUntil: 'domcontentloaded', timeout: 15000 })
+      await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible({ timeout: 10000 })
+      const zoneRow = page.locator('tbody tr').filter({ hasText: zoneName })
+      await expect(zoneRow).toBeVisible({ timeout: 10000 })
+      await expect(zoneRow.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled({ timeout: 10000 })
+    })
+  } finally {
+    const login = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    }).catch(() => null)
+    const admin = login?.ok() ? (await login.json()).data : null
+    if (admin) {
+      const headers = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+      if (userID) await api.delete(`/api/v1/users/${userID}`, { headers }).catch(() => {})
+      if (secondRoleID) await api.delete(`/api/v1/roles/${secondRoleID}`, { headers }).catch(() => {})
+      if (roleID) await api.delete(`/api/v1/roles/${roleID}`, { headers }).catch(() => {})
+      if (zoneID) await api.delete(`/api/v1/dns/zones/${zoneID}`, { headers }).catch(() => {})
+    }
+    await api.dispose()
+  }
+})
+
+test('authorized operator can manage users, roles, and groups within assigned permissions', async () => {
+  const stamp = Date.now()
+  const operatorName = `rbac_operator_${stamp}`
+  const operatorRoleName = `rbac_operator_role_${stamp}`
+  const delegatedRoleName = `rbac_delegated_role_${stamp}`
+  const delegatedUserName = `rbac_managed_user_${stamp}`
+  const groupName = `rbac_managed_group_${stamp}`
+  const password = 'OnlyForUi-Test-123!'
+  const api = await playwrightRequest.newContext({ baseURL: process.env.GODDI_TEST_BASE_URL || 'http://127.0.0.1:16090' })
+  test.setTimeout(60000)
+  let operatorRoleID = ''
+  let operatorID = ''
+  let delegatedRoleID = ''
+  let delegatedUserID = ''
+  let groupID = ''
+
+  try {
+    const adminLogin = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    })
+    expect(adminLogin.ok()).toBe(true)
+    const admin = (await adminLogin.json()).data
+    const adminHeaders = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+    const permissionResponse = await api.get('/api/v1/permissions', { headers: adminHeaders })
+    expect(permissionResponse.ok()).toBe(true)
+    const permissions = (await permissionResponse.json()).data as Array<{ id: string; resource: string; action: string }>
+    const permissionID = (resource: string, action: string) => {
+      const permission = permissions.find(item => item.resource === resource && item.action === action)
+      expect(permission, `${resource}:${action} permission must exist`).toBeDefined()
+      return permission!.id
+    }
+
+    const operatorRoleResponse = await api.post('/api/v1/roles', {
+      headers: adminHeaders,
+      data: { name: operatorRoleName, description: 'Scoped user, role, and group administrator' }
+    })
+    expect(operatorRoleResponse.status()).toBe(201)
+    operatorRoleID = (await operatorRoleResponse.json()).data.id
+    const operatorPermissions = [
+      permissionID('user', 'read'), permissionID('user', 'write'),
+      permissionID('role', 'read'), permissionID('role', 'write'),
+      permissionID('group', 'read'), permissionID('group', 'write')
+    ]
+    const grantResponse = await api.put(`/api/v1/roles/${operatorRoleID}/permissions`, {
+      headers: adminHeaders, data: { permission_ids: operatorPermissions }
+    })
+    expect(grantResponse.ok()).toBe(true)
+    const operatorResponse = await api.post('/api/v1/users', {
+      headers: adminHeaders,
+      data: { username: operatorName, password, display_name: operatorName, enabled: true, must_change_password: false }
+    })
+    expect(operatorResponse.status()).toBe(201)
+    operatorID = (await operatorResponse.json()).data.id
+    const assignOperatorRole = await api.post(`/api/v1/users/${operatorID}/roles`, {
+      headers: adminHeaders, data: { role_ids: [operatorRoleID] }
+    })
+    expect(assignOperatorRole.ok()).toBe(true)
+
+    const operatorLogin = await api.post('/api/v1/auth/login', { data: { username: operatorName, password } })
+    expect(operatorLogin.ok()).toBe(true)
+    const operator = (await operatorLogin.json()).data
+    const operatorHeaders = { Authorization: `Bearer ${operator.token}`, 'X-CSRF-Token': operator.csrf_token }
+
+    const delegatedRoleResponse = await api.post('/api/v1/roles', {
+      headers: operatorHeaders, data: { name: delegatedRoleName, description: 'Delegated DNS reader' }
+    })
+    expect(delegatedRoleResponse.status()).toBe(201)
+    delegatedRoleID = (await delegatedRoleResponse.json()).data.id
+    const delegatedGrant = await api.put(`/api/v1/roles/${delegatedRoleID}/permissions`, {
+      headers: operatorHeaders, data: { permission_ids: [permissionID('dns', 'read')] }
+    })
+    expect(delegatedGrant.ok()).toBe(true)
+
+    const groupResponse = await api.post('/api/v1/groups', {
+      headers: operatorHeaders, data: { name: groupName, description: 'Managed by scoped RBAC regression' }
+    })
+    expect(groupResponse.status()).toBe(201)
+    groupID = (await groupResponse.json()).data.id
+    const assignGroupRole = await api.post(`/api/v1/groups/${groupID}/roles`, {
+      headers: operatorHeaders, data: { role_ids: [delegatedRoleID] }
+    })
+    expect(assignGroupRole.ok()).toBe(true)
+
+    const delegatedUserResponse = await api.post('/api/v1/users', {
+      headers: operatorHeaders,
+      data: { username: delegatedUserName, password, display_name: delegatedUserName, enabled: true, must_change_password: false }
+    })
+    expect(delegatedUserResponse.status()).toBe(201)
+    delegatedUserID = (await delegatedUserResponse.json()).data.id
+    const assignManagedGroup = await api.post(`/api/v1/users/${delegatedUserID}/groups`, {
+      headers: operatorHeaders, data: { group_id: groupID }
+    })
+    expect(assignManagedGroup.ok()).toBe(true)
+    const assignManagedRole = await api.post(`/api/v1/users/${delegatedUserID}/roles`, {
+      headers: operatorHeaders, data: { role_ids: [delegatedRoleID] }
+    })
+    expect(assignManagedRole.ok()).toBe(true)
+
+    const managedLogin = await api.post('/api/v1/auth/login', { data: { username: delegatedUserName, password } })
+    expect(managedLogin.ok()).toBe(true)
+    const managed = (await managedLogin.json()).data
+    const managedHeaders = { Authorization: `Bearer ${managed.token}` }
+    expect((await api.get('/api/v1/dns/zones', { headers: managedHeaders })).status()).toBe(200)
+    expect((await api.get('/api/v1/dhcp/scopes', { headers: managedHeaders })).status()).toBe(403)
+  } finally {
+    const adminLogin = await api.post('/api/v1/auth/login', {
+      data: {
+        username: process.env.GODDI_TEST_USERNAME || 'admin',
+        password: process.env.GODDI_TEST_PASSWORD || 'Admin@123456'
+      }
+    }).catch(() => null)
+    const admin = adminLogin?.ok() ? (await adminLogin.json()).data : null
+    if (admin) {
+      const adminHeaders = { Authorization: `Bearer ${admin.token}`, 'X-CSRF-Token': admin.csrf_token }
+      if (delegatedUserID) await api.delete(`/api/v1/users/${delegatedUserID}`, { headers: adminHeaders }).catch(() => {})
+      if (operatorID) await api.delete(`/api/v1/users/${operatorID}`, { headers: adminHeaders }).catch(() => {})
+      if (groupID) await api.delete(`/api/v1/groups/${groupID}`, { headers: adminHeaders }).catch(() => {})
+      if (delegatedRoleID) await api.delete(`/api/v1/roles/${delegatedRoleID}`, { headers: adminHeaders }).catch(() => {})
+      if (operatorRoleID) await api.delete(`/api/v1/roles/${operatorRoleID}`, { headers: adminHeaders }).catch(() => {})
+    }
+    await api.dispose()
+  }
 })

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/miekg/dns"
 )
 
 // ZoneType represents the type of a DNS zone.
@@ -280,6 +281,21 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	if opts.Minimum != nil {
 		minimum = *opts.Minimum
 	}
+	if err := validateRecordTTL(defaultTTL); err != nil {
+		return nil, fmt.Errorf("invalid default TTL: %w", err)
+	}
+	if err := validateSOATimer("refresh", refresh); err != nil {
+		return nil, err
+	}
+	if err := validateSOATimer("retry", retry); err != nil {
+		return nil, err
+	}
+	if err := validateSOATimer("expire", expire); err != nil {
+		return nil, err
+	}
+	if err := validateRecordTTL(minimum); err != nil {
+		return nil, fmt.Errorf("invalid SOA minimum: %w", err)
+	}
 	enabled := true
 	if opts.Enabled != nil {
 		enabled = *opts.Enabled
@@ -307,7 +323,12 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	serial := generateSerial(m.db)
 
 	id := uuid.New().String()
-	_, err = m.db.Exec(`
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin zone creation transaction: %w", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
 		INSERT INTO dns_zones (id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
 			transfer_policy, update_policy, acl, catalog)
@@ -320,9 +341,19 @@ func (m *ZoneManager) CreateZone(opts ZoneOptions) (*Zone, error) {
 	}
 
 	// RFC 9432 membership: materialise a PTR record inside the catalog zone.
+	var catalogID string
 	if opts.Catalog != "" {
-		if err := m.addCatalogMembership(opts.Catalog, name); err != nil {
+		catalogID, err = addCatalogMembershipTx(tx, opts.Catalog, name)
+		if err != nil {
 			return nil, fmt.Errorf("adding catalog membership: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit zone creation transaction: %w", err)
+	}
+	if catalogID != "" {
+		if rm := m.recordManagerForClone(); rm != nil {
+			rm.notifyPrimary(catalogID)
 		}
 	}
 
@@ -540,17 +571,22 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	if err != nil {
 		return nil, err
 	}
+	oldZoneName := existing.Name
 
 	// Build update query dynamically.
 	var setClauses []string
 	var args []interface{}
+	serialRelevantChanged := false
 
-	if opts.Name != "" && opts.Name != existing.Name {
+	if opts.Name != "" {
 		name := strings.TrimSuffix(strings.ToLower(opts.Name), ".")
 		name += "."
-		setClauses = append(setClauses, "name = ?")
-		args = append(args, name)
-		existing.Name = name
+		if name != existing.Name {
+			setClauses = append(setClauses, "name = ?")
+			args = append(args, name)
+			existing.Name = name
+			serialRelevantChanged = true
+		}
 	}
 	if opts.Type != "" {
 		if !isValidZoneType(opts.Type) {
@@ -558,6 +594,7 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		}
 		setClauses = append(setClauses, "type = ?")
 		args = append(args, opts.Type)
+		serialRelevantChanged = serialRelevantChanged || existing.Type != opts.Type
 		existing.Type = opts.Type
 	}
 	if opts.Enabled != nil {
@@ -568,11 +605,16 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	if opts.DNSSECEnabled != nil {
 		setClauses = append(setClauses, "dnssec_enabled = ?")
 		args = append(args, *opts.DNSSECEnabled)
+		serialRelevantChanged = serialRelevantChanged || existing.DNSSECEnabled != *opts.DNSSECEnabled
 		existing.DNSSECEnabled = *opts.DNSSECEnabled
 	}
 	if opts.DefaultTTL != nil {
+		if err := validateRecordTTL(*opts.DefaultTTL); err != nil {
+			return nil, fmt.Errorf("invalid default TTL: %w", err)
+		}
 		setClauses = append(setClauses, "default_ttl = ?")
 		args = append(args, *opts.DefaultTTL)
+		serialRelevantChanged = serialRelevantChanged || existing.DefaultTTL != *opts.DefaultTTL
 		existing.DefaultTTL = *opts.DefaultTTL
 	}
 	if opts.SOA_MName != "" {
@@ -582,6 +624,7 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		}
 		setClauses = append(setClauses, "soa_mname = ?")
 		args = append(args, soaMName)
+		serialRelevantChanged = serialRelevantChanged || existing.SOA_MName != soaMName
 		existing.SOA_MName = soaMName
 	}
 	if opts.SOA_RName != "" {
@@ -591,26 +634,43 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		}
 		setClauses = append(setClauses, "soa_rname = ?")
 		args = append(args, soaRName)
+		serialRelevantChanged = serialRelevantChanged || existing.SOA_RName != soaRName
 		existing.SOA_RName = soaRName
 	}
 	if opts.Refresh != nil {
+		if err := validateSOATimer("refresh", *opts.Refresh); err != nil {
+			return nil, err
+		}
 		setClauses = append(setClauses, "refresh = ?")
 		args = append(args, *opts.Refresh)
+		serialRelevantChanged = serialRelevantChanged || existing.Refresh != *opts.Refresh
 		existing.Refresh = *opts.Refresh
 	}
 	if opts.Retry != nil {
+		if err := validateSOATimer("retry", *opts.Retry); err != nil {
+			return nil, err
+		}
 		setClauses = append(setClauses, "retry = ?")
 		args = append(args, *opts.Retry)
+		serialRelevantChanged = serialRelevantChanged || existing.Retry != *opts.Retry
 		existing.Retry = *opts.Retry
 	}
 	if opts.Expire != nil {
+		if err := validateSOATimer("expire", *opts.Expire); err != nil {
+			return nil, err
+		}
 		setClauses = append(setClauses, "expire = ?")
 		args = append(args, *opts.Expire)
+		serialRelevantChanged = serialRelevantChanged || existing.Expire != *opts.Expire
 		existing.Expire = *opts.Expire
 	}
 	if opts.Minimum != nil {
+		if err := validateRecordTTL(*opts.Minimum); err != nil {
+			return nil, fmt.Errorf("invalid SOA minimum: %w", err)
+		}
 		setClauses = append(setClauses, "minimum = ?")
 		args = append(args, *opts.Minimum)
+		serialRelevantChanged = serialRelevantChanged || existing.Minimum != *opts.Minimum
 		existing.Minimum = *opts.Minimum
 	}
 	if opts.TransferPolicy != "" {
@@ -636,33 +696,30 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	//   ""       not provided, keep current membership
 	//   "-"|"none"  detach from the current catalog
 	//   <name>   join/switch to the named catalog zone
-	newCatalog := ""
+	oldCatalog := existing.Catalog
+	newCatalog := oldCatalog
+	catalogChanged := false
 	switch opts.Catalog {
 	case "":
 		// keep current
 	case "-", "none":
-		if existing.Catalog != "" {
-			if err := m.removeCatalogMembership(existing.Name); err != nil {
-				return nil, fmt.Errorf("detaching catalog: %w", err)
-			}
+		if oldCatalog != "" {
+			setClauses = append(setClauses, "catalog = ''")
+			existing.Catalog = ""
+			newCatalog = ""
+			catalogChanged = true
 		}
-		setClauses = append(setClauses, "catalog = ''")
-		existing.Catalog = ""
 	default:
 		catalogName := strings.TrimSuffix(strings.ToLower(opts.Catalog), ".") + "."
-		if catalogName != existing.Catalog {
+		if catalogName != oldCatalog {
 			if err := m.validateCatalogMembership(existing.Type, catalogName); err != nil {
 				return nil, err
 			}
-			if existing.Catalog != "" {
-				if err := m.removeCatalogMembership(existing.Name); err != nil {
-					return nil, fmt.Errorf("detaching catalog: %w", err)
-				}
-			}
-			newCatalog = catalogName
 			setClauses = append(setClauses, "catalog = ?")
 			args = append(args, catalogName)
 			existing.Catalog = catalogName
+			newCatalog = catalogName
+			catalogChanged = true
 		}
 	}
 
@@ -674,15 +731,70 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	args = append(args, id)
 
 	query := "UPDATE dns_zones SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	_, err = m.db.Exec(query, args...)
+	tx, err := m.db.Begin()
 	if err != nil {
+		return nil, fmt.Errorf("begin zone update transaction: %w", err)
+	}
+	defer tx.Rollback()
+	beforeSOA, err := ReadSOAHistoryStateTx(tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading SOA before zone update: %w", err)
+	}
+	changedCatalogs := map[string]struct{}{}
+	if catalogChanged && oldCatalog != "" {
+		changed, err := removeCatalogMembershipTx(tx, oldZoneName)
+		if err != nil {
+			return nil, fmt.Errorf("detaching catalog: %w", err)
+		}
+		for catalogID := range changed {
+			changedCatalogs[catalogID] = struct{}{}
+		}
+	} else if oldZoneName != existing.Name && oldCatalog != "" {
+		changedCatalogs, err = renameCatalogMemberTx(tx, oldZoneName, existing.Name)
+		if err != nil {
+			return nil, fmt.Errorf("updating catalog member name: %w", err)
+		}
+	}
+	if catalogChanged && newCatalog != "" {
+		catalogID, err := addCatalogMembershipTx(tx, newCatalog, existing.Name)
+		if err != nil {
+			return nil, fmt.Errorf("adding catalog membership: %w", err)
+		}
+		changedCatalogs[catalogID] = struct{}{}
+	}
+	if _, err := tx.Exec(query, args...); err != nil {
 		return nil, fmt.Errorf("updating zone: %w", err)
 	}
-
-	// Materialise new catalog membership after the zone row is committed.
-	if newCatalog != "" {
-		if err := m.addCatalogMembership(newCatalog, existing.Name); err != nil {
-			return nil, fmt.Errorf("adding catalog membership: %w", err)
+	if serialRelevantChanged {
+		serial, err := bumpZoneSerialWithSOAStateTx(tx, id, beforeSOA)
+		if err != nil {
+			return nil, fmt.Errorf("bumping zone serial: %w", err)
+		}
+		if oldZoneName != existing.Name {
+			if err := renameZoneRecordOwnersTx(tx, id, oldZoneName, existing.Name, serial); err != nil {
+				return nil, fmt.Errorf("renaming zone record owners: %w", err)
+			}
+		}
+		afterSOA := SOAHistoryState{
+			Name: existing.Name, MName: existing.SOA_MName, RName: existing.SOA_RName,
+			Serial: serial, TTL: existing.DefaultTTL,
+			Refresh: existing.Refresh, Retry: existing.Retry, Expire: existing.Expire, Minimum: existing.Minimum,
+		}
+		if err := LogSOARecordTx(tx, id, serial, "add", afterSOA); err != nil {
+			return nil, fmt.Errorf("journaling SOA change: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit zone update transaction: %w", err)
+	}
+	if serialRelevantChanged || len(changedCatalogs) > 0 {
+		if rm := m.recordManagerForClone(); rm != nil {
+			if serialRelevantChanged {
+				rm.notifyPrimary(id)
+			}
+			for catalogID := range changedCatalogs {
+				rm.notifyPrimary(catalogID)
+			}
 		}
 	}
 
@@ -692,6 +804,76 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 	}
 
 	return m.GetZone(id)
+}
+
+// renameZoneRecordOwnersTx moves absolute owners under an old zone apex to the
+// new apex in the caller's zone update transaction. Owners outside the zone
+// are left intact. Each moved RR is recorded as a delete/add at the serial
+// already allocated by that transaction.
+func renameZoneRecordOwnersTx(tx *sql.Tx, zoneID, oldZoneName, newZoneName string, serial uint32) error {
+	oldApex := strings.ToLower(dns.Fqdn(oldZoneName))
+	newApex := strings.ToLower(dns.Fqdn(newZoneName))
+	oldSuffix := "." + strings.TrimSuffix(oldApex, ".") + "."
+	type ownerChange struct {
+		id, oldName, newName, rtype, value string
+		ttl, priority, weight, port, flag  int
+		tag                                string
+	}
+	rows, err := tx.Query(`
+		SELECT id, name, type, value, ttl, COALESCE(priority, 0),
+			COALESCE(weight, 0), COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
+		FROM dns_records WHERE zone_id = ?`, zoneID)
+	if err != nil {
+		return err
+	}
+	var changes []ownerChange
+	for rows.Next() {
+		var c ownerChange
+		if err := rows.Scan(&c.id, &c.oldName, &c.rtype, &c.value, &c.ttl, &c.priority, &c.weight, &c.port, &c.flag, &c.tag); err != nil {
+			rows.Close()
+			return err
+		}
+		lower := strings.ToLower(dns.Fqdn(c.oldName))
+		switch {
+		case lower == oldApex:
+			c.newName = newApex
+		case strings.HasSuffix(lower, oldSuffix):
+			prefix := lower[:len(lower)-len(oldSuffix)]
+			c.newName = prefix + "." + strings.TrimSuffix(newApex, ".") + "."
+		default:
+			continue
+		}
+		if strings.EqualFold(c.oldName, c.newName) {
+			continue
+		}
+		changes = append(changes, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, c := range changes {
+		if _, err := tx.Exec(`UPDATE dns_records SET name = ?, updated_at = datetime('now') WHERE id = ?`, c.newName, c.id); err != nil {
+			return err
+		}
+		if err := logChangeTx(tx, zoneID, serial, "delete", c.oldName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port, c.flag, c.tag); err != nil {
+			return err
+		}
+		if err := logChangeTx(tx, zoneID, serial, "add", c.newName, c.rtype, c.value, c.ttl, c.priority, c.weight, c.port, c.flag, c.tag); err != nil {
+			return err
+		}
+	}
+	// Validate after every owner has moved so checks see the final name set,
+	// not transient collisions with another owner that is also being renamed.
+	for _, c := range changes {
+		if err := validateCNAMEExclusivityTx(tx, zoneID, c.newName, c.rtype, c.value, c.id); err != nil {
+			return fmt.Errorf("renamed owner %s violates CNAME exclusivity: %w", c.newName, err)
+		}
+	}
+	return nil
 }
 
 // DeleteZone deletes a zone by ID.
@@ -706,21 +888,27 @@ func (m *ZoneManager) DeleteZone(id string) error {
 		return err
 	}
 
-	// Catalog bookkeeping: detach the member (or clear membership pointers
-	// when deleting a catalog zone itself).
-	if existing.Catalog != "" {
-		_ = m.removeCatalogMembership(existing.Name)
-	}
-	if existing.Type == string(ZoneTypeCatalog) {
-		_, _ = m.db.Exec("UPDATE dns_zones SET catalog = '' WHERE catalog = ?", existing.Name)
-	}
-
 	// Use a transaction to ensure atomic deletion of records and zone.
 	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	changedCatalogs := map[string]struct{}{}
+	if existing.Catalog != "" {
+		changed, err := removeCatalogMembershipTx(tx, existing.Name)
+		if err != nil {
+			return fmt.Errorf("detaching deleted zone from catalog: %w", err)
+		}
+		for catalogID := range changed {
+			changedCatalogs[catalogID] = struct{}{}
+		}
+	}
+	if existing.Type == string(ZoneTypeCatalog) {
+		if _, err := tx.Exec("UPDATE dns_zones SET catalog = '', updated_at = datetime('now') WHERE catalog = ?", existing.Name); err != nil {
+			return fmt.Errorf("detaching catalog members: %w", err)
+		}
+	}
 
 	// Delete records first (cascade should handle this, but be explicit).
 	if _, err := tx.Exec("DELETE FROM dns_records WHERE zone_id = ?", id); err != nil {
@@ -734,6 +922,11 @@ func (m *ZoneManager) DeleteZone(id string) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	if rm := m.recordManagerForClone(); rm != nil {
+		for catalogID := range changedCatalogs {
+			rm.notifyPrimary(catalogID)
+		}
 	}
 
 	// Reload in-memory zone store.
@@ -754,13 +947,13 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	before, err := ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		return 0, fmt.Errorf("reading SOA before serial increment: %w", err)
+	}
 
 	// Get current serial.
-	var currentSerial uint32
-	err = tx.QueryRow("SELECT serial FROM dns_zones WHERE id = ?", zoneID).Scan(&currentSerial)
-	if err != nil {
-		return 0, fmt.Errorf("querying serial: %w", err)
-	}
+	currentSerial := before.Serial
 
 	// Use a serial that is always strictly greater than the current one.
 	// We compare against the zone's own serial (not the global max) so that
@@ -783,6 +976,11 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 		// write; report failure so the caller can retry.
 		return 0, fmt.Errorf("serial changed concurrently, retry needed")
 	}
+	after := before
+	after.Serial = newSerial
+	if err := LogSOAChangeTx(tx, zoneID, newSerial, before, after); err != nil {
+		return 0, fmt.Errorf("journaling serial increment: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing serial update: %w", err)
@@ -801,6 +999,13 @@ func (m *ZoneManager) IncrementSerial(zoneID string) (uint32, error) {
 // expect from a zone that has been reloaded after a crash.
 func (m *ZoneManager) generateSerialForZone(currentSerial uint32) uint32 {
 	return NextSerial(currentSerial)
+}
+
+func validateSOATimer(field string, value int) error {
+	if value < 0 || uint64(value) > 4294967295 {
+		return fmt.Errorf("invalid SOA %s: must be between 0 and 4294967295 seconds", field)
+	}
+	return nil
 }
 
 // NextSerial returns the next SOA serial in YYYYMMDDNN form that is strictly
@@ -990,8 +1195,32 @@ func (m *ZoneManager) ConvertZoneType(id, newType string) (*Zone, error) {
 		return z, nil
 	}
 
-	if _, err := m.db.Exec(`UPDATE dns_zones SET type = ?, updated_at = datetime('now') WHERE id = ?`, newType, id); err != nil {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin zone type conversion: %w", err)
+	}
+	defer tx.Rollback()
+	beforeSOA, err := ReadSOAHistoryStateTx(tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading SOA before zone type conversion: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE dns_zones SET type = ?, updated_at = datetime('now') WHERE id = ?`, newType, id); err != nil {
 		return nil, fmt.Errorf("converting zone: %w", err)
+	}
+	serial, err := bumpZoneSerialTx(tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("bumping zone serial after type conversion: %w", err)
+	}
+	afterSOA := beforeSOA
+	afterSOA.Serial = serial
+	if err := LogSOARecordTx(tx, id, serial, "add", afterSOA); err != nil {
+		return nil, fmt.Errorf("journaling SOA after zone type conversion: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit zone type conversion: %w", err)
+	}
+	if rm := m.recordManagerForClone(); rm != nil {
+		rm.notifyPrimary(id)
 	}
 
 	if m.zoneStore != nil {

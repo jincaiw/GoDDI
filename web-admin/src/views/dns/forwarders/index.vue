@@ -30,7 +30,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showFwdModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleFwdSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleFwdSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -44,7 +44,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCondModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="condSubmitting" @click="handleCondSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="condSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCondSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -105,12 +105,13 @@ const forwarderColumns = [
   { title: () => t('dns.forwarders.address'), key: 'address' },
   { title: () => t('common.priority'), key: 'priority', width: 80 },
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSForwarder) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: async (enabled: boolean) => {
+    if (!perm.canWrite('dns')) return
     try { await updateDNSForwarder(row.id, { name: row.name, protocol: row.protocol, address: row.address, priority: row.priority, enabled }); await loadForwarders() }
     catch (err) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   } }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSForwarder) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => { if (!perm.canWrite('dns')) return; editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
       h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteFwd(row.id) }, { default: () => t('common.delete') }),
     ],
   }) },
@@ -123,6 +124,7 @@ const condColumns = [
 ]
 
 function openCreateForwarder() {
+  if (!perm.canWrite('dns')) return
   editingFwd.value = null
   Object.assign(fwdForm, { name: '', protocol: 'udp', address: '', enabled: true, priority: 0 })
   showFwdModal.value = true
@@ -141,6 +143,7 @@ async function loadForwarders() {
 }
 
 async function handleFwdSubmit() {
+  if (!perm.canWrite('dns')) return
   submitting.value = true
   try {
     if (editingFwd.value) {
@@ -159,6 +162,7 @@ async function handleFwdSubmit() {
 }
 
 async function handleDeleteFwd(id: string) {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSForwarder(id)
     message.success(t('common.deleteSuccess'))
@@ -181,6 +185,7 @@ async function loadConditionals() {
 }
 
 async function handleCondSubmit() {
+  if (!perm.canWrite('dns')) return
   condSubmitting.value = true
   try {
     await createConditionalForwarder(condForm)
@@ -195,6 +200,7 @@ async function handleCondSubmit() {
 }
 
 async function handleDeleteCond(id: string) {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteConditionalForwarder(id)
     message.success(t('common.deleteSuccess'))

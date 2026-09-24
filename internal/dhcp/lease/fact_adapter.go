@@ -61,6 +61,8 @@ func (c MutationCommand) FactEnvelope(eventID, source, spaceID string, sequence 
 
 func mutationFactAction(kind MutationKind) string {
 	switch kind {
+	case MutationBind:
+		return "bind"
 	case MutationActivate:
 		return "bind"
 	case MutationRenew:

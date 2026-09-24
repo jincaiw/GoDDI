@@ -19,6 +19,7 @@ func TestContractForCoversEveryLeaseMutation(t *testing.T) {
 		durable    bool
 	}{
 		{MutationOffer, LeaseStatusOffered, WALEventUpsert, DNSActionNone, IPAMActionNone, GenerationKeep, false},
+		{MutationBind, LeaseStatusActive, WALEventUpsert, DNSActionUpsert, IPAMActionObserve, GenerationStart, true},
 		{MutationActivate, LeaseStatusActive, WALEventUpsert, DNSActionUpsert, IPAMActionObserve, GenerationIncrement, true},
 		{MutationRenew, LeaseStatusActive, WALEventUpsert, DNSActionUpsert, IPAMActionObserve, GenerationIncrement, true},
 		{MutationRelease, LeaseStatusReleased, WALEventUpsert, DNSActionDelete, IPAMActionObserve, GenerationKeep, true},
@@ -71,6 +72,7 @@ func TestValidateTransitionAllowsExpectedStates(t *testing.T) {
 		before *Lease
 	}{
 		{MutationOffer, nil},
+		{MutationBind, nil},
 		{MutationActivate, &Lease{ID: "offer", Status: LeaseStatusOffered}},
 		{MutationRenew, &Lease{ID: "active", Status: LeaseStatusActive}},
 		{MutationRelease, &Lease{ID: "active", Status: LeaseStatusActive}},

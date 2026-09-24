@@ -12,6 +12,7 @@ package ipam
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -23,6 +24,35 @@ import (
 	"github.com/jasonwa/goddi/internal/ipam/address"
 	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
+
+func TestDNSRecordLinkRequiresSpaceWhenIPOverlaps(t *testing.T) {
+	db := newTestDB(t)
+	seedSpaceAndSubnet(t, db, "sp1", "sn1", "192.0.2.0/24")
+	seedSpaceAndSubnet(t, db, "sp2", "sn2", "192.0.2.0/24")
+	seedAddress(t, db, "ad1", "sp1", "sn1", "192.0.2.13", address.StatusStatic)
+	seedAddress(t, db, "ad2", "sp2", "sn2", "192.0.2.13", address.StatusStatic)
+	linkage := NewLinkage(db)
+	if err := linkage.LinkDNSRecord("r1", "z1", "host.example.test.", "A", "192.0.2.13", "192.0.2.13", "dns"); !errors.Is(err, ErrAmbiguousAddress) {
+		t.Fatalf("unscoped link error = %v, want ErrAmbiguousAddress", err)
+	}
+	var links int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_dns_links`).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if links != 0 {
+		t.Fatalf("ambiguous link created %d DNS links", links)
+	}
+	if err := linkage.LinkDNSRecordInSpace("sp2", "r1", "z1", "host.example.test.", "A", "192.0.2.13", "192.0.2.13", "dns"); err != nil {
+		t.Fatalf("space-scoped link: %v", err)
+	}
+	var addressID string
+	if err := db.QueryRow(`SELECT address_id FROM ipam_dns_links WHERE record_id = 'r1'`).Scan(&addressID); err != nil {
+		t.Fatal(err)
+	}
+	if addressID != "ad2" {
+		t.Fatalf("linked address = %q, want address ad2 in sp2", addressID)
+	}
+}
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()

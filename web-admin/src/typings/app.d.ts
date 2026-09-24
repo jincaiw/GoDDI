@@ -650,6 +650,15 @@ declare namespace App {
           minimum: string;
           ttl: string;
           importZone: string;
+          importPreviewHint: string;
+          importContentPlaceholder: string;
+          importPreview: string;
+          importApply: string;
+          importPreviewValid: string;
+          importPreviewConflicts: string;
+          importRecordCount: string;
+          importConflictRow: string;
+          importSuccess: string;
           exportZone: string;
           syncZone: string;
           enableDnssec: string;
@@ -857,6 +866,7 @@ declare namespace App {
         }
         detail: {
           title: string;
+          permissionLimited: string;
           nothingToShow: string;
           conflicts: string;
           space: string;
@@ -945,6 +955,8 @@ declare namespace App {
           replan: string;
           next: string;
           create: string;
+          noDhcpPermission: string;
+          noDhcpPermissionHint: string;
           created: string;
         };
       };

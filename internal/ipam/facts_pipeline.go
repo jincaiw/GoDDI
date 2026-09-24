@@ -8,9 +8,9 @@ import (
 	"github.com/jasonwa/goddi/internal/facts"
 )
 
-// FactsPipelineOptions is the explicit rollout switch for the migration-stage
-// unified facts projection. Disabled is the safe default: no consumer is
-// constructed, started, or wired into the process.
+// FactsPipelineOptions controls construction of the unified facts projection.
+// Processes that own the control database enable it; callers that do not own
+// the inbox can leave it disabled.
 type FactsPipelineOptions struct {
 	Enabled         bool
 	ConsumerOptions FactsConsumerOptions
@@ -20,10 +20,9 @@ type FactsPipelineOptions struct {
 	BeforeStart func(context.Context) error
 }
 
-// FactsPipeline is the opt-in assembly boundary for the unified facts
-// projection. Producer-side lease mutation wiring remains owned by the caller;
-// this object owns only the control-side consumer lifecycle and its rollback
-// boundary. It is intentionally not used by the default GoDDI process.
+// FactsPipeline is the assembly boundary for the unified facts projection.
+// Producer-side lease mutation wiring remains owned by the caller; this object
+// owns only the control-side consumer lifecycle and its rollback boundary.
 type FactsPipeline struct {
 	enabled         bool
 	linkage         *Linkage

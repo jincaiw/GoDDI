@@ -22,7 +22,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showPolicyModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleCreatePolicy">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleCreatePolicy">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -65,6 +65,7 @@ async function loadPolicies() {
 }
 
 async function handleCreatePolicy() {
+  if (!perm.canWrite('dns')) return
   try {
     await createClientPolicy(policyForm)
     message.success(t('common.createSuccess'))
@@ -74,6 +75,7 @@ async function handleCreatePolicy() {
 }
 
 async function handleDeletePolicy(id: string) {
+  if (!perm.canDelete('dns')) return
   try { await deleteClientPolicy(id); message.success(t('common.deleteSuccess')); loadPolicies() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 

@@ -42,10 +42,14 @@ type zoneData struct {
 // Store is an in-memory zone store that loads zones and records from the database.
 // It provides fast lookup by zone name and is thread-safe.
 type Store struct {
-	mu       sync.RWMutex
-	zones    map[string]*zoneData // key: lowercase zone name with trailing dot
-	db       *sql.DB
-	debounce *time.Timer // debounce timer for Reload
+	mu          sync.RWMutex
+	zones       map[string]*zoneData // key: lowercase zone name with trailing dot
+	db          *sql.DB
+	debounce    *time.Timer // debounce timer for Reload
+	expiryTimer *time.Timer // reloads the served snapshot when its next record expires
+	nextExpiry  time.Time
+	closed      bool
+	loadWG      sync.WaitGroup
 	// expired holds secondary zones whose SOA EXPIRE elapsed without a
 	// successful refresh. RFC 1035 §6.3 requires such a zone to stop
 	// answering authoritatively: continuing to serve the local copy would
@@ -134,29 +138,94 @@ func (s *Store) Load() {
 	if s.db == nil {
 		return
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.loadWG.Add(1)
+	s.mu.Unlock()
+	defer s.loadWG.Done()
 
 	// Load data outside the lock to avoid blocking readers.
-	newZones := s.loadFromDB()
+	newZones, nextExpiry := s.loadFromDB()
 
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if newZones == nil {
 		// loadFromDB signals a query failure with nil: retain the existing
 		// map and keep answering authoritatively from the stale data.
 		count := len(s.zones)
+		if !s.nextExpiry.IsZero() && !s.nextExpiry.After(time.Now()) {
+			// Do not let a transient database failure turn an expiry-triggered
+			// reload into a one-shot timer. Retry until the expired records can
+			// be removed from the authoritative snapshot.
+			if s.expiryTimer != nil {
+				s.expiryTimer.Stop()
+			}
+			s.expiryTimer = time.AfterFunc(5*time.Second, s.Load)
+		}
 		s.mu.Unlock()
 		slog.Warn("zone_store: reload failed, keeping previous zone data", "count", count)
 		return
 	}
 	s.zones = newZones
+	s.nextExpiry = nextExpiry
+	if s.expiryTimer != nil {
+		s.expiryTimer.Stop()
+		s.expiryTimer = nil
+	}
+	if !nextExpiry.IsZero() {
+		// SQLite's datetime('now') comparison has second precision. Add one
+		// second so a reload at the boundary cannot rediscover the same row
+		// and repeatedly schedule an immediate timer.
+		delay := time.Until(nextExpiry.Add(time.Second))
+		if delay < 0 {
+			delay = 0
+		}
+		s.expiryTimer = time.AfterFunc(delay, s.Load)
+	}
 	s.mu.Unlock()
 
 	slog.Info("zone_store: loaded zones", "count", len(newZones))
 }
 
+// Close stops scheduled reloads and waits for any in-flight database read to
+// finish. The caller retains ownership of the database connection.
+func (s *Store) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.loadWG.Wait()
+		return
+	}
+	s.closed = true
+	if s.debounce != nil {
+		s.debounce.Stop()
+		s.debounce = nil
+	}
+	if s.expiryTimer != nil {
+		s.expiryTimer.Stop()
+		s.expiryTimer = nil
+	}
+	s.mu.Unlock()
+	s.loadWG.Wait()
+}
+
 // loadFromDB performs all database queries and builds the zone map.
-func (s *Store) loadFromDB() map[string]*zoneData {
+func (s *Store) loadFromDB() (map[string]*zoneData, time.Time) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		slog.Error("zone_store: failed to begin read snapshot", "error", err)
+		return nil, time.Time{}
+	}
+	defer tx.Rollback()
+
 	// Load zones with full metadata.
-	zoneRows, err := s.db.Query(`
+	zoneRows, err := tx.Query(`
 		SELECT id, name, type, enabled, dnssec_enabled, default_ttl,
 			soa_mname, soa_rname, serial, refresh, retry, expire, minimum,
 			transfer_policy, update_policy, acl, COALESCE(catalog, ''), created_at, updated_at
@@ -164,7 +233,7 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	`)
 	if err != nil {
 		slog.Error("zone_store: failed to load zones", "error", err)
-		return nil
+		return nil, time.Time{}
 	}
 	defer zoneRows.Close()
 
@@ -178,7 +247,27 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 			&transferPolicy, &updatePolicy, &aclJSON, &z.Catalog, &z.CreatedAt, &z.UpdatedAt,
 		); err != nil {
 			slog.Error("zone_store: failed to scan zone", "error", err)
-			continue
+			return nil, time.Time{}
+		}
+		if err := validateRecordTTL(z.DefaultTTL); err != nil {
+			slog.Error("zone_store: invalid zone default TTL", "zone", z.Name, "error", err)
+			return nil, time.Time{}
+		}
+		if err := validateSOATimer("refresh", z.Refresh); err != nil {
+			slog.Error("zone_store: invalid SOA metadata", "zone", z.Name, "error", err)
+			return nil, time.Time{}
+		}
+		if err := validateSOATimer("retry", z.Retry); err != nil {
+			slog.Error("zone_store: invalid SOA metadata", "zone", z.Name, "error", err)
+			return nil, time.Time{}
+		}
+		if err := validateSOATimer("expire", z.Expire); err != nil {
+			slog.Error("zone_store: invalid SOA metadata", "zone", z.Name, "error", err)
+			return nil, time.Time{}
+		}
+		if err := validateRecordTTL(z.Minimum); err != nil {
+			slog.Error("zone_store: invalid SOA minimum", "zone", z.Name, "error", err)
+			return nil, time.Time{}
 		}
 		if transferPolicy.Valid {
 			z.TransferPolicy = transferPolicy.String
@@ -193,33 +282,43 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	}
 	if err := zoneRows.Err(); err != nil {
 		slog.Error("zone_store: failed to iterate zones", "error", err)
+		return nil, time.Time{}
+	}
+	if err := zoneRows.Close(); err != nil {
+		slog.Error("zone_store: failed to close zone rows", "error", err)
+		return nil, time.Time{}
 	}
 
 	// Load records. Records whose expiry is in the past are skipped so an
 	// aged-out record never answers queries even before the cleanup task runs.
-	recordRows, err := s.db.Query(`
-		SELECT id, zone_id, name, type, ttl, value, priority, port, weight, tag, flag, enabled
+	recordRows, err := tx.Query(`
+		SELECT id, zone_id, name, type, ttl, value, priority, port, weight, tag, flag, enabled, expires_at
 		FROM dns_records
 		WHERE enabled = 1 AND (expires_at IS NULL OR expires_at > datetime('now'))
 	`)
 	if err != nil {
 		slog.Error("zone_store: failed to load records", "error", err)
-		return nil
+		return nil, time.Time{}
 	}
 	defer recordRows.Close()
 
 	// Group records by zone.
 	zoneRecords := make(map[string][]ZoneRecord) // zoneID -> records
+	var nextExpiry time.Time
 	for recordRows.Next() {
 		var r ZoneRecord
 		var priority, port, weight, flag sql.NullInt64
 		var tag sql.NullString
+		var expiresAt sql.NullTime
 		if err := recordRows.Scan(
 			&r.ID, &r.ZoneID, &r.Name, &r.Type, &r.TTL, &r.Value,
-			&priority, &port, &weight, &tag, &flag, &r.Enabled,
+			&priority, &port, &weight, &tag, &flag, &r.Enabled, &expiresAt,
 		); err != nil {
 			slog.Error("zone_store: failed to scan record", "error", err)
-			continue
+			return nil, time.Time{}
+		}
+		if expiresAt.Valid && (nextExpiry.IsZero() || expiresAt.Time.Before(nextExpiry)) {
+			nextExpiry = expiresAt.Time
 		}
 		if priority.Valid {
 			r.Priority = int(priority.Int64)
@@ -240,6 +339,11 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 	}
 	if err := recordRows.Err(); err != nil {
 		slog.Error("zone_store: failed to iterate records", "error", err)
+		return nil, time.Time{}
+	}
+	if err := recordRows.Close(); err != nil {
+		slog.Error("zone_store: failed to close record rows", "error", err)
+		return nil, time.Time{}
 	}
 
 	// Build in-memory zone data.
@@ -269,7 +373,7 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 					Name:   zoneName,
 					Rrtype: dns.TypeSOA,
 					Class:  dns.ClassINET,
-					Ttl:    uint32(z.Minimum),
+					Ttl:    uint32(z.DefaultTTL),
 				},
 				Ns:      dns.Fqdn(z.SOA_MName),
 				Mbox:    dns.Fqdn(z.SOA_RName),
@@ -284,9 +388,9 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		for _, r := range zoneRecords[zoneID] {
 			rr := buildRR(r, zoneName)
 			if rr == nil {
-				continue
+				slog.Error("zone_store: invalid record prevents atomic snapshot reload", "zone", zoneName, "name", r.Name, "type", r.Type)
+				return nil, time.Time{}
 			}
-
 			name := dns.Fqdn(strings.ToLower(r.Name))
 			zd.records[name] = append(zd.records[name], rr)
 
@@ -306,13 +410,21 @@ func (s *Store) loadFromDB() map[string]*zoneData {
 		newZones[zoneName] = zd
 	}
 
-	return newZones
+	if err := tx.Commit(); err != nil {
+		slog.Error("zone_store: failed to commit read snapshot", "error", err)
+		return nil, time.Time{}
+	}
+	return newZones, nextExpiry
 }
 
 // Reload reloads all zone data from the database with a debounce mechanism.
 // If multiple changes happen within 500ms, only one reload is performed.
 func (s *Store) Reload() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if s.debounce != nil {
 		s.debounce.Stop()
 	}
@@ -335,6 +447,10 @@ func (s *Store) Reload() {
 // than calling it per row.
 func (s *Store) ReloadNow() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if s.debounce != nil {
 		s.debounce.Stop()
 		s.debounce = nil
@@ -679,10 +795,10 @@ func (s *Store) GetDB() *sql.DB {
 
 // buildRR constructs a dns.RR from a ZoneRecord.
 func buildRR(r ZoneRecord, zoneName string) dns.RR {
-	ttl := uint32(r.TTL)
-	if ttl == 0 {
-		ttl = 3600
+	if r.TTL < 0 || uint64(r.TTL) > 2147483647 {
+		return nil
 	}
+	ttl := uint32(r.TTL)
 
 	name := r.Name
 	if name == "" || name == "@" {
@@ -773,15 +889,20 @@ func buildRR(r ZoneRecord, zoneName string) dns.RR {
 		}
 
 	case "NAPTR":
-		return &dns.NAPTR{
-			Hdr:         hdr,
-			Order:       uint16(r.Priority),
-			Preference:  uint16(r.Weight),
-			Flags:       "",
-			Service:     "",
-			Regexp:      "",
-			Replacement: dns.Fqdn(r.Value),
+		// Value holds the complete NAPTR RDATA after order and preference.
+		// Parsing presentation form preserves its quoted character strings and
+		// replacement name without adding schema columns for the RDATA fields.
+		rr, err := dns.NewRR(name + " " + strconv.FormatUint(uint64(ttl), 10) + " IN NAPTR " +
+			strconv.Itoa(r.Priority) + " " + strconv.Itoa(r.Weight) + " " + normalizeNAPTRValue(r.Value))
+		if err != nil {
+			return nil
 		}
+		naptr, ok := rr.(*dns.NAPTR)
+		if !ok {
+			return nil
+		}
+		naptr.Hdr = hdr
+		return naptr
 
 	case "SSHFP":
 		parts := strings.Fields(r.Value)
@@ -889,6 +1010,24 @@ func splitTXT(s string) []string {
 		chunks = append(chunks, s)
 	}
 	return chunks
+}
+
+// TXTStringsRepresentable reports whether the current dns_records value
+// column can reconstruct the supplied TXT character-string boundaries.
+func TXTStringsRepresentable(parts []string) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	rebuilt := splitTXT(strings.Join(parts, ""))
+	if len(parts) != len(rebuilt) {
+		return false
+	}
+	for i := range parts {
+		if parts[i] != rebuilt[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // mustUint32 parses a string as uint32, returning 0 on error.

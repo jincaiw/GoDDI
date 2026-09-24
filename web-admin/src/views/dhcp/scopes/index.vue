@@ -28,7 +28,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -84,8 +84,8 @@ const columns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPScope) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dhcp'), onUpdateValue: () => toggleEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPScope) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editingScope.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dhcp'), onClick: () => { if (!perm.canWrite('dhcp')) return; editingScope.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { if (!perm.canDelete('dhcp')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -103,16 +103,19 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreateScope() {
+  if (!perm.canWrite('dhcp')) return
   editingScope.value = null
   Object.assign(formData, { name: '', subnet: '', start_ip: '', end_ip: '', lease_time: 86400, enabled: true, comment: '' })
   showModal.value = true
 }
 
 async function toggleEnabled(scope: DHCPScope) {
+  if (!perm.canWrite('dhcp')) return
   try { await updateDHCPScope(scope.id, { enabled: !scope.enabled }); message.success(t('common.updateSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('dhcp')) return
   submitting.value = true
   try {
     if (editingScope.value) { await updateDHCPScope(editingScope.value.id, formData); message.success(t('common.updateSuccess')) }
@@ -122,6 +125,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('dhcp')) return
   try { await deleteDHCPScope(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }

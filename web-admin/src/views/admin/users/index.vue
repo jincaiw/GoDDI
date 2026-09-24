@@ -17,16 +17,16 @@
     <!-- Create/Edit User Modal -->
     <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.users.editUser') : t('admin.users.createUser')" preset="card" style="width: 500px;">
       <n-form :model="formData" label-placement="left" label-width="100px">
-        <n-form-item :label="t('admin.users.username')"><n-input v-model:value="formData.username" :disabled="!!editing" /></n-form-item>
-        <n-form-item v-if="!editing" :label="t('auth.password')"><n-input v-model:value="formData.password" type="password" show-password-on="click" :minlength="8" /></n-form-item>
-        <n-form-item :label="t('admin.users.email')"><n-input v-model:value="formData.email" /></n-form-item>
-        <n-form-item :label="t('admin.users.displayName')"><n-input v-model:value="formData.display_name" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" /></n-form-item>
+        <n-form-item :label="t('admin.users.username')"><n-input v-model:value="formData.username" :disabled="!!editing || !perm.canWrite('user')" /></n-form-item>
+        <n-form-item v-if="!editing" :label="t('auth.password')"><n-input v-model:value="formData.password" type="password" show-password-on="click" :minlength="8" :disabled="!perm.canWrite('user')" /></n-form-item>
+        <n-form-item :label="t('admin.users.email')"><n-input v-model:value="formData.email" :disabled="!perm.canWrite('user')" /></n-form-item>
+        <n-form-item :label="t('admin.users.displayName')"><n-input v-model:value="formData.display_name" :disabled="!perm.canWrite('user')" /></n-form-item>
+        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="formData.enabled" :disabled="!perm.canWrite('user')" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('user')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -35,13 +35,13 @@
     <n-modal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.users.assignRoles')" preset="card" style="width: 450px;">
       <n-checkbox-group v-model:value="selectedRoles">
         <n-space item-style="display: flex;">
-          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" />
+          <n-checkbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('user') || !perm.canRead('role')" />
         </n-space>
       </n-checkbox-group>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showRolesModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('user') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -88,6 +88,7 @@ const columns = [
     value: row.enabled,
     disabled: !perm.canWrite('user'),
     onUpdateValue: async (enabled: boolean) => {
+      if (!perm.canWrite('user')) return
       try { await updateUser(row.id, { enabled }); await loadData() }
       catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
     },
@@ -95,9 +96,9 @@ const columns = [
   { title: () => t('admin.users.totpEnabled'), key: 'totp_enabled', width: 80, render: (row: User) => h(NTag, { size: 'small', type: row.totp_enabled ? 'success' : 'default' }, { default: () => row.totp_enabled ? 'ON' : 'OFF' }) },
   { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: User) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editing.value = row; Object.assign(formData, { username: row.username, email: row.email, display_name: row.display_name, enabled: row.enabled }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user'), onClick: () => { assigningUserId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.users.assignRoles') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('user'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user'), onClick: () => { if (!perm.canWrite('user')) return; editing.value = row; Object.assign(formData, { username: row.username, email: row.email, display_name: row.display_name, enabled: row.enabled }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('user') || !perm.canRead('role'), onClick: () => { if (!perm.canWrite('user') || !perm.canRead('role')) return; assigningUserId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.users.assignRoles') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('user'), onClick: () => { if (!perm.canDelete('user')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -115,12 +116,14 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('user')) return
   editing.value = null
   Object.assign(formData, { username: '', email: '', password: '', display_name: '', enabled: true })
   showModal.value = true
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('user')) return
   submitting.value = true
   try {
     if (!editing.value && formData.password.length < 8) {
@@ -135,6 +138,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('user')) return
   try { await deleteUser(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }
@@ -147,6 +151,7 @@ async function loadRoles() {
 }
 
 async function handleAssignRoles() {
+  if (!perm.canWrite('user') || !perm.canRead('role')) return
   try {
     await assignUserRoles(assigningUserId.value, selectedRoles.value)
     message.success(t('common.updateSuccess'))

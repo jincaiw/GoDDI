@@ -189,6 +189,9 @@ func (l *Linkage) CheckDHCPScopePlan(subnetID, fingerprint string) error {
 			Actual:   plan.Fingerprint,
 		}
 	}
+	if len(plan.Conflicts) > 0 {
+		return &PlanConflictError{SubnetID: subnetID, Conflicts: append([]string(nil), plan.Conflicts...)}
+	}
 	return nil
 }
 
@@ -380,6 +383,23 @@ func (p *DHCPScopePlan) fingerprint(scopes []ScopeSummary) string {
 // ErrDHCPScopePlanStale means the plan a caller approved no longer describes
 // the current state.
 var ErrDHCPScopePlanStale = errors.New("DHCP scope plan is stale")
+
+// ErrDHCPScopePlanConflict means a preview contains blocking conflicts and
+// must not be applied through the preview-confirmed create path.
+var ErrDHCPScopePlanConflict = errors.New("DHCP scope plan contains blocking conflicts")
+
+// PlanConflictError carries the reasons a previewed scope must not be created.
+type PlanConflictError struct {
+	SubnetID  string
+	Conflicts []string
+}
+
+func (e *PlanConflictError) Error() string {
+	return fmt.Sprintf("%s for subnet %s (%d conflict(s))",
+		ErrDHCPScopePlanConflict, e.SubnetID, len(e.Conflicts))
+}
+
+func (e *PlanConflictError) Is(target error) bool { return target == ErrDHCPScopePlanConflict }
 
 // PlanStaleError carries both fingerprints so the refusal can say what
 // happened without another round trip. It does not carry the fresh plan: the

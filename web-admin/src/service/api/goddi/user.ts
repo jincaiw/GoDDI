@@ -96,8 +96,8 @@ export function deleteRole(id: string) {
   return del(`/roles/${id}`)
 }
 
-export function assignRolePermissions(roleId: string, permissionIds: string[]) {
-  return post(`/roles/${roleId}/permissions`, { permission_ids: permissionIds })
+export function setRolePermissions(roleId: string, permissionIds: string[]) {
+  return put(`/roles/${roleId}/permissions`, { permission_ids: permissionIds })
 }
 
 export function removeRolePermission(roleId: string, permissionId: string) {

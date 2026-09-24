@@ -80,7 +80,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -98,7 +98,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCloneModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleClone">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleClone">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -119,7 +119,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showConvertModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleConvert">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleConvert">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -237,7 +237,7 @@ const columns = [
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, onClick: () => router.push(`/dns/zone-detail/${row.id}`) }, { default: () => t('common.edit') })]),
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openClone(row) }, { default: () => t('dns.zones.clone') })]),
       ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openConvert(row) }, { default: () => t('dns.zones.convert') })]),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { if (!perm.canDelete('dns')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -271,6 +271,7 @@ function applyFilters() {
 }
 
 function openCreateZone() {
+  if (!perm.canWrite('dns')) return
   editingZone.value = null
   const presetType = activeTab.value === 'allowed' ? 'allowed' : activeTab.value === 'blocked' ? 'blocked' : 'primary'
   Object.assign(formData, { name: '', type: presetType, default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
@@ -278,18 +279,21 @@ function openCreateZone() {
 }
 
 function openClone(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   cloneSource.value = zone
   cloneName.value = `${zone.name}-copy`
   showCloneModal.value = true
 }
 
 function openConvert(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   convertSource.value = zone
   convertTarget.value = zone.type === 'primary' ? 'secondary' : 'primary'
   showConvertModal.value = true
 }
 
 async function handleClone() {
+  if (!perm.canWrite('dns')) return
   if (!cloneSource.value || !cloneName.value.trim()) {
     message.warning(t('dns.zones.newNameRequired'))
     return
@@ -308,6 +312,7 @@ async function handleClone() {
 }
 
 async function handleConvert() {
+  if (!perm.canWrite('dns')) return
   if (!convertSource.value || !convertTarget.value) return
   submitting.value = true
   try {
@@ -323,6 +328,7 @@ async function handleConvert() {
 }
 
 async function handleBatchDelete() {
+  if (!perm.canDelete('dns')) return
   showBatchDeleteConfirm.value = false
   if (checkedKeys.value.length === 0) return
   batchDeleting.value = true
@@ -350,6 +356,7 @@ function handlePageSizeChange(pageSize: number) {
 }
 
 async function toggleEnabled(zone: DNSZone) {
+  if (!perm.canWrite('dns')) return
   try {
     await updateDNSZone(zone.id, { enabled: !zone.enabled })
     message.success(t('common.updateSuccess'))
@@ -360,6 +367,7 @@ async function toggleEnabled(zone: DNSZone) {
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('dns')) return
   submitting.value = true
   try {
     if (editingZone.value) {
@@ -380,6 +388,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSZone(deletingId.value)
     message.success(t('common.deleteSuccess'))

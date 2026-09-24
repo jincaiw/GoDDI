@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -180,6 +181,37 @@ func TestDNSZoneAdapter_ReleaseForcesStoreReload(t *testing.T) {
 	}
 	if ttl != 60 || rname != "dns-admin.example.test." {
 		t.Fatalf("zone = (ttl %d, rname %q), want the published values", ttl, rname)
+	}
+	var serial uint32
+	if err := db.QueryRow(`SELECT serial FROM dns_zones WHERE id = 'zone-1'`).Scan(&serial); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`SELECT change_type, value FROM dns_zone_changes
+		WHERE zone_id = 'zone-1' AND serial = ? AND type = 'SOA' ORDER BY change_type`, serial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	soaChanges := make(map[string]string)
+	for rows.Next() {
+		var kind, value string
+		if err := rows.Scan(&kind, &value); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		soaChanges[kind] = value
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if soaChanges["delete"] != "ns1.example.test. hostmaster.example.test. 1 3600 600 86400 300" {
+		t.Errorf("prior SOA history = %q", soaChanges["delete"])
+	}
+	if soaChanges["add"] != "ns1.example.test. dns-admin.example.test. "+strconv.FormatUint(uint64(serial), 10)+" 3600 600 86400 300" {
+		t.Errorf("new SOA history = %q", soaChanges["add"])
 	}
 }
 

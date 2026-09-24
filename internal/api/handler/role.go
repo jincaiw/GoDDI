@@ -190,19 +190,24 @@ func (h *Handlers) AssignRolePermissions(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		PermissionID string `json:"permission_id"`
+		PermissionID  string   `json:"permission_id"`
+		PermissionIDs []string `json:"permission_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
 	}
 
-	if req.PermissionID == "" {
+	permissionIDs := req.PermissionIDs
+	if len(permissionIDs) == 0 && req.PermissionID != "" {
+		permissionIDs = []string{req.PermissionID}
+	}
+	if len(permissionIDs) == 0 {
 		response.BadRequest(w, "权限ID不能为空")
 		return
 	}
 
-	if err := h.rbacMgr.AssignPermissionToRole(roleID, req.PermissionID); err != nil {
+	if err := h.rbacMgr.AssignPermissionsToRole(roleID, permissionIDs); err != nil {
 		response.InternalError(w, "分配权限失败")
 		return
 	}
@@ -213,13 +218,49 @@ func (h *Handlers) AssignRolePermissions(w http.ResponseWriter, r *http.Request)
 		Action:       "assign_permission",
 		ResourceType: "role",
 		ResourceID:   roleID,
-		Detail:       "permission_id=" + req.PermissionID,
+		Detail:       fmt.Sprintf("permission_ids=%v", permissionIDs),
 		SourceIP:     getClientIP(r),
 		UserAgent:    r.UserAgent(),
 		Success:      true,
 	})
 
 	response.OK(w, map[string]string{"message": "权限已分配"})
+}
+
+// SetRolePermissions replaces the complete permission set on a role.
+func (h *Handlers) SetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	roleID := chi.URLParam(r, "id")
+	if roleID == "" {
+		response.BadRequest(w, "缺少角色ID")
+		return
+	}
+	var req struct {
+		PermissionIDs []string `json:"permission_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if req.PermissionIDs == nil {
+		response.BadRequest(w, "权限ID列表不能为空")
+		return
+	}
+	if err := h.rbacMgr.SetRolePermissions(roleID, req.PermissionIDs); err != nil {
+		response.InternalError(w, "设置角色权限失败")
+		return
+	}
+	_ = h.auditMgr.Log(audit.LogEntry{
+		UserID:       rbac.GetUserID(r.Context()),
+		Username:     rbac.GetUsername(r.Context()),
+		Action:       "set_permissions",
+		ResourceType: "role",
+		ResourceID:   roleID,
+		Detail:       fmt.Sprintf("permission_ids=%v", req.PermissionIDs),
+		SourceIP:     getClientIP(r),
+		UserAgent:    r.UserAgent(),
+		Success:      true,
+	})
+	response.OK(w, map[string]string{"message": "角色权限已更新"})
 }
 
 // RemoveRolePermission handles DELETE /api/v1/roles/{id}/permissions/{permId}

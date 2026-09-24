@@ -39,6 +39,45 @@ func newFactsOutboxDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = db.Exec(`CREATE TABLE facts_sequence_allocator (
+		domain TEXT PRIMARY KEY,
+		last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE dhcp_ipam_observation_event_dirty (
+		event_id TEXT PRIMARY KEY,
+		queued_at DATETIME NOT NULL DEFAULT (datetime('now')),
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at DATETIME,
+		last_error TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TRIGGER trg_facts_dirty_insert
+		AFTER INSERT ON dhcp_ipam_observation_events
+		BEGIN
+			INSERT INTO dhcp_ipam_observation_event_dirty(event_id, queued_at)
+			VALUES (NEW.event_id, datetime('now'))
+			ON CONFLICT(event_id) DO UPDATE SET queued_at=datetime('now');
+		END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE facts_replica_snapshot_chunks (
+		snapshot_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+		first_sequence INTEGER NOT NULL CHECK (first_sequence > 0),
+		last_sequence INTEGER NOT NULL CHECK (last_sequence >= first_sequence),
+		event_count INTEGER NOT NULL CHECK (event_count > 0),
+		chunk_json TEXT NOT NULL CHECK (json_valid(chunk_json)),
+		PRIMARY KEY (snapshot_id, chunk_index)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return db
 }
 

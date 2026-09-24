@@ -3,6 +3,7 @@ package ha
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // Meta keys this package owns in dataplane_meta.
@@ -27,7 +29,9 @@ const (
 	// brought. This is the only fact a standby can offer as evidence, so it
 	// is written in the same transaction as the rows it describes: a
 	// watermark that can be ahead of its own content is worse than none.
-	metaAppliedSeq = "ha_applied_seq"
+	metaAppliedSeq      = "ha_applied_seq"
+	metaFactsAppliedSeq = "ha_facts_applied_seq"
+	metaPeerFactsSeq    = "ha_peer_facts_seq"
 	// metaDegraded marks an operator's explicit decision to run without a
 	// second copy. Nothing in this package sets it; see Operator.Degrade.
 	// There is exactly one writer, and it is not on any serving path.
@@ -77,6 +81,20 @@ func (h *linkHealth) touch() {
 	h.lastSeen = time.Now()
 }
 
+// updateApplied advances the peer watermarks from a durable confirmation.
+// Handshake values are only a starting point; ACK frames carry the live
+// applied watermarks and must be reflected in status and metrics.
+func (h *linkHealth) updateApplied(leaseSeq, factsSeq int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if leaseSeq > h.peer.AppliedSeq {
+		h.peer.AppliedSeq = leaseSeq
+	}
+	if factsSeq > h.peer.FactsAppliedSeq {
+		h.peer.FactsAppliedSeq = factsSeq
+	}
+}
+
 func (h *linkHealth) markDown() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -108,9 +126,20 @@ type Mirror struct {
 	store *dataplane.Store
 	link  linkHealth
 
-	mu      sync.Mutex
-	applied int64
-	fenced  bool
+	mu           sync.Mutex
+	applied      int64
+	factsApplied int64
+	fenced       bool
+}
+
+type incomingSnapshot struct {
+	id          string
+	leaseSeq    int64
+	factsSeq    int64
+	factsAfter  int64
+	delta       bool
+	leases      []LeaseRow
+	accumulator *facts.ReplicaSnapshotAccumulator
 }
 
 // NewMirror opens the standby side against a lease store.
@@ -122,7 +151,11 @@ func NewMirror(cfg Config, store *dataplane.Store) (*Mirror, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ha: reading the applied watermark: %w", err)
 	}
-	return &Mirror{cfg: cfg, store: store, applied: applied}, nil
+	factsApplied, err := readWatermark(store.DB, metaFactsAppliedSeq)
+	if err != nil {
+		return nil, fmt.Errorf("ha: reading the applied facts watermark: %w", err)
+	}
+	return &Mirror{cfg: cfg, store: store, applied: applied, factsApplied: factsApplied}, nil
 }
 
 // AppliedSeq reports how far the mirror has been brought.
@@ -130,6 +163,12 @@ func (m *Mirror) AppliedSeq() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.applied
+}
+
+func (m *Mirror) FactsAppliedSeq() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.factsApplied
 }
 
 // State reports what this node is. A standby is a standby whether or not the
@@ -241,6 +280,7 @@ func (m *Mirror) session(ctx context.Context) error {
 	}
 	slog.Info("HA: mirror connected to its primary",
 		"peer", m.cfg.PeerAddress, "applied_seq", m.AppliedSeq())
+	var snapshot *incomingSnapshot
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(m.cfg.PeerStaleAfter))
@@ -251,21 +291,66 @@ func (m *Mirror) session(ctx context.Context) error {
 
 		switch frame.Type {
 		case FrameSnapshot:
-			if err := m.applySnapshot(ctx, frame.Seq, frame.Leases); err != nil {
+			next, err := m.beginSnapshot(ctx, frame)
+			if err != nil {
 				return err
 			}
-			slog.Info("HA: mirror rebuilt from a snapshot", "seq", frame.Seq, "rows", len(frame.Leases))
-			if err := m.confirm(conn, frame.Seq); err != nil {
+			snapshot = next
+		case FrameFactsChunk:
+			if snapshot == nil {
+				return errors.New("ha: facts chunk received without a snapshot")
+			}
+			if err := m.stageSnapshotChunk(ctx, snapshot, frame); err != nil {
+				return err
+			}
+		case FrameSnapshotEnd:
+			if snapshot == nil || snapshot.delta {
+				return errors.New("ha: snapshot end received without a snapshot")
+			}
+			if err := m.finishSnapshot(ctx, snapshot, frame); err != nil {
+				return err
+			}
+			leaseSeq := snapshot.leaseSeq
+			slog.Info("HA: mirror rebuilt from a snapshot", "seq", snapshot.leaseSeq,
+				"facts_seq", snapshot.factsSeq, "rows", len(snapshot.leases))
+			snapshot = nil
+			if err := m.confirm(conn, leaseSeq); err != nil {
+				return err
+			}
+		case FrameFactsDeltaStart:
+			if snapshot != nil {
+				return errors.New("ha: facts delta interrupted another snapshot")
+			}
+			next, err := m.beginFactsDelta(ctx, frame)
+			if err != nil {
+				return err
+			}
+			snapshot = next
+		case FrameFactsDeltaEnd:
+			if snapshot == nil || !snapshot.delta {
+				return errors.New("ha: facts delta end received without a delta")
+			}
+			if err := m.finishFactsDelta(ctx, snapshot, frame); err != nil {
+				return err
+			}
+			snapshot = nil
+			if err := m.confirm(conn, m.AppliedSeq()); err != nil {
 				return err
 			}
 		case FrameOps:
-			if err := m.applyOps(ctx, frame.Seq, frame.Leases); err != nil {
+			if snapshot != nil {
+				return errors.New("ha: lease operations interrupted an incomplete snapshot")
+			}
+			if err := m.applyOps(ctx, frame.Seq, frame.FactsSeq, frame.Leases); err != nil {
 				return err
 			}
 			if err := m.confirm(conn, frame.Seq); err != nil {
 				return err
 			}
 		case FramePing:
+			if snapshot != nil {
+				return errors.New("ha: heartbeat interrupted an incomplete snapshot")
+			}
 			// A ping is answered with the watermark rather than a bare
 			// acknowledgement: it is the same liveness signal and it carries
 			// the fact the other side actually wants.
@@ -275,6 +360,9 @@ func (m *Mirror) session(ctx context.Context) error {
 			// reads it back as "how far the primary had got when it was last
 			// heard from", so it is recorded even though nothing is applied.
 			if err := m.rememberPeer(frame.Seq); err != nil {
+				return err
+			}
+			if err := writePeerFactsWatermark(m.store.DB, frame.FactsSeq); err != nil {
 				return err
 			}
 			if err := m.confirm(conn, m.AppliedSeq()); err != nil {
@@ -301,10 +389,11 @@ func (m *Mirror) handshake(conn net.Conn) error {
 		Protocol: Protocol,
 		Token:    m.cfg.PeerToken,
 		Watermarks: &Watermarks{
-			NodeID:     m.cfg.NodeID,
-			Role:       m.cfg.Role,
-			AppliedSeq: m.AppliedSeq(),
-			AckedSeq:   0,
+			NodeID:          m.cfg.NodeID,
+			Role:            m.cfg.Role,
+			AppliedSeq:      m.AppliedSeq(),
+			AckedSeq:        0,
+			FactsAppliedSeq: m.FactsAppliedSeq(),
 		},
 	}); err != nil {
 		return err
@@ -331,13 +420,166 @@ func (m *Mirror) handshake(conn net.Conn) error {
 	if err := m.rememberPeer(frame.Watermarks.AppliedSeq); err != nil {
 		return err
 	}
+	if err := writePeerFactsWatermark(m.store.DB, frame.Watermarks.FactsAppliedSeq); err != nil {
+		return err
+	}
 	m.link.markUp(*frame.Watermarks)
 	return nil
 }
 
 func (m *Mirror) confirm(conn net.Conn, seq int64) error {
 	conn.SetWriteDeadline(time.Now().Add(m.cfg.PeerStaleAfter))
-	return writeFrame(conn, Frame{Type: FrameApplied, Seq: m.AppliedSeq()})
+	return writeFrame(conn, Frame{Type: FrameApplied, Seq: m.AppliedSeq(), FactsSeq: m.FactsAppliedSeq()})
+}
+
+func (m *Mirror) beginSnapshot(ctx context.Context, frame Frame) (*incomingSnapshot, error) {
+	if frame.SnapshotID == "" || len(frame.SnapshotID) > 128 || frame.Seq < 0 || frame.FactsSeq < 0 ||
+		frame.FactsChunk != nil || frame.FactsManifest != nil {
+		return nil, errors.New("ha: invalid snapshot header")
+	}
+	if frame.Seq < m.AppliedSeq() || frame.FactsSeq < m.FactsAppliedSeq() {
+		return nil, fmt.Errorf("ha: snapshot watermarks regress: lease=%d/%d facts=%d/%d",
+			frame.Seq, m.AppliedSeq(), frame.FactsSeq, m.FactsAppliedSeq())
+	}
+	accumulator, err := facts.NewReplicaSnapshotAccumulator(frame.FactsSeq)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ha: opening snapshot staging cleanup: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM facts_replica_snapshot_chunks WHERE snapshot_id<>?`, frame.SnapshotID); err != nil {
+		return nil, fmt.Errorf("ha: clearing obsolete snapshot staging: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ha: committing snapshot staging cleanup: %w", err)
+	}
+	return &incomingSnapshot{
+		id: frame.SnapshotID, leaseSeq: frame.Seq, factsSeq: frame.FactsSeq,
+		leases: frame.Leases, accumulator: accumulator,
+	}, nil
+}
+
+func (m *Mirror) beginFactsDelta(ctx context.Context, frame Frame) (*incomingSnapshot, error) {
+	if frame.SnapshotID == "" || frame.Seq != m.FactsAppliedSeq() || frame.FactsSeq <= frame.Seq {
+		return nil, fmt.Errorf("ha: invalid facts delta range %d..%d (local=%d)", frame.Seq, frame.FactsSeq, m.FactsAppliedSeq())
+	}
+	accumulator, err := facts.NewReplicaSnapshotAccumulatorAfter(frame.FactsSeq, frame.Seq)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ha: opening facts delta staging cleanup: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM facts_replica_snapshot_chunks WHERE snapshot_id<>?`, frame.SnapshotID); err != nil {
+		return nil, fmt.Errorf("ha: clearing obsolete facts delta staging: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ha: committing facts delta staging cleanup: %w", err)
+	}
+	return &incomingSnapshot{id: frame.SnapshotID, factsSeq: frame.FactsSeq, factsAfter: frame.Seq, delta: true, accumulator: accumulator}, nil
+}
+
+func (m *Mirror) stageSnapshotChunk(ctx context.Context, snapshot *incomingSnapshot, frame Frame) error {
+	if frame.SnapshotID != snapshot.id || frame.FactsChunk == nil || frame.FactsManifest != nil || len(frame.Leases) != 0 {
+		return errors.New("ha: malformed facts snapshot chunk frame")
+	}
+	if err := snapshot.accumulator.AddChunk(*frame.FactsChunk); err != nil {
+		return err
+	}
+	outbox, err := facts.NewObservationOutbox(m.store.DB)
+	if err != nil {
+		return err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ha: opening facts snapshot staging transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := outbox.StageReplicaChunkTx(ctx, tx, snapshot.id, *frame.FactsChunk); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ha: committing facts snapshot chunk: %w", err)
+	}
+	return nil
+}
+
+func (m *Mirror) finishSnapshot(ctx context.Context, snapshot *incomingSnapshot, frame Frame) error {
+	if snapshot.delta || frame.SnapshotID != snapshot.id || frame.FactsManifest == nil || frame.FactsChunk != nil || len(frame.Leases) != 0 {
+		return errors.New("ha: malformed snapshot end frame")
+	}
+	if frame.FactsManifest.LastSequence != snapshot.factsSeq {
+		return fmt.Errorf("ha: facts snapshot watermark mismatch: header=%d manifest=%d",
+			snapshot.factsSeq, frame.FactsManifest.LastSequence)
+	}
+	if err := snapshot.accumulator.Verify(*frame.FactsManifest); err != nil {
+		return err
+	}
+	return m.applySnapshot(ctx, snapshot.leaseSeq, snapshot.leases, snapshot.id, *frame.FactsManifest)
+}
+
+func (m *Mirror) finishFactsDelta(ctx context.Context, delta *incomingSnapshot, frame Frame) error {
+	if frame.SnapshotID != delta.id || frame.FactsManifest == nil || frame.FactsChunk != nil ||
+		frame.FactsManifest.AfterSequence != delta.factsAfter || frame.FactsManifest.LastSequence != delta.factsSeq {
+		return errors.New("ha: malformed or mismatched facts delta end frame")
+	}
+	if err := delta.accumulator.Verify(*frame.FactsManifest); err != nil {
+		return err
+	}
+	tx, err := m.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ha: opening facts delta apply transaction: %w", err)
+	}
+	defer tx.Rollback()
+	outbox, err := facts.NewObservationOutbox(m.store.DB)
+	if err != nil {
+		return err
+	}
+	if err := outbox.ApplyStagedReplicaChangesTx(ctx, tx, delta.id, *frame.FactsManifest); err != nil {
+		return err
+	}
+	if err := setWatermark(ctx, tx, metaFactsAppliedSeq, delta.factsSeq); err != nil {
+		return err
+	}
+	if err := writePeerFactsWatermark(tx, delta.factsSeq); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ha: committing facts delta: %w", err)
+	}
+	m.mu.Lock()
+	m.factsApplied = delta.factsSeq
+	m.mu.Unlock()
+	return nil
+}
+
+func writePeerFactsWatermark(ex metaExec, seq int64) error {
+	if seq < 0 {
+		return errors.New("ha: negative peer facts watermark")
+	}
+	var raw string
+	err := ex.QueryRow(`SELECT value FROM dataplane_meta WHERE key=?`, metaPeerFactsSeq).Scan(&raw)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("ha: reading peer facts watermark: %w", err)
+	}
+	var seen int64
+	if strings.TrimSpace(raw) != "" {
+		if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &seen); err != nil {
+			return fmt.Errorf("ha: peer facts watermark %q is not a number: %w", raw, err)
+		}
+	}
+	if seq > seen {
+		if _, err := ex.Exec(`INSERT INTO dataplane_meta(key,value) VALUES(?,?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, metaPeerFactsSeq, fmt.Sprintf("%d", seq)); err != nil {
+			return fmt.Errorf("ha: writing peer facts watermark: %w", err)
+		}
+	}
+	return nil
 }
 
 // rememberPeer records what the primary said it had reached, and when.
@@ -413,12 +655,13 @@ func writePeerWatermark(ex metaExec, seq int64) error {
 // the watermark and the rows from two transactions would allow a crash between
 // them to leave a mirror that claims to be ahead of what it holds -- and that
 // claim is the evidence a takeover is decided on.
-func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow) error {
-	if seq < m.AppliedSeq() {
+func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow, snapshotID string, factsManifest facts.ReplicaSnapshotManifest) error {
+	if seq < m.AppliedSeq() || factsManifest.LastSequence < m.FactsAppliedSeq() {
 		// A snapshot older than what is already here is not an update. Taking
 		// it would move the mirror backwards, which is the one direction it
 		// must never move.
-		return nil
+		return fmt.Errorf("ha: refusing regressive snapshot: lease=%d/%d facts=%d/%d",
+			seq, m.AppliedSeq(), factsManifest.LastSequence, m.FactsAppliedSeq())
 	}
 	tx, err := m.store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -444,6 +687,19 @@ func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow) 
 	if err := writePeerWatermark(tx, seq); err != nil {
 		return err
 	}
+	if err := writePeerFactsWatermark(tx, factsManifest.LastSequence); err != nil {
+		return err
+	}
+	outbox, err := facts.NewObservationOutbox(m.store.DB)
+	if err != nil {
+		return err
+	}
+	if err := outbox.ApplyStagedReplicaSnapshotTx(ctx, tx, snapshotID, factsManifest); err != nil {
+		return err
+	}
+	if err := setWatermark(ctx, tx, metaFactsAppliedSeq, factsManifest.LastSequence); err != nil {
+		return err
+	}
 	// The mirror owns no lease, so nothing it holds is owed to the control
 	// database. The dirty triggers fire on these writes the same as on a
 	// primary's, and leaving their output here would have the standby push a
@@ -456,6 +712,7 @@ func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow) 
 	}
 	m.mu.Lock()
 	m.applied = seq
+	m.factsApplied = factsManifest.LastSequence
 	m.mu.Unlock()
 	return nil
 }
@@ -466,15 +723,15 @@ func (m *Mirror) applySnapshot(ctx context.Context, seq int64, rows []LeaseRow) 
 // and a row the primary did not send is one it did not change. There is no
 // delete here because the primary never deletes a lease row -- it marks it
 // expired or released -- so there is nothing for a deletion to say.
-func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error {
+func (m *Mirror) applyOps(ctx context.Context, seq, factsSeq int64, rows []LeaseRow) error {
 	if len(rows) == 0 {
 		if seq > m.AppliedSeq() {
-			return m.recordWatermark(ctx, seq)
+			return m.recordWatermark(ctx, seq, factsSeq)
 		}
-		return nil
+		return writePeerFactsWatermark(m.store.DB, factsSeq)
 	}
 	if seq < m.AppliedSeq() {
-		return nil
+		return writePeerFactsWatermark(m.store.DB, factsSeq)
 	}
 	tx, err := m.store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -497,6 +754,9 @@ func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error
 	if err := writePeerWatermark(tx, seq); err != nil {
 		return err
 	}
+	if err := writePeerFactsWatermark(tx, factsSeq); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM dhcp_lease_dirty"); err != nil {
 		return fmt.Errorf("ha: discarding the mirror's upward queue: %w", err)
 	}
@@ -511,7 +771,7 @@ func (m *Mirror) applyOps(ctx context.Context, seq int64, rows []LeaseRow) error
 
 // recordWatermark advances the watermark without rows, which is what a batch
 // that carried nothing but a sequence means.
-func (m *Mirror) recordWatermark(ctx context.Context, seq int64) error {
+func (m *Mirror) recordWatermark(ctx context.Context, seq, factsSeq int64) error {
 	tx, err := m.store.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ha: opening the watermark transaction: %w", err)
@@ -521,6 +781,9 @@ func (m *Mirror) recordWatermark(ctx context.Context, seq int64) error {
 		return err
 	}
 	if err := writePeerWatermark(tx, seq); err != nil {
+		return err
+	}
+	if err := writePeerFactsWatermark(tx, factsSeq); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

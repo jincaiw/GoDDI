@@ -8,16 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // FactsMutationWriter is an explicit, migration-stage transaction seam for
 // lease mutations that publish the unified DHCP-DNS-IPAM fact envelope.
 //
-// The default Manager methods and DHCP server constructor do not use this
-// writer. Callers opting in must provide the event identity and IPAM space ID;
-// the authoritative lease update, canonical sequence allocation, envelope
-// construction, and durable outbox insert are committed together.
+// Manager methods remain available to legacy and unmapped paths. The active
+// DHCP owner installs this writer for mapped production lease mutations.
+// Callers provide the event identity and IPAM space ID; the authoritative
+// lease update, sequence allocation, envelope construction, and durable
+// outbox insert are committed together.
 //
 // DNSMutationSink is the optional compatibility bridge for the legacy DNS
 // outbox. Implementations must write through the supplied transaction; they
@@ -64,7 +66,7 @@ func (w *FactsMutationWriter) WithDNSSink(sink DNSMutationSink) *FactsMutationWr
 }
 
 // WithPostCommitWake installs an optional non-blocking notification invoked
-// only after an opt-in mutation transaction commits successfully. The callback
+// only after a mutation transaction commits successfully. The callback
 // must not perform the mutation itself or assume a transaction is still open.
 func (w *FactsMutationWriter) WithPostCommitWake(wake func()) *FactsMutationWriter {
 	if w != nil {
@@ -77,6 +79,58 @@ func (w *FactsMutationWriter) notifyPostCommit() {
 	if w != nil && w.postCommit != nil {
 		w.postCommit()
 	}
+}
+
+// CurrentSequence reports the durable facts high water after a mutation. HA
+// request handling uses it to wait for the mirror's facts watermark as well
+// as its lease watermark before returning an ACK.
+func (w *FactsMutationWriter) CurrentSequence(ctx context.Context) (int64, error) {
+	if w == nil || w.allocator == nil {
+		return 0, errors.New("lease facts mutation: writer is unavailable")
+	}
+	return w.allocator.CurrentOrZero(ctx)
+}
+
+// BindLease creates a confirmed binding directly and commits its fact in the
+// same transaction. This covers valid REQUEST paths that arrive without a
+// matching local OFFER (for example INIT-REBOOT after a server restart).
+func (w *FactsMutationWriter) BindLease(ctx context.Context, eventID, source, spaceID, scopeID, ip, mac, hostname string, duration time.Duration) (*Lease, error) {
+	if err := validateFactIdentity(eventID, source, spaceID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(scopeID) == "" || strings.TrimSpace(ip) == "" || strings.TrimSpace(mac) == "" {
+		return nil, errors.New("lease facts mutation: scope, IP, and MAC are required")
+	}
+	tx, err := w.manager.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("lease facts mutation: begin bind: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC()
+	id := uuid.New().String()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO dhcp_leases
+		(id, scope_id, ip_address, mac_address, hostname, client_id, lease_start, lease_end, status, last_seen, generation)
+		VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 1)`, id, scopeID, ip, mac, hostname,
+		now.Format("2006-01-02T15:04:05Z"), now.Add(duration).Format("2006-01-02T15:04:05Z"),
+		string(LeaseStatusActive), now.Format("2006-01-02T15:04:05Z")); err != nil {
+		return nil, fmt.Errorf("lease facts mutation: insert bind: %w", err)
+	}
+	after, found, err := w.manager.findLeaseTx(ctx, tx, id)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("lease disappeared after bind")
+		}
+		return nil, fmt.Errorf("lease facts mutation: read bound lease: %w", err)
+	}
+	if err := w.enqueueMutationFact(ctx, tx, MutationCommand{Kind: MutationBind, After: after}, eventID, source, spaceID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("lease facts mutation: commit bind: %w", err)
+	}
+	w.manager.auditBind(nil, after)
+	w.notifyPostCommit()
+	return after, nil
 }
 
 // ActivateLease performs the offered -> active transition and commits its fact

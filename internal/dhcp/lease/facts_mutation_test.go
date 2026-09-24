@@ -193,6 +193,28 @@ func TestFactsMutationWriterActivateCommitsLeaseAndFactTogether(t *testing.T) {
 	}
 }
 
+func TestFactsMutationWriterBindCommitsDirectRequestLeaseAndFactTogether(t *testing.T) {
+	writer, db, _ := newFactsMutationWriter(t)
+	active, err := writer.BindLease(context.Background(), "", "dhcp-node-a", "space-1",
+		"scope-1", "192.0.2.20", "aa:bb:cc:dd:ee:20", "host", time.Hour)
+	if err != nil {
+		t.Fatalf("BindLease: %v", err)
+	}
+	if active.Status != LeaseStatusActive || active.Generation != 1 {
+		t.Fatalf("direct bind = %+v", active)
+	}
+	var eventID, action, payload string
+	var sequence int64
+	if err := db.QueryRow(`SELECT event_id, action, sequence, payload FROM dhcp_ipam_observation_events`).
+		Scan(&eventID, &action, &sequence, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if eventID == "" || action != string(MutationBind) || sequence != 1 ||
+		!containsAll(payload, "bind", active.ID, "space-1", "192.0.2.20") {
+		t.Fatalf("direct bind fact = id:%q action:%q sequence:%d payload:%s", eventID, action, sequence, payload)
+	}
+}
+
 func TestFactsMutationWriterWithLegacyDNSSinkUsesSameCommit(t *testing.T) {
 	writer, db, manager := newFactsMutationWriter(t)
 	offered := seedOfferedLease(t, db, manager)

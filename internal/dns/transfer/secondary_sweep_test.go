@@ -60,6 +60,8 @@ func newSingleConnDB(t *testing.T) *sql.DB {
 		priority INTEGER,
 		weight INTEGER,
 		port INTEGER,
+		flag INTEGER,
+		tag TEXT,
 		created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE TABLE dns_zone_transfer (
@@ -68,6 +70,21 @@ func newSingleConnDB(t *testing.T) *sql.DB {
 		allowed_cidr TEXT NOT NULL,
 		tsig_key_name TEXT,
 		created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE dns_records (
+		id TEXT PRIMARY KEY,
+		zone_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		type TEXT NOT NULL,
+		ttl INTEGER NOT NULL,
+		value TEXT NOT NULL,
+		priority INTEGER,
+		weight INTEGER,
+		port INTEGER,
+		tag TEXT,
+		flag INTEGER,
+		expires_at DATETIME,
+		enabled BOOLEAN NOT NULL DEFAULT TRUE
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -103,10 +120,7 @@ func mustComplete(t *testing.T, deadline time.Duration, what string, fn func()) 
 	}
 }
 
-// Regression: loadChanges read the zone name with a nested QueryRow while the
-// dns_zone_changes cursor was still open. With one connection the nested query
-// waits for the connection the cursor itself holds, so the IXFR request hangs
-// forever instead of failing.
+// Regression: the IXFR fallback must complete with one database connection.
 func TestHandleIXFR_NoDeadlockWithSingleConnection(t *testing.T) {
 	db := newSingleConnDB(t)
 
@@ -119,6 +133,9 @@ func TestHandleIXFR_NoDeadlockWithSingleConnection(t *testing.T) {
 	mustExec(t, db, `INSERT INTO dns_zone_changes
 		(id, zone_id, serial, change_type, name, type, value, ttl)
 		VALUES ('c1', 'z1', 4, 'add', 'www', 'A', '192.0.2.10', 300)`)
+	mustExec(t, db, `INSERT INTO dns_records
+		(id, zone_id, name, type, ttl, value, enabled)
+		VALUES ('r1', 'z1', 'www.example.com.', 'A', 300, '192.0.2.10', 1)`)
 
 	h := NewAXFRHandler(db)
 

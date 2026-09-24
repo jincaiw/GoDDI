@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -75,13 +76,19 @@ func TestB73_TwoIndependentConnectionsAllocateUniqueAddresses(t *testing.T) {
 			<-start
 			var a *Address
 			var err error
-			for attempt := 0; attempt < 20; attempt++ {
+			for attempt := 0; attempt < 64; attempt++ {
 				a, err = managers[i%len(managers)].AutoAllocateIP("b73-subnet", AllocateRequest{
 					Actor: fmt.Sprintf("b73-worker-%d", i),
 				})
 				if err == nil || !isSQLiteBusy(err) {
 					break
 				}
+				// SQLITE_BUSY_SNAPSHOT is returned immediately instead of
+				// waiting for busy_timeout. Back off with per-worker jitter so
+				// the two independent connections do not retry in lockstep.
+				backoff := time.Duration(1<<min(attempt, 4))*time.Millisecond +
+					time.Duration((i*7+attempt*3)%17)*time.Millisecond
+				time.Sleep(backoff)
 			}
 			if err != nil {
 				errs[i] = err

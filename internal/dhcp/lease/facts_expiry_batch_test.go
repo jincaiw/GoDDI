@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -63,7 +64,7 @@ func TestFactsMutationWriterExpireFactsBatchRollsBackAllRowsAndFacts(t *testing.
 
 	_, err = writer.ExpireFactsBatch(context.Background(), "dhcp-node-a", func(l *Lease) (string, error) {
 		if l.ID == second.ID {
-			return "", sql.ErrNoRows
+			return "", errors.New("mapping database unavailable")
 		}
 		return "space-1", nil
 	})
@@ -85,6 +86,39 @@ func TestFactsMutationWriterExpireFactsBatchRollsBackAllRowsAndFacts(t *testing.
 	}
 	if facts != 0 {
 		t.Fatalf("facts = %d, want 0 after rollback", facts)
+	}
+}
+
+func TestFactsMutationWriterExpireFactsBatchExpiresUnmappedLeaseWithoutFact(t *testing.T) {
+	writer, db, manager := newFactsMutationWriter(t)
+	seedScope(t, db, "scope-1", "lan", "192.0.2.0/24", "192.0.2.10", "192.0.2.29")
+	l, err := manager.CreateLease("scope-1", "192.0.2.10", "aa:bb:cc:dd:ee:10", "host-10", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE dhcp_leases SET lease_end=datetime('now', '-1 minute') WHERE id=?`, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := writer.ExpireFactsBatch(context.Background(), "dhcp-node-a", func(*Lease) (string, error) { return "", sql.ErrNoRows })
+	if err != nil {
+		t.Fatalf("ExpireFactsBatch: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != l.ID {
+		t.Fatalf("expired = %+v", got)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM dhcp_leases WHERE id=?`, l.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(LeaseStatusExpired) {
+		t.Fatalf("status = %q, want expired", status)
+	}
+	var facts int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&facts); err != nil {
+		t.Fatal(err)
+	}
+	if facts != 0 {
+		t.Fatalf("facts = %d, want 0 for unmapped lease", facts)
 	}
 }
 

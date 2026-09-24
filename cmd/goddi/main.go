@@ -44,6 +44,7 @@ import (
 	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
 	"github.com/jasonwa/goddi/internal/dns/transfer"
 	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
 	"github.com/jasonwa/goddi/internal/ipam/address"
 	"github.com/jasonwa/goddi/internal/ipam/space"
@@ -297,12 +298,13 @@ func main() {
 			"  --old-primary-cannot-write the node that was primary has been stopped, disconnected\n" +
 			"                            or fenced. A dead primary and a partitioned one are both\n" +
 			"                            silent to this node, so only a person can tell them apart;\n" +
-			"  --accept-gap <n>          the exact number of changes the primary handed out that this\n" +
+			"  --accept-gap <n>          the exact number of lease changes the primary handed out that this\n" +
 			"                            node does not hold, when there are any. A binding is\n" +
 			"                            acknowledged only once the standby has applied it, so those\n" +
 			"                            changes were never acknowledged -- but the number says how\n" +
 			"                            far the two nodes had drifted, and it has to be read before\n" +
 			"                            it is accepted.\n" +
+			"  facts gap                cannot be accepted: restore the missing snapshot first.\n" +
 			"The promotion takes effect at the next start. A standby runs no DHCP server, so that\n" +
 			"is not an interruption of anything being served: it is the start of one.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -372,11 +374,11 @@ func runServer(configPath string) error {
 
 	// Which planes this process runs.
 	//
-	// The default is still one process doing everything. Separating them is a
-	// deployment choice an operator makes when the console being restarted must
-	// not interrupt the addresses clients are already using: a data-plane
-	// process has no management API and no control-plane database to migrate,
-	// so nothing on the console's startup path is on the client's path.
+	// The default is still one process doing everything. A split role removes
+	// unrelated listeners, but is not yet full process fault isolation: data
+	// plane roles still open and migrate the control database. The warning
+	// below makes that startup dependency visible instead of implying that a
+	// console restart can never affect the serving process.
 	role := cfg.EffectiveRole()
 	controlPlane := cfg.IsControlPlane()
 	servesDNS := cfg.ServesDNS() && cfg.DNS.Enabled
@@ -636,6 +638,7 @@ func runServer(configPath string) error {
 	// DNS Zone Store - load authoritative zones from the database the DNS plane
 	// serves from.
 	zoneStore := zone.NewStore(dnsDataDB)
+	defer zoneStore.Close()
 	slog.Info("DNS zone store initialized", "zones", len(zoneStore.ZoneNames()))
 
 	// Zone / record managers (dynamic updates + record aging + IXFR history).
@@ -733,9 +736,17 @@ func runServer(configPath string) error {
 				// to look.
 				PushRecords: true,
 				Quota:       dataPlaneQuota(cfg),
-				OnApplied: func(d dataplane.Domain) {
+				OnApplied: func(d dataplane.Domain, changedPrimaryZones []string) {
 					if d == dataplane.DomainDNS {
 						zoneStore.ReloadNow()
+						if len(changedPrimaryZones) > 0 {
+							zonesToNotify := append([]string(nil), changedPrimaryZones...)
+							go func() {
+								for _, zoneName := range zonesToNotify {
+									transfer.SendNotifyForZone(dnsDataDB, zoneName)
+								}
+							}()
+						}
 					}
 				},
 			})
@@ -755,6 +766,9 @@ func runServer(configPath string) error {
 	var dnsConsumer *dhcpinternal.DNSConsumer
 	if servesDNS {
 		link := dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
+		link.SetNotifyHook(func(zoneName string) {
+			transfer.SendNotifyForZone(dnsDataDB, zoneName)
+		})
 		dnsConsumer = dhcpinternal.NewDNSConsumer(dnsStore.DB, link)
 	}
 
@@ -1031,6 +1045,19 @@ func runServer(configPath string) error {
 	// activity into IPAM, and before the API so the 360° address view has
 	// something to compare the IPAM record against.
 	ipamLinkage := ipam.NewLinkage(db.DB)
+	var ipamFactsPipeline *ipam.FactsPipeline
+	if controlPlane && !haEnabled {
+		controlInbox, err := facts.NewObservationOutbox(db.DB)
+		if err != nil {
+			return fmt.Errorf("opening control-side DHCP facts inbox: %w", err)
+		}
+		ipamFactsPipeline, err = ipam.NewFactsPipeline(ipamLinkage, controlInbox, ipam.FactsPipelineOptions{
+			Enabled: true,
+		})
+		if err != nil {
+			return fmt.Errorf("initializing IPAM facts consumer: %w", err)
+		}
+	}
 
 	// Initialize IPAM API handler services.
 	if controlPlane {
@@ -1043,11 +1070,60 @@ func runServer(configPath string) error {
 		})
 	}
 
-	// Report lease state changes into IPAM. Without this the DHCP server hands
-	// out addresses that IPAM still lists as free, which is how the two views
-	// drift apart until neither is trusted.
+	// Keep the legacy observer for deployments with an unmapped local DHCP
+	// address. Mapped mutations are represented in the durable facts stream and
+	// projected atomically by the control-side consumer.
 	if dhcpSrv != nil {
 		dhcpSrv.SetLeaseObserver(ipamLinkage)
+		// Standbys and fenced nodes serve no DHCP requests and only receive the
+		// primary's facts stream. A primary, including one promoted by takeover,
+		// commits facts with its lease mutations and gates REQUEST/renewal ACKs on
+		// both HA watermarks.
+		if !haEnabled || haRole == config.HARolePrimary {
+			allocator, err := facts.NewSequenceAllocator(dhcpStore.DB)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)
+			}
+			outbox, err := facts.NewObservationOutbox(dhcpStore.DB)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact outbox: %w", err)
+			}
+			metrics.RegisterFactsProducerStatsProvider(func() []metrics.FactsProducerSample {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				status, err := outbox.Status(ctx)
+				if err != nil {
+					slog.Warn("metrics: could not read DHCP facts producer status", "error", err)
+					return nil
+				}
+				return []metrics.FactsProducerSample{{
+					Domain: "ipam", Pending: status.Pending, Failed: status.Failed,
+					HeadSequence:             status.HeadSequence,
+					FirstOutstandingSequence: status.FirstOutstandingSequence,
+				}}
+			})
+			writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
+			if err != nil {
+				return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)
+			}
+			writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(dhcpStore.DB))
+			if dhcpRunner != nil {
+				writer.WithPostCommitWake(dhcpRunner.Wake)
+			}
+			source := strings.TrimSpace(cfg.DHCPHA.NodeID)
+			if source == "" {
+				source, err = os.Hostname()
+				if err != nil || strings.TrimSpace(source) == "" {
+					source = "dhcp-node"
+				}
+			}
+			dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
+				Caller: writer, Source: source, DNSOutboxAtomic: true,
+				ResolveSpaceID: func(_ string, ip string) (string, error) {
+					return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+				},
+			})
+		}
 		slog.Info("IPAM: DHCP lease observation enabled")
 	}
 
@@ -1225,6 +1301,11 @@ func runServer(configPath string) error {
 	// --- Background maintenance loops ---
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	defer backgroundCancel()
+	if ipamFactsPipeline != nil {
+		if err := ipamFactsPipeline.Start(backgroundCtx); err != nil {
+			return fmt.Errorf("starting IPAM facts consumer: %w", err)
+		}
+	}
 
 	// DHCP configuration replication. The poll is a single indexed read of the
 	// control-plane revision counter; while it keeps up, a scope edited in the
@@ -1326,10 +1407,11 @@ func runServer(configPath string) error {
 		go fwdGroup.RunHealthChecks(backgroundCtx, interval)
 	}
 
-	// Record aging: delete expired records every 10 minutes.
+	// Record aging: expire served snapshots at the exact record deadline and
+	// persist the deletion/serial change promptly afterward.
 	if servesDNS {
 		go func() {
-			ticker := time.NewTicker(10 * time.Minute)
+			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {
 				select {
@@ -1393,6 +1475,41 @@ func runServer(configPath string) error {
 			}
 			return handler.PlaneStatus{Level: handler.LevelOK}
 		}).Probe)
+		if ipamFactsPipeline != nil {
+			handler.SetPlaneProbe("ipam_facts", handler.NewCachedProbe(5*time.Second, func() handler.PlaneStatus {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				status, err := ipamFactsPipeline.Status(ctx)
+				if err != nil {
+					return handler.PlaneStatus{Level: handler.LevelFailing, Reasons: []string{"ipam_facts_status_unavailable"}}
+				}
+				switch status.Consumer.Readiness() {
+				case ipam.FactsReadinessOK:
+					return handler.PlaneStatus{Level: handler.LevelOK}
+				case ipam.FactsReadinessDegraded:
+					return handler.PlaneStatus{Level: handler.LevelDegraded, Reasons: []string{"ipam_facts_backlog"}}
+				default:
+					return handler.PlaneStatus{Level: handler.LevelFailing, Reasons: []string{"ipam_facts_consumer_unavailable"}}
+				}
+			}).Probe)
+		}
+	}
+	if ipamFactsPipeline != nil {
+		metrics.RegisterFactsConsumerStatsProvider(func() []metrics.FactsConsumerSample {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			status, err := ipamFactsPipeline.Status(ctx)
+			if err != nil {
+				slog.Warn("metrics: could not read IPAM facts consumer status", "error", err)
+				return nil
+			}
+			return []metrics.FactsConsumerSample{{
+				Domain: ipam.IPAMFactsConsumerDomain, Pending: int64(status.Consumer.Pending),
+				Failed: int64(status.Consumer.Failed), Applied: status.Consumer.LastApplied,
+				Lag: int64(status.Consumer.Lag), Gap: status.Consumer.Gap,
+				Readiness: status.Consumer.Readiness(),
+			}}
+		})
 	}
 
 	if servesDNS {
@@ -1492,11 +1609,26 @@ func runServer(configPath string) error {
 	if haEnabled && haRole != config.HARoleStandby {
 		metrics.RegisterDHCPHAStatsProvider(func() []metrics.DHCPHASample {
 			state := currentHAState(haRole, haRepl, haMirror)
-			return []metrics.DHCPHASample{{
+			sample := metrics.DHCPHASample{
 				NodeID:    haCfg.NodeID,
 				Redundant: state.Redundant(),
 				Promising: state.MayBind(),
-			}}
+			}
+			if haRepl != nil {
+				sample.Sequence = haRepl.Seq()
+				sample.AcknowledgedSequence = haRepl.AckedSeq()
+				peer := haRepl.PeerWatermarks()
+				sample.PeerAppliedSequence = peer.AppliedSeq
+				sample.PeerAppliedFactsSequence = peer.FactsAppliedSeq
+				sample.FactsAcknowledgedSequence = haRepl.FactsAckedSeq()
+				factsSequence, err := haRepl.FactsSequence()
+				if err != nil {
+					slog.Warn("metrics: could not read DHCP HA facts sequence", "error", err)
+					return nil
+				}
+				sample.FactsSequence = factsSequence
+			}
+			return []metrics.DHCPHASample{sample}
 		})
 	}
 
@@ -1668,6 +1800,14 @@ func runServer(configPath string) error {
 	if dhcpEventLogger != nil {
 		slog.Info("flushing DHCP event logs...")
 		dhcpEventLogger.Close()
+	}
+	if ipamFactsPipeline != nil {
+		slog.Info("shutting down IPAM facts consumer...")
+		ctx, cancel := newCtx()
+		if err := ipamFactsPipeline.Stop(ctx); err != nil {
+			slog.Error("IPAM facts consumer shutdown error", "error", err)
+		}
+		cancel()
 	}
 
 	// Stop background maintenance loops.
@@ -2664,6 +2804,9 @@ func runHAStatus(configPath string, asJSON bool) error {
 		fmt.Printf("  applied sequence: %d\n", status.AppliedSeq)
 		fmt.Printf("  primary sequence: %d (heard %s)\n", status.PeerSeq, haAge(status.PeerSeqAt))
 		fmt.Printf("  shortfall:        %d\n", status.Gap)
+		fmt.Printf("  facts applied:    %d\n", status.FactsAppliedSeq)
+		fmt.Printf("  primary facts:    %d\n", status.PeerFactsSeq)
+		fmt.Printf("  facts shortfall:  %d\n", status.FactsGap)
 	}
 	if status.Degraded {
 		fmt.Printf("  permission:       running without a second copy, since %s\n", status.DegradedAt.Format(time.RFC3339))
@@ -2752,6 +2895,7 @@ func runHATakeover(configPath string, confirm, oldStopped bool, acceptGap int64)
 	fmt.Printf("goddi ha takeover: %s is now the primary\n", node.Config.NodeID)
 	fmt.Printf("  held before:        %d\n", out.AppliedSeq)
 	fmt.Printf("  the primary reached %d, shortfall %d\n", out.PeerSeq, out.Gap)
+	fmt.Printf("  facts watermark:     %d of %d, shortfall %d\n", out.FactsAppliedSeq, out.PeerFactsSeq, out.FactsGap)
 	fmt.Printf("  sequence resumes:   %d\n", out.Seq)
 	fmt.Println()
 	fmt.Println("  It starts as primary-degraded: a promotion comes with the permission to serve")

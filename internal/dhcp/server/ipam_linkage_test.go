@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
+	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
 	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
@@ -197,6 +198,24 @@ type releaseFactsReplicatorProbe struct {
 	factCount int
 }
 
+type factsConfirmReplicatorProbe struct {
+	confirmCalls      int
+	factsConfirmCalls int
+	factsSeq          int64
+}
+
+func (p *factsConfirmReplicatorProbe) MayBind() bool { return true }
+func (p *factsConfirmReplicatorProbe) Confirm(context.Context, *lease.Lease) error {
+	p.confirmCalls++
+	return nil
+}
+func (p *factsConfirmReplicatorProbe) ConfirmFacts(_ context.Context, _ *lease.Lease, seq int64) error {
+	p.factsConfirmCalls++
+	p.factsSeq = seq
+	return nil
+}
+func (*factsConfirmReplicatorProbe) Replicate(*lease.Lease) {}
+
 func (p *releaseFactsReplicatorProbe) MayBind() bool { return true }
 
 func (p *releaseFactsReplicatorProbe) Confirm(context.Context, *lease.Lease) error { return nil }
@@ -239,6 +258,103 @@ func newReleaseFactsServer(t *testing.T) (*Server, *sql.DB, *releaseFactsCallerP
 		},
 	})
 	return s, db, probe, resolver, spaceID
+}
+
+func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) {
+	s, db, _, _ := newIPAMLinkedServer(t)
+	allocator, err := facts.NewSequenceAllocator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := lease.NewFactsMutationWriter(lease.NewManager(db), allocator, outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
+	resolver, err := ipam.NewScopeIdentityResolver(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
+		Caller: writer, Source: "dhcp-node-a", DNSOutboxAtomic: true,
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+
+	mac := testMAC(24)
+	dhcpExchange(t, s, mac, "host24")
+	var factsCount, dnsCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
+		t.Fatal(err)
+	}
+	if factsCount != 1 || dnsCount != 1 {
+		t.Fatalf("after REQUEST: facts=%d DNS events=%d, want 1/1", factsCount, dnsCount)
+	}
+
+	release, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
+		dhcpv4.WithHwAddr(mac),
+		dhcpv4.WithClientIP(net.ParseIP(ipamLinkageIP)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleRelease(release); err != nil {
+		t.Fatalf("HandleRelease: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
+		t.Fatal(err)
+	}
+	if factsCount != 2 || dnsCount != 2 {
+		t.Fatalf("after RELEASE: facts=%d DNS events=%d, want 2/2", factsCount, dnsCount)
+	}
+}
+
+func TestMappedRequestUsesFactsAwareHAConfirmation(t *testing.T) {
+	s, db, _, spaceID := newIPAMLinkedServer(t)
+	allocator, err := facts.NewSequenceAllocator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := lease.NewFactsMutationWriter(lease.NewManager(db), allocator, outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
+	resolver, err := ipam.NewScopeIdentityResolver(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
+		Caller: writer, Source: "ha-primary", DNSOutboxAtomic: true,
+		ResolveSpaceID: func(scopeID, ip string) (string, error) {
+			identity, err := resolver.Resolve(scopeID, ip)
+			return identity.SpaceID, err
+		},
+	})
+	replicator := &factsConfirmReplicatorProbe{}
+	s.SetLeaseReplicator(replicator)
+	dhcpExchange(t, s, testMAC(26), "ha-facts-client")
+	if replicator.confirmCalls != 0 || replicator.factsConfirmCalls != 1 || replicator.factsSeq != 1 {
+		t.Fatalf("HA confirmations = lease-only:%d facts-aware:%d facts-seq:%d; want 0/1/1 (space %s)",
+			replicator.confirmCalls, replicator.factsConfirmCalls, replicator.factsSeq, spaceID)
+	}
 }
 
 func TestHandleReleaseFactsOptInCommitsLeaseAndFactBeforePostCommitSideEffects(t *testing.T) {

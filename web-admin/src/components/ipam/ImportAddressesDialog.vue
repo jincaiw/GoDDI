@@ -86,7 +86,7 @@
           v-else-if="step === 'preview'"
           type="primary"
           :loading="importing"
-          :disabled="hasBlockingErrors"
+          :disabled="hasBlockingErrors || !perm.canWrite('ipam')"
           @click="handleImport"
         >
           {{ t('ipam.import.confirm') }}
@@ -100,6 +100,7 @@
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NTag, useMessage } from 'naive-ui'
+import { usePermission } from '@/composables/usePermission'
 import SectionTitle from '@/components/ipam/SectionTitle.vue'
 import ReportSummary from '@/components/ipam/ImportReportSummary.vue'
 import { ApiError } from '@/service/api/goddi/client'
@@ -118,6 +119,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+const perm = usePermission()
 
 const step = ref<'pick' | 'preview' | 'done'>('pick')
 const csvText = ref('')
@@ -128,7 +130,7 @@ const report = ref<ImportReport | null>(null)
 /** True when the server refused the batch and returned the report with the 400. */
 const rejected = ref(false)
 
-const canPreview = computed(() => csvText.value.trim().length > 0)
+const canPreview = computed(() => csvText.value.trim().length > 0 && perm.canRead('ipam'))
 
 /**
  * A file the preview rejects is a file the import rejects: both run the same
@@ -177,6 +179,7 @@ function reportFromError(err: unknown): ImportReport | null {
 }
 
 async function handlePreview() {
+  if (!perm.canRead('ipam')) return
   previewing.value = true
   rejected.value = false
   try {
@@ -197,6 +200,7 @@ async function handlePreview() {
 }
 
 async function handleImport() {
+  if (!perm.canWrite('ipam')) return
   importing.value = true
   try {
     report.value = await importIPAMData(body())

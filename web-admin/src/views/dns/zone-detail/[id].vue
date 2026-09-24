@@ -4,7 +4,8 @@
       <n-space>
         <n-button @click="router.push('/dns/zones')">{{ t('common.cancel') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateRecord">{{ t('dns.records.createRecord') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
+        <n-button v-if="perm.canWrite('dns')" @click="showImport = true">{{ t('dns.zones.importZone') }}</n-button>
+        <n-button v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.zones.exportZone') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="handleSync" :disabled="zone?.type !== 'slave'">{{ t('dns.zones.syncZone') }}</n-button>
       </n-space>
     </page-header>
@@ -160,6 +161,33 @@
       </n-tabs>
     </n-card>
 
+    <n-modal v-model:show="showImport" preset="card" :title="t('dns.zones.importZone')" style="width: min(760px, 92vw);">
+      <n-space vertical size="large">
+        <n-alert type="info" size="small">{{ t('dns.zones.importPreviewHint') }}</n-alert>
+        <n-space align="center">
+          <n-select v-model:value="importFormat" :options="importFormatOptions" style="width: 180px" @update:value="clearImportPreview" />
+          <input type="file" :accept="importFormat === 'csv' ? '.csv,text/csv' : '.zone,.bind,.txt,text/plain'" @change="loadImportFile" />
+        </n-space>
+        <n-input v-model:value="importContent" type="textarea" :rows="12" :placeholder="t('dns.zones.importContentPlaceholder')" @update:value="clearImportPreview" />
+        <n-alert v-if="importPreview" :type="importPreview.valid ? 'success' : 'warning'" :title="importPreview.valid ? t('dns.zones.importPreviewValid') : t('dns.zones.importPreviewConflicts')">
+          <div>{{ t('dns.zones.importRecordCount', { count: importPreview.record_count }) }}</div>
+          <div v-if="Object.keys(importPreview.record_types || {}).length">{{ Object.entries(importPreview.record_types).map(([type, count]) => `${type}: ${count}`).join(' · ') }}</div>
+          <ul v-if="importPreview.conflicts?.length">
+            <li v-for="(conflict, index) in importPreview.conflicts" :key="`${conflict.row}-${index}`">
+              {{ t('dns.zones.importConflictRow', { row: conflict.row ?? conflict.record, owner: conflict.owner, type: conflict.type, message: conflict.message }) }}
+            </li>
+          </ul>
+        </n-alert>
+      </n-space>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showImport = false">{{ t('common.cancel') }}</n-button>
+          <n-button :loading="importPreviewLoading" :disabled="!perm.canWrite('dns') || !importContent.trim()" @click="previewImport">{{ t('dns.zones.importPreview') }}</n-button>
+          <n-button type="primary" :loading="importApplying" :disabled="!perm.canWrite('dns') || !importPreview?.valid" @click="applyImport">{{ t('dns.zones.importApply') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
     <!-- Add/Edit Record Modal -->
     <n-modal v-if="showAddRecord" v-model:show="showAddRecord" preset="card" :title="editingRecord ? t('dns.records.editRecord') : t('dns.records.createRecord')" style="width: 500px;">
       <n-form :model="recordForm" label-placement="left" label-width="100px">
@@ -188,7 +216,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAddRecord = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="recordSubmitting" @click="handleRecordSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="recordSubmitting" :disabled="!perm.canWrite('dns')" @click="handleRecordSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -206,7 +234,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showGenerateKey = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleGenerateKey">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleGenerateKey">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -229,15 +257,16 @@ import { SearchOutline } from '@vicons/ionicons5'
 import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { usePermission } from '@/composables/usePermission'
+import { ApiError } from '@/service/api/goddi/client'
 import {
-  getDNSZone, updateDNSZone, exportZoneFile, syncSecondaryZone,
+  getDNSZone, updateDNSZone, exportZoneFile, importZoneFile, syncSecondaryZone,
   enableDNSSEC, disableDNSSEC, rotateDNSSECKeys, getDNSSECStatus,
   listDNSRecords, createDNSRecord, updateDNSRecord, deleteDNSRecord,
   getZoneHistory, getZonePermissions, setZonePermissions, getCatalogMembers, listDNSZones,
   getZoneDSRecords, generateDNSSECKey, deleteDNSSECKey, toggleDNSSECKey, promoteDNSSECStandbyKeys,
   getNSEC3Params, setNSEC3Params,
   type DNSZone, type DNSRecord, type CreateDNSRecordRequest, type ZoneACL,
-  type ZonePermission, type ZoneChangeEntry, type DNSSECKey, type DNSSECStatus, type DSInfo,
+  type ZonePermission, type ZoneChangeEntry, type DNSSECKey, type DNSSECStatus, type DSInfo, type ZoneImportPreview,
 } from '@/service/api/goddi/dns'
 
 const router = useRouter()
@@ -245,6 +274,17 @@ const route = useRoute()
 const { t } = useI18n()
 const message = useMessage()
 const perm = usePermission()
+
+const showImport = ref(false)
+const importFormat = ref<'bind' | 'csv'>('bind')
+const importContent = ref('')
+const importPreview = ref<ZoneImportPreview | null>(null)
+const importPreviewLoading = ref(false)
+const importApplying = ref(false)
+const importFormatOptions = [
+  { label: 'BIND zone file', value: 'bind' },
+  { label: 'CSV', value: 'csv' },
+]
 
 const zoneId = route.params.id as string
 const zone = ref<DNSZone | null>(null)
@@ -292,8 +332,8 @@ const recordColumns = [
   { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSRecord) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleRecordEnabled(row) }) },
   { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSRecord) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => editRecord(row) }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { if (!perm.canDelete('dns')) return; deletingRecordId.value = row.id; showDeleteRecordConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -347,6 +387,7 @@ async function loadCatalogData() {
 }
 
 async function saveCatalog() {
+  if (!perm.canWrite('dns')) return
   catalogSaving.value = true
   try {
     zone.value = await updateDNSZone(zoneId, { catalog: catalogForm.catalog })
@@ -377,6 +418,7 @@ const queryAccessOptions = [
 ]
 
 async function saveACL() {
+  if (!perm.canWrite('dns')) return
   aclSaving.value = true
   try {
     // Send the ACL unconditionally: an all-empty list clears restrictions
@@ -426,6 +468,7 @@ function handleRecordPageSizeChange(pageSize: number) {
 }
 
 async function toggleZoneEnabled() {
+  if (!perm.canWrite('dns')) return
   if (!zone.value) return
   try {
     await updateDNSZone(zoneId, { enabled: !zone.value.enabled })
@@ -437,6 +480,7 @@ async function toggleZoneEnabled() {
 }
 
 async function toggleRecordEnabled(record: DNSRecord) {
+  if (!perm.canWrite('dns')) return
   try {
     await updateDNSRecord(zoneId, record.id, { enabled: !record.enabled })
     message.success(t('common.updateSuccess'))
@@ -447,6 +491,7 @@ async function toggleRecordEnabled(record: DNSRecord) {
 }
 
 function editRecord(record: DNSRecord) {
+  if (!perm.canWrite('dns')) return
   editingRecord.value = record
   recordForm.name = record.name
   recordForm.type = record.type
@@ -459,12 +504,14 @@ function editRecord(record: DNSRecord) {
 }
 
 function openCreateRecord() {
+  if (!perm.canWrite('dns')) return
   editingRecord.value = null
   resetRecordForm()
   showAddRecord.value = true
 }
 
 async function handleRecordSubmit() {
+  if (!perm.canWrite('dns')) return
   recordSubmitting.value = true
   try {
     if (editingRecord.value) {
@@ -486,6 +533,7 @@ async function handleRecordSubmit() {
 }
 
 async function handleDeleteRecord() {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSRecord(zoneId, deletingRecordId.value)
     message.success(t('common.deleteSuccess'))
@@ -510,7 +558,68 @@ async function handleExport() {
   }
 }
 
+function clearImportPreview() {
+  importPreview.value = null
+}
+
+async function loadImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    importContent.value = await file.text()
+    importPreview.value = null
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    input.value = ''
+  }
+}
+
+async function previewImport() {
+  if (!perm.canWrite('dns')) return
+  importPreviewLoading.value = true
+  try {
+    const response = await importZoneFile(zoneId, importContent.value, importFormat.value, true)
+    importPreview.value = response.data.data as ZoneImportPreview
+  } catch (err: unknown) {
+    if (err instanceof ApiError && err.payload && typeof err.payload === 'object' && 'conflicts' in err.payload) {
+      importPreview.value = err.payload as ZoneImportPreview
+    } else {
+      importPreview.value = null
+    }
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    importPreviewLoading.value = false
+  }
+}
+
+async function applyImport() {
+  if (!perm.canWrite('dns')) return
+  if (!importPreview.value?.valid) return
+  importApplying.value = true
+  try {
+    await importZoneFile(zoneId, importContent.value, importFormat.value)
+    message.success(t('dns.zones.importSuccess'))
+    showImport.value = false
+    importContent.value = ''
+    importPreview.value = null
+    loadZone()
+    loadRecords()
+  } catch (err: unknown) {
+    if (err instanceof ApiError && err.payload && typeof err.payload === 'object' && 'conflicts' in err.payload) {
+      importPreview.value = err.payload as ZoneImportPreview
+    } else {
+      importPreview.value = null
+    }
+    message.error(err instanceof Error ? err.message : t('common.failed'))
+  } finally {
+    importApplying.value = false
+  }
+}
+
 async function handleSync() {
+  if (!perm.canWrite('dns')) return
   try {
     await syncSecondaryZone(zoneId)
     message.success(t('common.success'))
@@ -522,6 +631,7 @@ async function handleSync() {
 }
 
 async function handleDnssecAction(action: string) {
+  if (!perm.canWrite('dns')) return
   try {
     if (action === 'enable') await enableDNSSEC(zoneId)
     else if (action === 'disable') await disableDNSSEC(zoneId)
@@ -575,14 +685,17 @@ async function loadPermissions() {
 }
 
 function addPermission() {
+  if (!perm.canWrite('dns')) return
   permissions.value.push({ principal_type: 'user', principal_id: '', can_view: true, can_modify: false, can_delete: false })
 }
 
 function removePermission(row: ZonePermission) {
+  if (!perm.canWrite('dns')) return
   permissions.value = permissions.value.filter(p => !(p.principal_type === row.principal_type && p.principal_id === row.principal_id))
 }
 
 async function savePermissions() {
+  if (!perm.canWrite('dns')) return
   const invalid = permissions.value.find(p => !p.principal_id.trim())
   if (invalid) {
     message.warning(t('dns.zones.permPrincipalId'))
@@ -685,6 +798,7 @@ async function loadDsRecords() {
 }
 
 async function handleToggleKey(key: DNSSECKey, enabled: boolean) {
+  if (!perm.canWrite('dns')) return
   try {
     await toggleDNSSECKey(zoneId, key.id, enabled)
     key.enabled = enabled
@@ -694,6 +808,7 @@ async function handleToggleKey(key: DNSSECKey, enabled: boolean) {
 }
 
 async function handleDeleteKey(key: DNSSECKey) {
+  if (!perm.canDelete('dns')) return
   try {
     await deleteDNSSECKey(zoneId, key.id)
     message.success(t('common.success'))
@@ -705,12 +820,14 @@ async function handleDeleteKey(key: DNSSECKey) {
 }
 
 function openGenerateKey() {
+  if (!perm.canWrite('dns')) return
   generateKeyType.value = 'KSK'
   generateKeyAlgorithm.value = 'ECDSAP256SHA256'
   showGenerateKey.value = true
 }
 
 async function handleGenerateKey() {
+  if (!perm.canWrite('dns')) return
   try {
     await generateDNSSECKey(zoneId, generateKeyType.value, generateKeyAlgorithm.value)
     showGenerateKey.value = false
@@ -723,6 +840,7 @@ async function handleGenerateKey() {
 }
 
 async function handlePromoteStandby() {
+  if (!perm.canWrite('dns')) return
   try {
     await promoteDNSSECStandbyKeys(zoneId)
     message.success(t('common.success'))
@@ -747,6 +865,7 @@ async function loadNsec3() {
 }
 
 async function saveNsec3() {
+  if (!perm.canWrite('dns')) return
   nsec3Saving.value = true
   try {
     await setNSEC3Params(zoneId, { ...nsec3Form })

@@ -3,6 +3,7 @@ package ipam
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"github.com/jasonwa/goddi/internal/ipam/subnet"
 	"github.com/jasonwa/goddi/pkg/dnsutil"
 )
+
+var ErrAmbiguousAddress = errors.New("ipam: address exists in multiple spaces")
 
 // Lease actions reported by the DHCP data plane.
 const (
@@ -233,6 +236,28 @@ func (l *Linkage) LinkDNSRecord(recordID, zoneID, name, recordType, value, ip, s
 	if err != nil {
 		return err
 	}
+	return l.linkDNSRecordToAddress(a, recordID, zoneID, name, recordType, value, ip, source)
+}
+
+// LinkDNSRecordInSpace links a published DNS record when the caller knows its
+// address space. This is the unambiguous form for deployments with overlapping
+// subnets in separate VRFs/spaces.
+func (l *Linkage) LinkDNSRecordInSpace(spaceID, recordID, zoneID, name, recordType, value, ip, source string) error {
+	if strings.TrimSpace(spaceID) == "" {
+		return fmt.Errorf("ipam: space_id is required for a space-scoped DNS link")
+	}
+	canonical, err := address.NormalizeIP(ip)
+	if err != nil {
+		return err
+	}
+	a, err := l.addrMgr.GetAddressBySpaceIP(spaceID, canonical)
+	if err != nil {
+		return err
+	}
+	return l.linkDNSRecordToAddress(a, recordID, zoneID, name, recordType, value, canonical, source)
+}
+
+func (l *Linkage) linkDNSRecordToAddress(a *address.Address, recordID, zoneID, name, recordType, value, ip, source string) error {
 	if a == nil {
 		slog.Debug("ipam: DNS record points at an untracked address", "ip", ip, "name", name)
 		return nil
@@ -280,6 +305,9 @@ func (l *Linkage) addressByIP(ip string) (*address.Address, error) {
 
 	if len(spaceIDs) == 0 {
 		return nil, nil
+	}
+	if len(spaceIDs) > 1 {
+		return nil, fmt.Errorf("%w: %s", ErrAmbiguousAddress, canonical)
 	}
 	return l.addrMgr.GetAddressBySpaceIP(spaceIDs[0], canonical)
 }
@@ -391,9 +419,10 @@ const maxScopesInView = 200
 // cross-referencing three screens: what IPAM decided, what DNS publishes, what
 // DHCP is doing, and where those disagree.
 type AddressView struct {
-	Address *address.Address `json:"address"`
-	Subnet  *subnet.Subnet   `json:"subnet,omitempty"`
-	Space   *space.Space     `json:"space,omitempty"`
+	Address *address.Address  `json:"address"`
+	Subnet  *subnet.Subnet    `json:"subnet,omitempty"`
+	Space   *space.Space      `json:"space,omitempty"`
+	Access  AddressViewAccess `json:"access"`
 
 	DNSRecords       []PublishingRecord     `json:"dns_records"`
 	DHCPScopes       []ScopeSummary         `json:"dhcp_scopes"`
@@ -412,6 +441,15 @@ type AddressView struct {
 	Conflicts []string `json:"conflicts"`
 }
 
+// AddressViewAccess describes which cross-module details were included in a
+// view returned by the API. Linkage itself reads the complete local picture;
+// the handler narrows it to the caller's permissions before serialization.
+type AddressViewAccess struct {
+	DNS        bool `json:"dns"`
+	DHCP       bool `json:"dhcp"`
+	DNSPartial bool `json:"dns_partial"`
+}
+
 // ViewAddress builds the 360° view for an address identified by space and IP.
 func (l *Linkage) ViewAddress(spaceID, ip string) (*AddressView, error) {
 	canonical, err := address.NormalizeIP(ip)
@@ -427,7 +465,7 @@ func (l *Linkage) ViewAddress(spaceID, ip string) (*AddressView, error) {
 		return nil, fmt.Errorf("%w: %s", address.ErrAddressNotFound, canonical)
 	}
 
-	view := &AddressView{Address: a}
+	view := &AddressView{Address: a, Access: AddressViewAccess{DNS: true, DHCP: true}}
 
 	if sp, err := l.spaceMgr.GetSpace(a.SpaceID); err == nil {
 		view.Space = sp

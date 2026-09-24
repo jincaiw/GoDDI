@@ -82,12 +82,19 @@ export function getCatalogMembers(id: string) {
   return get<string[]>(`/dns/zones/${id}/catalog/members`)
 }
 
-export function importZoneFile(id: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  return client.post(`/dns/zones/${id}/import`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
+export interface ZoneImportPreview {
+  zone_id: string
+  dry_run: boolean
+  valid: boolean
+  record_count: number
+  record_types: Record<string, number>
+  creates?: number
+  unchanged?: number
+  conflicts?: Array<{ row?: number; record?: number; owner: string; type: string; code: string; message: string }>
+}
+
+export function importZoneFile(id: string, content: string, format: 'bind' | 'csv', dryRun = false) {
+  return client.post(`/dns/zones/${id}/import`, { content, format, dry_run: dryRun })
 }
 
 export function exportZoneFile(id: string) {

@@ -46,18 +46,6 @@ func newConsumerDB(t *testing.T) *sql.DB {
 	if err := goose.Up(db, "."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE dhcp_ipam_observation_events (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		event_id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL, entity TEXT NOT NULL,
-		action TEXT NOT NULL, generation INTEGER NOT NULL, sequence INTEGER NOT NULL UNIQUE,
-		source TEXT NOT NULL, occurred_at DATETIME NOT NULL, payload_version INTEGER NOT NULL,
-		payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-		next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')), last_error TEXT NOT NULL DEFAULT '',
-		status TEXT NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-	); CREATE TABLE facts_projection_watermark (domain TEXT PRIMARY KEY, applied_seq INTEGER NOT NULL DEFAULT 0);`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.Exec(`INSERT INTO ipam_spaces (id, name, description) VALUES ('sp1', 'space', '')`); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +142,7 @@ func TestFactsConsumerLifecycleStartsAndWakeDrainsWithoutPolling(t *testing.T) {
 	t.Fatalf("consumer did not drain after wake: %+v", status)
 }
 
-func TestFactsConsumerStatusReportsDegradedBacklog(t *testing.T) {
+func TestFactsConsumerReadinessReportsDegradedBacklog(t *testing.T) {
 	db := newConsumerDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 	outbox, _ := facts.NewObservationOutbox(db)
@@ -170,14 +158,11 @@ func TestFactsConsumerStatusReportsDegradedBacklog(t *testing.T) {
 	if status.Pending != 1 || status.Failed != 0 || status.LastApplied != 0 || status.NextExpectedSequence != 1 || status.HeadSequence != 1 || status.Lag != 1 || status.Gap || status.Readiness() != FactsReadinessUnconfigured {
 		t.Fatalf("backlog status = %+v", status)
 	}
-	if err := consumer.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = consumer.Stop(context.Background()) }()
-	status, err = consumer.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Readiness is a pure interpretation of a point-in-time status. Starting
+	// the consumer here would race its immediate replay against this assertion.
+	status.State = FactsConsumerRunning
+	status.Started = true
+	status.Running = true
 	if status.Readiness() != FactsReadinessDegraded {
 		t.Fatalf("running backlog readiness = %q, status=%+v", status.Readiness(), status)
 	}

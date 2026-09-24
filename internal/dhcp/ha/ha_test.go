@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // These tests are written against the three properties the package claims:
@@ -143,9 +145,41 @@ func startMirror(t *testing.T, primary *Replicator, name string) (*Mirror, *data
 // considers itself redundant.
 func startPair(t *testing.T) (*Replicator, *dataplane.Store, *dataplane.Store) {
 	t.Helper()
+	return startPairWithPeerStaleAfter(t, testPeerStaleAfter)
+}
+
+// startPairWithPeerStaleAfter builds a redundant pair with a caller-selected
+// liveness window. The race-enabled full suite can pause a test goroutine while
+// the scheduler is busy; tests of operator decisions use a wider window so
+// that an unrelated scheduling delay does not turn a live peer into a stale
+// one.
+func startPairWithPeerStaleAfter(t *testing.T, staleAfter time.Duration) (*Replicator, *dataplane.Store, *dataplane.Store) {
+	t.Helper()
 	primaryStore := openStore(t, "primary")
-	primary, _ := startPrimary(t, primaryStore)
-	_, mirrorStore, _ := startMirror(t, primary, "mirror")
+	primaryCfg := testConfig(t, "primary")
+	primaryCfg.PeerStaleAfter = staleAfter
+	primary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatalf("building primary: %v", err)
+	}
+	primaryCtx, stopPrimary := context.WithCancel(context.Background())
+	t.Cleanup(stopPrimary)
+	go func() { _ = primary.Run(primaryCtx) }()
+	waitFor(t, "the primary to bind its peer port", func() bool { return primary.Addr() != nil })
+
+	mirrorStore := openStore(t, "mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	mirrorCfg.PeerStaleAfter = staleAfter
+	mirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatalf("building mirror: %v", err)
+	}
+	mirrorCtx, stopMirror := context.WithCancel(context.Background())
+	t.Cleanup(stopMirror)
+	go func() { _ = mirror.Run(mirrorCtx) }()
+	waitFor(t, "the primary to see mirror", func() bool { return primary.State() == StatePrimary })
 	return primary, primaryStore, mirrorStore
 }
 
@@ -305,6 +339,482 @@ func TestAResyncRebuildsTheMirrorFromASnapshot(t *testing.T) {
 	// And nothing reaches the mirror that lost its primary.
 	if n := leaseCount(t, firstMirrorStore); n != 1 {
 		t.Errorf("the disconnected mirror has %d rows, want the 1 it had when the primary went away", n)
+	}
+}
+
+func TestSnapshotCopiesFactsOutboxAndConfirmsItsWatermark(t *testing.T) {
+	primaryStore := openStore(t, "facts-primary")
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "ha-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"lease-1"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	primary, _ := startPrimary(t, primaryStore)
+	mirror, mirrorStore, _ := startMirror(t, primary, "facts-mirror")
+	waitFor(t, "the mirror to apply the facts snapshot", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='ha-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && mirror.FactsAppliedSeq() == 1 && primary.FactsAckedSeq() == 1
+	})
+	var markerCount int
+	if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_event_dirty WHERE event_id='ha-fact-1'`).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if markerCount != 1 {
+		t.Fatalf("mirror pending delivery markers = %d, want 1", markerCount)
+	}
+}
+
+func TestFactsProducedDuringDisconnectAreRestoredOnMirrorReconnect(t *testing.T) {
+	primaryStore := openStore(t, "reconnect-facts-primary")
+	primary, _ := startPrimary(t, primaryStore)
+	mirrorStore := openStore(t, "reconnect-facts-mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "reconnect-facts-mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	firstMirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, stopFirst := context.WithCancel(context.Background())
+	go func() { _ = firstMirror.Run(firstCtx) }()
+	waitFor(t, "initial facts snapshot", func() bool { return primary.State() == StatePrimary })
+	stopFirst()
+	waitFor(t, "the primary to observe mirror disconnect", func() bool { return primary.State() == StatePaused })
+
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "reconnect-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "renew", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"lease-during-disconnect"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnected, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnectCtx, stopReconnect := context.WithCancel(context.Background())
+	t.Cleanup(stopReconnect)
+	go func() { _ = reconnected.Run(reconnectCtx) }()
+	waitFor(t, "disconnected fact restored from reconnect snapshot", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='reconnect-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && reconnected.FactsAppliedSeq() == sequence && primary.FactsAckedSeq() == sequence
+	})
+}
+
+func TestPrimaryAndMirrorRestartPreserveFactsAcknowledgement(t *testing.T) {
+	primaryStore := openStore(t, "restart-facts-primary")
+	primaryCfg := testConfig(t, "primary")
+	primary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryCtx, stopPrimary := context.WithCancel(context.Background())
+	primaryDone := make(chan struct{})
+	go func() { defer close(primaryDone); _ = primary.Run(primaryCtx) }()
+	waitFor(t, "primary listener", func() bool { return primary.Addr() != nil })
+
+	mirrorStore := openStore(t, "restart-facts-mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "restart-facts-mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	mirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirrorCtx, stopMirror := context.WithCancel(context.Background())
+	mirrorDone := make(chan struct{})
+	go func() { defer close(mirrorDone); _ = mirror.Run(mirrorCtx) }()
+	waitFor(t, "initial primary/mirror connection", func() bool { return primary.State() == StatePrimary })
+
+	insertLease(t, primaryStore, "restart-fact-lease", "192.0.2.41", "02:00:00:00:00:41", "active")
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "restart-fact-event", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 14, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"restart-fact-lease"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.ConfirmFacts(context.Background(), LeaseRow{
+		ID: "restart-fact-lease", ScopeID: "scope-1", IPAddress: "192.0.2.41",
+		MACAddress: "02:00:00:00:00:41", Status: "active", Generation: 1,
+	}, sequence); err != nil {
+		t.Fatalf("initial facts-aware confirmation: %v", err)
+	}
+
+	stopMirror()
+	stopPrimary()
+	select {
+	case <-mirrorDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("mirror process did not stop")
+	}
+	select {
+	case <-primaryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("primary process did not stop")
+	}
+
+	restartedPrimary, err := NewReplicator(primaryCfg, primaryStore)
+	if err != nil {
+		t.Fatalf("restarting primary from durable lease store: %v", err)
+	}
+	if restartedPrimary.FactsAckedSeq() != sequence {
+		t.Fatalf("persisted facts ACK after restart = %d, want %d", restartedPrimary.FactsAckedSeq(), sequence)
+	}
+	restartedCtx, stopRestarted := context.WithCancel(context.Background())
+	restartedDone := make(chan struct{})
+	go func() { defer close(restartedDone); _ = restartedPrimary.Run(restartedCtx) }()
+	waitFor(t, "restarted primary listener", func() bool { return restartedPrimary.Addr() != nil })
+
+	mirrorCfg.PeerAddress = restartedPrimary.Addr().String()
+	restartedMirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatalf("restarting mirror from durable lease store: %v", err)
+	}
+	reconnectedCtx, stopReconnected := context.WithCancel(context.Background())
+	reconnectedDone := make(chan struct{})
+	go func() { defer close(reconnectedDone); _ = restartedMirror.Run(reconnectedCtx) }()
+	waitFor(t, "both restarted nodes to converge facts and lease watermarks", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='restart-fact-event'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && leaseCount(t, mirrorStore) == 1 &&
+			restartedMirror.FactsAppliedSeq() == sequence && restartedPrimary.FactsAckedSeq() == sequence &&
+			restartedPrimary.State() == StatePrimary
+	})
+	stopReconnected()
+	stopRestarted()
+	select {
+	case <-reconnectedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restarted mirror process did not stop")
+	}
+	select {
+	case <-restartedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restarted primary process did not stop")
+	}
+}
+
+func TestLiveFactsDeltaIsAppliedBeforeFactsAwareConfirmation(t *testing.T) {
+	primaryStore := openStore(t, "live-facts-primary")
+	primary, _ := startPrimary(t, primaryStore)
+	mirror, mirrorStore, _ := startMirror(t, primary, "live-facts-mirror")
+	waitFor(t, "the initial empty snapshot", func() bool {
+		return primary.FactsAckedSeq() == 0 && mirror.FactsAppliedSeq() == 0 && primary.State().Redundant()
+	})
+
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "ha-live-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "activate", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 11, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"live-lease-1"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.ConfirmFacts(context.Background(), LeaseRow{ID: "live-lease-1", ScopeID: "scope-1", IPAddress: "192.0.2.20", Status: "active"}, sequence); err != nil {
+		t.Fatalf("facts-aware confirmation failed: %v", err)
+	}
+	waitFor(t, "the mirror to apply the live facts delta", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='ha-live-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && mirror.FactsAppliedSeq() == sequence && primary.FactsAckedSeq() == sequence
+	})
+}
+
+func TestFactsAcknowledgementClearsInFlightDelta(t *testing.T) {
+	store := openStore(t, "facts-ack-in-flight")
+	r, err := NewReplicator(testConfig(t, "primary"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.factsInFlight = 4
+	r.mu.Unlock()
+	r.noteConfirmed(0, 4, 4)
+	r.mu.Lock()
+	inFlight, acked := r.factsInFlight, r.factsAcked
+	r.mu.Unlock()
+	if inFlight != 0 || acked != 4 {
+		t.Fatalf("facts delta state after immediate ACK = in-flight %d, acked %d; want 0/4", inFlight, acked)
+	}
+}
+
+func TestLiveAcknowledgementUpdatesPeerWatermarksMonotonically(t *testing.T) {
+	link := &linkHealth{}
+	link.markUp(Watermarks{AppliedSeq: 2, FactsAppliedSeq: 3})
+	link.updateApplied(7, 9)
+	link.updateApplied(6, 8)
+	_, _, got := link.snapshot()
+	if got.AppliedSeq != 7 || got.FactsAppliedSeq != 9 {
+		t.Fatalf("peer applied watermarks after ACKs = lease %d facts %d; want 7/9", got.AppliedSeq, got.FactsAppliedSeq)
+	}
+}
+
+func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
+	store := openStore(t, "manifest-mirror")
+	insertLease(t, store, "existing", "192.0.2.10", "02:00:00:00:00:10", "active")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator, err := facts.NewReplicaSnapshotAccumulator(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &incomingSnapshot{
+		id: "invalid-manifest", leaseSeq: 1, factsSeq: 0,
+		leases:      []LeaseRow{{ID: "replacement", ScopeID: "scope-1", IPAddress: "192.0.2.11", MACAddress: "02:00:00:00:00:11", Status: "active"}},
+		accumulator: accumulator,
+	}
+	badManifest := facts.ReplicaSnapshotManifest{LastSequence: 0, ChunkCount: 1, EventCount: 1, Digest: "not-the-empty-snapshot-digest"}
+	err = mirror.finishSnapshot(context.Background(), snapshot, Frame{Type: FrameSnapshotEnd, SnapshotID: snapshot.id, FactsManifest: &badManifest})
+	if err == nil {
+		t.Fatal("finishing a snapshot with an invalid manifest succeeded")
+	}
+	if leaseCount(t, store) != 1 || !mirrorHas(t, store, "existing", "active") {
+		t.Fatal("invalid facts manifest changed the active lease snapshot")
+	}
+	if mirrorHas(t, store, "replacement", "active") {
+		t.Fatal("invalid facts manifest applied replacement lease rows")
+	}
+}
+
+func TestFactsDeltaApplyFailureLeavesWatermarkAndEventsUnchanged(t *testing.T) {
+	store := openStore(t, "delta-apply-failure")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	snapshot, err := mirror.beginFactsDelta(ctx, Frame{
+		Type: FrameFactsDeltaStart, SnapshotID: "delta-apply-failure", Seq: 0, FactsSeq: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := facts.ReplicaSnapshotChunk{
+		Index: 0, FirstSequence: 1, LastSequence: 1,
+		Events: []facts.ReplicaEvent{{
+			Envelope: facts.Envelope{
+				EventID: "delta-apply-failure-event", Version: facts.CurrentEnvelopeVersion,
+				Entity: "lease", Action: "activate", Generation: 1, Sequence: 1,
+				Source: "dhcp", OccurredAt: time.Date(2026, 9, 24, 13, 0, 0, 0, time.UTC),
+				PayloadVersion: 1, Payload: json.RawMessage(`{"lease_id":"delta-failure"}`),
+			},
+			NextAttemptAt: "2026-09-24T13:00:00Z", Status: facts.ReplicaEventPending,
+			Delivery: &facts.ReplicaDeliveryMarker{QueuedAt: "2026-09-24T13:00:00Z"},
+		}},
+	}
+	if err := mirror.stageSnapshotChunk(ctx, snapshot, Frame{Type: FrameFactsChunk, SnapshotID: snapshot.id, FactsChunk: &chunk}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := snapshot.accumulator.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`CREATE TRIGGER reject_facts_apply BEFORE INSERT ON dhcp_ipam_observation_events
+		BEGIN SELECT RAISE(ABORT, 'injected facts apply failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mirror.finishFactsDelta(ctx, snapshot, Frame{
+		Type: FrameFactsDeltaEnd, SnapshotID: snapshot.id, FactsManifest: &manifest,
+	}); err == nil {
+		t.Fatal("facts delta apply succeeded despite the injected database failure")
+	}
+	var eventCount, stagingCount int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='delta-apply-failure-event'`).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.QueryRow(`SELECT COUNT(*) FROM facts_replica_snapshot_chunks WHERE snapshot_id='delta-apply-failure'`).Scan(&stagingCount); err != nil {
+		t.Fatal(err)
+	}
+	allocator, err := facts.NewSequenceAllocator(store.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := allocator.CurrentOrZero(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 || stagingCount != 1 || allocated != 0 || mirror.FactsAppliedSeq() != 0 {
+		t.Fatalf("failed delta changed active state: events=%d staging=%d allocator=%d applied=%d",
+			eventCount, stagingCount, allocated, mirror.FactsAppliedSeq())
+	}
+}
+
+func TestReconnectSnapshotDiscardsInterruptedFactsDeltaStaging(t *testing.T) {
+	store := openStore(t, "interrupted-delta")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a durable chunk left behind when the stream drops before its
+	// manifest/end frame. The next connection starts with a full snapshot.
+	if _, err := store.Exec(`INSERT INTO facts_replica_snapshot_chunks
+		(snapshot_id,chunk_index,first_sequence,last_sequence,event_count,chunk_json)
+		VALUES('interrupted-delta-id',0,1,1,1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mirror.beginSnapshot(context.Background(), Frame{
+		Type: FrameSnapshot, SnapshotID: "reconnected-snapshot", Seq: 0, FactsSeq: 0,
+	}); err != nil {
+		t.Fatalf("beginning reconnect snapshot: %v", err)
+	}
+	var staged int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM facts_replica_snapshot_chunks`).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 0 {
+		t.Fatalf("interrupted transfer left %d staged chunks after reconnect", staged)
+	}
+	if mirror.FactsAppliedSeq() != 0 {
+		t.Fatalf("interrupted delta advanced applied watermark to %d", mirror.FactsAppliedSeq())
+	}
+}
+
+func TestPrimaryRefusesFactsAckAheadOfItsAllocator(t *testing.T) {
+	store := openStore(t, "stale-facts-ack")
+	tx, err := store.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setWatermark(context.Background(), tx, metaFactsAckedSeq, 1); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewReplicator(testConfig(t, "primary"), store); err == nil {
+		t.Fatal("primary accepted a facts ACK watermark ahead of its local allocator")
+	}
+}
+
+func TestLeaseOpsAdvertiseUnappliedFactsHighWaterToTakeoverGate(t *testing.T) {
+	store := openStore(t, "ops-facts-gap")
+	mirror, err := NewMirror(testConfig(t, "standby"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mirror.applyOps(context.Background(), 1, 2, []LeaseRow{{
+		ID: "lease-with-pending-fact", ScopeID: "scope-1", IPAddress: "192.0.2.30", Status: "active",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	setMetaText(store.DB, metaPeerSeqAt, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano))
+	status, err := NewOperator(testConfig(t, "standby"), store).Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PeerFactsSeq != 2 || status.FactsAppliedSeq != 0 || status.FactsGap != 2 {
+		t.Fatalf("facts gap status = peer %d applied %d gap %d; want 2/0/2", status.PeerFactsSeq, status.FactsAppliedSeq, status.FactsGap)
+	}
+	_, err = NewOperator(testConfig(t, "standby"), store).Takeover(TakeoverOptions{Confirmed: true, OldPrimaryCannotWrite: true})
+	if !errors.Is(err, ErrUnexplainedFactsGap) {
+		t.Fatalf("takeover with facts advertised but unapplied = %v, want ErrUnexplainedFactsGap", err)
 	}
 }
 

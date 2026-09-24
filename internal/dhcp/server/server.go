@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,7 @@ type Server struct {
 	// exclusively through the facts caller; a facts failure never falls back to
 	// the legacy lease mutation.
 	releaseFacts *ReleaseFactsMutationConfig
+	leaseFacts   *LeaseFactsMutationConfig
 
 	quit chan struct{}
 	wg   sync.WaitGroup
@@ -129,6 +131,41 @@ type ReleaseFactsMutationConfig struct {
 	ResolveSpaceID func(scopeID, ip string) (string, error)
 }
 
+// LeaseFactsMutationCaller is the transaction writer installed by the DHCP
+// owner. Its methods commit lease changes and durable facts together.
+type LeaseFactsMutationCaller interface {
+	BindLease(context.Context, string, string, string, string, string, string, string, time.Duration) (*lease.Lease, error)
+	ActivateLease(context.Context, string, string, string, string, time.Duration) (*lease.Lease, error)
+	RenewLease(context.Context, string, string, string, string, time.Duration) (*lease.Lease, error)
+	ReleaseLease(context.Context, string, string, string, string) (*lease.Lease, error)
+	DeclineLease(context.Context, string, string, string, string, time.Duration) (*lease.Lease, error)
+	DeclineTombstone(context.Context, string, string, string, string, string, string, string, time.Duration) (*lease.Lease, error)
+	ExpireFactsBatch(context.Context, string, func(*lease.Lease) (string, error)) ([]*lease.Lease, error)
+}
+
+// LeaseFactsSequenceReader is implemented by durable facts writers that can
+// report the high water committed by a request mutation.
+type LeaseFactsSequenceReader interface {
+	CurrentSequence(context.Context) (int64, error)
+}
+
+// FactsAwareLeaseReplicator confirms both the lease mutation and its durable
+// facts event before the DHCP ACK is allowed out.
+type FactsAwareLeaseReplicator interface {
+	ConfirmFacts(context.Context, *lease.Lease, int64) error
+}
+
+// LeaseFactsMutationConfig supplies the writer and a resolver that reads only
+// the local DHCP store. ResolveSpaceID must not query the control database.
+type LeaseFactsMutationConfig struct {
+	Caller         LeaseFactsMutationCaller
+	Source         string
+	ResolveSpaceID func(scopeID, ip string) (string, error)
+	// DNSOutboxAtomic means the caller writes the legacy DNS outbox through the
+	// lease transaction, so request handlers must not enqueue it a second time.
+	DNSOutboxAtomic bool
+}
+
 // SetLeaseObserver installs the observer. It is called once during wiring.
 func (s *Server) SetLeaseObserver(o LeaseObserver) { s.leaseObserver = o }
 
@@ -140,7 +177,45 @@ func (s *Server) ReleaseLeaseFromManagement(id string) error {
 	if s == nil || s.leaseMgr == nil {
 		return errors.New("dhcp server: lease mutation owner is unavailable")
 	}
-	return s.leaseMgr.ReleaseLease(id)
+	before, err := s.leaseMgr.GetLease(id)
+	if err != nil || before == nil {
+		if err == nil {
+			err = errors.New("lease not found")
+		}
+		return err
+	}
+	var released *lease.Lease
+	dnsAtomic := false
+	if cfg, spaceID, ok, err := s.resolveLeaseFactSpace(before.ScopeID, before.IPAddress); err != nil {
+		return err
+	} else if ok {
+		released, err = cfg.Caller.ReleaseLease(context.Background(), "", cfg.Source, spaceID, id)
+		if err != nil {
+			return err
+		}
+		if released == nil {
+			return errors.New("dhcp lease facts mutation: caller returned no released lease")
+		}
+		dnsAtomic = cfg.DNSOutboxAtomic
+	} else {
+		if err := s.leaseMgr.ReleaseLease(id); err != nil {
+			return err
+		}
+	}
+	if released == nil {
+		released, err = s.leaseMgr.GetLease(id)
+		if err != nil {
+			return err
+		}
+	}
+	s.replicateLeaseState(released)
+	if scope, err := s.scopeMgr.GetScope(before.ScopeID); err == nil && scope.DNSUpdates && !dnsAtomic {
+		if err := s.enqueueDNSEvent(before, dhcpinternal.DNSEventDelete); err != nil {
+			slog.Error("DHCP management: failed to queue DNS teardown", "lease_id", id, "error", err)
+		}
+	}
+	s.observeLease(LeaseObservedRelease, released)
+	return nil
 }
 
 // ExpireLeasesFromDataPlane routes maintenance expiry through the packet-path
@@ -150,7 +225,37 @@ func (s *Server) ExpireLeasesFromDataPlane() ([]*lease.Lease, error) {
 	if s == nil || s.leaseMgr == nil {
 		return nil, errors.New("dhcp server: lease mutation owner is unavailable")
 	}
+	if cfg := s.leaseFacts; cfg != nil {
+		if cfg.Caller == nil || cfg.ResolveSpaceID == nil || strings.TrimSpace(cfg.Source) == "" {
+			return nil, errors.New("dhcp lease facts mutation: caller, source, and local space resolver are required")
+		}
+		return cfg.Caller.ExpireFactsBatch(context.Background(), cfg.Source, func(l *lease.Lease) (string, error) {
+			return cfg.ResolveSpaceID(l.ScopeID, l.IPAddress)
+		})
+	}
 	return s.leaseMgr.ExpireLeases()
+}
+
+func (s *Server) resolveLeaseFactSpace(scopeID, ip string) (*LeaseFactsMutationConfig, string, bool, error) {
+	cfg := s.leaseFacts
+	if cfg == nil {
+		return nil, "", false, nil
+	}
+	if cfg.Caller == nil || cfg.ResolveSpaceID == nil || strings.TrimSpace(cfg.Source) == "" {
+		return nil, "", false, errors.New("dhcp lease facts mutation: caller, source, and local space resolver are required")
+	}
+	spaceID, err := cfg.ResolveSpaceID(scopeID, ip)
+	if errors.Is(err, sql.ErrNoRows) {
+		slog.Warn("DHCP lease facts omitted because the local IPAM mapping has no space for the address", "scope_id", scopeID, "ip", ip)
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, fmt.Errorf("dhcp lease facts mutation: resolve local space: %w", err)
+	}
+	if strings.TrimSpace(spaceID) == "" {
+		return nil, "", false, errors.New("dhcp lease facts mutation: resolved space ID is empty")
+	}
+	return cfg, spaceID, true, nil
 }
 
 var _ LeaseMutationOwner = (*Server)(nil)
@@ -200,6 +305,12 @@ func (s *Server) observeLease(action string, l *lease.Lease) {
 // reconciler replays missed observations from the lease table afterwards.
 func (s *Server) observeLeaseFields(action, leaseID, scopeID, ip, mac, hostname string) {
 	if s.leaseObserver == nil {
+		return
+	}
+	// Mapped transitions are durably represented in the facts outbox and are
+	// projected by the control-side consumer. Keep the immediate compatibility
+	// observer only for legacy or unmapped transitions.
+	if _, _, useFacts, err := s.resolveLeaseFactSpace(scopeID, ip); err == nil && useFacts {
 		return
 	}
 	if err := s.leaseObserver.ObserveLease(action, leaseID, scopeID, ip, mac, hostname); err != nil {
@@ -818,6 +929,9 @@ func (s *Server) sweepExpiredLeases(reason string) {
 		if l.Status != lease.LeaseStatusActive || l.Hostname == "" {
 			continue
 		}
+		if cfg, _, ok, resolveErr := s.resolveLeaseFactSpace(l.ScopeID, l.IPAddress); resolveErr == nil && ok && cfg.DNSOutboxAtomic {
+			continue
+		}
 		if err := s.enqueueDNSEvent(l, dhcpinternal.DNSEventDelete); err != nil {
 			slog.Error("DHCP server: failed to queue DNS teardown for expired lease",
 				"lease_id", l.ID, "error", err)
@@ -887,6 +1001,13 @@ func (s *Server) SetOutboxWake(fn func()) { s.outboxWake = fn }
 // disables it. No default constructor calls this method.
 func (s *Server) SetReleaseFactsMutation(cfg *ReleaseFactsMutationConfig) {
 	s.releaseFacts = cfg
+}
+
+// SetLeaseFactsMutation enables durable facts for mutations with a valid local
+// IPAM space mapping. Missing mappings keep DHCP service available and are
+// reported; control database reads are not permitted on the request path.
+func (s *Server) SetLeaseFactsMutation(cfg *LeaseFactsMutationConfig) {
+	s.leaseFacts = cfg
 }
 
 // SetRequestAdmission configures the bounded request queue and worker count.

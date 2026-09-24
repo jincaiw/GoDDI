@@ -2,7 +2,7 @@
   <div>
     <page-header :title="t('dns.security.allowedTitle')">
       <n-space>
-        <n-button v-if="perm.canWrite('dns')" @click="handleExport">{{ t('dns.security.exportRules') }}</n-button>
+        <n-button v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.security.exportRules') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" @click="triggerImport">{{ t('dns.security.importRules') }}</n-button>
         <n-button v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</n-button>
         <n-button v-if="perm.canWrite('dns')" type="primary" @click="showAddModal = true">{{ t('dns.security.addAllowRule') }}</n-button>
@@ -24,7 +24,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAddModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="handleAdd">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleAdd">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -75,6 +75,7 @@ async function load() {
 }
 
 async function handleAdd() {
+  if (!perm.canWrite('dns')) return
   try {
     await addAllowRule(form)
     message.success(t('common.createSuccess'))
@@ -84,10 +85,12 @@ async function handleAdd() {
 }
 
 async function handleDelete(id: string) {
+  if (!perm.canDelete('dns')) return
   try { await deleteAllowRule(id); message.success(t('common.deleteSuccess')); load() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
 }
 
 async function handleFlush() {
+  if (!perm.canDelete('dns')) return
   showFlushConfirm.value = false
   try {
     const res = await flushAllowRules()
@@ -97,10 +100,12 @@ async function handleFlush() {
 }
 
 function triggerImport() {
+  if (!perm.canWrite('dns')) return
   importInput.value?.click()
 }
 
 async function handleImportFile(e: Event) {
+  if (!perm.canWrite('dns')) return
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return

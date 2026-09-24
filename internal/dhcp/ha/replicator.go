@@ -2,8 +2,10 @@ package ha
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jasonwa/goddi/internal/facts"
 )
 
 // ErrNoSecondCopy is returned when a binding cannot be confirmed because this
@@ -31,6 +34,8 @@ var ErrNotConfirmed = errors.New("ha: the second copy did not confirm in time")
 // frame size because the frames are built from rows whose size is bounded, and
 // a row count is the thing an operator can reason about.
 const opsBatchLimit = 512
+
+const metaFactsAckedSeq = "ha_facts_acked_seq"
 
 // maxPendingOps bounds the unsent log.
 //
@@ -58,10 +63,12 @@ type Replicator struct {
 	store *dataplane.Store
 	link  linkHealth
 
-	mu      sync.Mutex
-	seq     int64
-	acked   int64
-	pending []pendingOp
+	mu            sync.Mutex
+	seq           int64
+	acked         int64
+	factsAcked    int64
+	factsInFlight int64
+	pending       []pendingOp
 	// advance is closed and replaced whenever acked moves. Waiting on a
 	// channel rather than a condition variable is what makes the wait
 	// interruptible by a context and bounded by a timer.
@@ -102,13 +109,29 @@ func NewReplicator(cfg Config, store *dataplane.Store) (*Replicator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ha: reading the acknowledged watermark: %w", err)
 	}
+	factsAcked, err := readWatermark(store.DB, metaFactsAckedSeq)
+	if err != nil {
+		return nil, fmt.Errorf("ha: reading the acknowledged facts watermark: %w", err)
+	}
+	allocator, err := facts.NewSequenceAllocator(store.DB)
+	if err != nil {
+		return nil, err
+	}
+	currentFactsSeq, err := allocator.CurrentOrZero(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if factsAcked > currentFactsSeq {
+		return nil, fmt.Errorf("ha: acknowledged facts watermark %d is ahead of local allocator %d", factsAcked, currentFactsSeq)
+	}
 	r := &Replicator{
-		cfg:     cfg,
-		store:   store,
-		seq:     seq,
-		acked:   acked,
-		advance: make(chan struct{}),
-		wake:    make(chan struct{}, 1),
+		cfg:        cfg,
+		store:      store,
+		seq:        seq,
+		acked:      acked,
+		factsAcked: factsAcked,
+		advance:    make(chan struct{}),
+		wake:       make(chan struct{}, 1),
 	}
 	marker, err := store.Meta(metaDegraded)
 	if err != nil {
@@ -133,6 +156,25 @@ func (r *Replicator) AckedSeq() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.acked
+}
+
+func (r *Replicator) FactsAckedSeq() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.factsAcked
+}
+
+// FactsSequence reports the durable local facts allocator high water.
+func (r *Replicator) FactsSequence() (int64, error) {
+	return r.currentFactsSequence()
+}
+
+func (r *Replicator) currentFactsSequence() (int64, error) {
+	allocator, err := facts.NewSequenceAllocator(r.store.DB)
+	if err != nil {
+		return 0, err
+	}
+	return allocator.CurrentOrZero(context.Background())
 }
 
 // State reports what this node believes it is.
@@ -199,6 +241,15 @@ func (r *Replicator) DegradedReason() string {
 // by the time this is called -- that ordering is the point: the mirror is only
 // ever asked to hold something this node has, never the reverse.
 func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
+	return r.ConfirmFacts(ctx, row, 0)
+}
+
+// ConfirmFacts confirms the lease operation and its durable facts event. A
+// zero factsSeq preserves the lease-only contract for callers without facts.
+func (r *Replicator) ConfirmFacts(ctx context.Context, row LeaseRow, factsSeq int64) error {
+	if factsSeq < 0 {
+		return fmt.Errorf("ha: invalid facts sequence %d", factsSeq)
+	}
 	// The state is read once. Reading it again after the wait would be asking a
 	// different question than the one the caller is waiting on the answer to.
 	state := r.State()
@@ -224,13 +275,20 @@ func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
 	if !state.Redundant() {
 		return nil
 	}
+	localFactsSeq, err := r.currentFactsSequence()
+	if err != nil {
+		return err
+	}
+	if factsSeq > localFactsSeq {
+		return fmt.Errorf("ha: facts sequence %d is beyond local high water %d", factsSeq, localFactsSeq)
+	}
 
 	deadline := time.NewTimer(r.cfg.ConfirmTimeout)
 	defer deadline.Stop()
 
 	for {
 		r.mu.Lock()
-		if r.acked >= seq {
+		if r.acked >= seq && r.factsAcked >= factsSeq {
 			r.mu.Unlock()
 			return nil
 		}
@@ -241,9 +299,10 @@ func (r *Replicator) Confirm(ctx context.Context, row LeaseRow) error {
 		case <-ch:
 		case <-deadline.C:
 			slog.Warn("HA: withholding an acknowledgement; the mirror did not confirm in time",
-				"seq", seq, "acked_seq", r.AckedSeq(), "timeout", r.cfg.ConfirmTimeout)
-			return fmt.Errorf("%w (seq %d, mirror at %d, timeout %s)",
-				ErrNotConfirmed, seq, r.AckedSeq(), r.cfg.ConfirmTimeout)
+				"seq", seq, "acked_seq", r.AckedSeq(), "facts_seq", factsSeq,
+				"facts_acked_seq", r.FactsAckedSeq(), "timeout", r.cfg.ConfirmTimeout)
+			return fmt.Errorf("%w (lease seq %d mirror at %d, facts seq %d mirror at %d, timeout %s)",
+				ErrNotConfirmed, seq, r.AckedSeq(), factsSeq, r.FactsAckedSeq(), r.cfg.ConfirmTimeout)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -363,16 +422,12 @@ func (r *Replicator) session(ctx context.Context, conn net.Conn) error {
 	// what a snapshot makes irrelevant. One bounded transfer per reconnect
 	// removes a class of gap-tracking bugs that are otherwise found in
 	// production.
-	snapSeq, rows, err := r.readSnapshot(ctx)
+	snapSeq, factsSeq, rowCount, err := r.sendSnapshot(ctx, conn)
 	if err != nil {
 		return err
 	}
-	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
-	if err := writeFrame(conn, Frame{Type: FrameSnapshot, Seq: snapSeq, Leases: rows}); err != nil {
-		return err
-	}
 	r.prunePending(snapSeq)
-	slog.Info("HA: sent a snapshot to the mirror", "seq", snapSeq, "rows", len(rows))
+	slog.Info("HA: sent a snapshot to the mirror", "seq", snapSeq, "facts_seq", factsSeq, "rows", rowCount)
 
 	frames := make(chan Frame)
 	failures := make(chan error, 1)
@@ -415,7 +470,7 @@ func (r *Replicator) session(ctx context.Context, conn net.Conn) error {
 		case <-ctx.Done():
 			return nil
 		}
-		if err := r.sendWork(conn); err != nil {
+		if err := r.sendWork(ctx, conn); err != nil {
 			return err
 		}
 	}
@@ -447,16 +502,29 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 		return Watermarks{}, fmt.Errorf("%w: the peer calls itself %q, which is this node",
 			ErrRoleMismatch, r.cfg.NodeID)
 	}
+	if frame.Watermarks.AppliedSeq < 0 || frame.Watermarks.FactsAppliedSeq < 0 {
+		return Watermarks{}, errors.New("ha: peer reported a negative applied watermark")
+	}
+	factsSeq, err := r.currentFactsSequence()
+	if err != nil {
+		return Watermarks{}, err
+	}
+	if frame.Watermarks.FactsAppliedSeq > factsSeq {
+		return Watermarks{}, fmt.Errorf("ha: standby facts watermark %d is ahead of primary %d",
+			frame.Watermarks.FactsAppliedSeq, factsSeq)
+	}
 
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
 	if err := writeFrame(conn, Frame{
 		Type:     FrameHello,
 		Protocol: Protocol,
 		Watermarks: &Watermarks{
-			NodeID:     r.cfg.NodeID,
-			Role:       r.cfg.Role,
-			AppliedSeq: r.Seq(),
-			AckedSeq:   r.AckedSeq(),
+			NodeID:          r.cfg.NodeID,
+			Role:            r.cfg.Role,
+			AppliedSeq:      r.Seq(),
+			AckedSeq:        r.AckedSeq(),
+			FactsAppliedSeq: factsSeq,
+			FactsAckedSeq:   r.FactsAckedSeq(),
 		},
 	}); err != nil {
 		return Watermarks{}, err
@@ -472,7 +540,18 @@ func (r *Replicator) handleFrame(f Frame) error {
 	r.link.touch()
 	switch f.Type {
 	case FrameApplied:
-		r.noteConfirmed(f.Seq)
+		if f.Seq < 0 || f.FactsSeq < 0 || f.Seq > r.Seq() {
+			return fmt.Errorf("ha: mirror confirmed invalid watermarks lease=%d facts=%d", f.Seq, f.FactsSeq)
+		}
+		factsSeq, err := r.currentFactsSequence()
+		if err != nil {
+			return err
+		}
+		if f.FactsSeq > factsSeq {
+			return fmt.Errorf("ha: mirror confirmed facts sequence %d beyond primary sequence %d", f.FactsSeq, factsSeq)
+		}
+		r.link.updateApplied(f.Seq, f.FactsSeq)
+		r.noteConfirmed(f.Seq, f.FactsSeq, factsSeq)
 		return nil
 	case FrameHello:
 		// The mirror restarted its side without closing. Its watermarks are
@@ -494,11 +573,21 @@ func (r *Replicator) handleFrame(f Frame) error {
 // watermark of zero, and a confirmation of zero is not progress -- but it is
 // still the fact that the second copy is present, and it has to be able to
 // clear a marker that was set while it was absent.
-func (r *Replicator) noteConfirmed(seq int64) {
+func (r *Replicator) noteConfirmed(seq, factsSeq, localFactsSeq int64) {
 	r.mu.Lock()
 	var advanced chan struct{}
-	if seq > r.acked {
+	factsAdvanced := factsSeq > r.factsAcked
+	leaseAdvanced := seq > r.acked
+	if factsAdvanced {
+		r.factsAcked = factsSeq
+		if factsSeq >= r.factsInFlight {
+			r.factsInFlight = 0
+		}
+	}
+	if leaseAdvanced {
 		r.acked = seq
+	}
+	if leaseAdvanced || factsAdvanced {
 		advanced = r.advance
 		r.advance = make(chan struct{})
 	}
@@ -506,13 +595,13 @@ func (r *Replicator) noteConfirmed(seq int64) {
 	// caught up to everything this node has handed out, that reason is gone,
 	// and a marker that outlives its reason is how a deployment stays degraded
 	// forever after one bad afternoon.
-	clearDegraded := r.degraded && seq >= r.seq
+	clearDegraded := r.degraded && seq >= r.seq && factsSeq >= localFactsSeq
 	if clearDegraded {
 		r.degraded = false
 	}
 	r.mu.Unlock()
 
-	if advanced == nil && !clearDegraded {
+	if advanced == nil && !factsAdvanced && !clearDegraded {
 		return
 	}
 	if advanced != nil {
@@ -521,6 +610,12 @@ func (r *Replicator) noteConfirmed(seq int64) {
 			INSERT INTO dataplane_meta (key, value) VALUES (?, ?)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, metaAckedSeq, fmt.Sprintf("%d", seq)); err != nil {
 			slog.Warn("HA: could not persist the acknowledged watermark", "seq", seq, "error", err)
+		}
+	}
+	if factsAdvanced {
+		if _, err := r.store.Exec(`INSERT INTO dataplane_meta(key,value) VALUES(?,?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, metaFactsAckedSeq, fmt.Sprintf("%d", factsSeq)); err != nil {
+			slog.Warn("HA: could not persist the acknowledged facts watermark", "facts_seq", factsSeq, "error", err)
 		}
 	}
 	if clearDegraded {
@@ -611,7 +706,7 @@ func (r *Replicator) reloadDegraded() error {
 
 // sendWork emits one frame: the next batch of changes if there are any, and a
 // request for a confirmation if there are not.
-func (r *Replicator) sendWork(conn net.Conn) error {
+func (r *Replicator) sendWork(ctx context.Context, conn net.Conn) error {
 	r.mu.Lock()
 	var batch []pendingOp
 	if len(r.pending) > 0 {
@@ -629,25 +724,107 @@ func (r *Replicator) sendWork(conn net.Conn) error {
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
 
 	if len(batch) > 0 {
+		factsSeq, err := r.currentFactsSequence()
+		if err != nil {
+			return err
+		}
 		rows := make([]LeaseRow, len(batch))
 		for i, op := range batch {
 			rows[i] = op.row
 		}
-		if err := writeFrame(conn, Frame{Type: FrameOps, Seq: batch[len(batch)-1].seq, Leases: rows}); err != nil {
+		if err := writeFrame(conn, Frame{Type: FrameOps, Seq: batch[len(batch)-1].seq, FactsSeq: factsSeq, Leases: rows}); err != nil {
 			return err
 		}
 		r.markSent()
 		return nil
 	}
+	r.mu.Lock()
+	baseFactsSeq := r.factsAcked
+	factsInFlight := r.factsInFlight
+	r.mu.Unlock()
+	if factsInFlight == 0 {
+		sent, _, err := r.sendFactsDelta(ctx, conn, baseFactsSeq)
+		if err != nil {
+			return err
+		}
+		if sent {
+			r.markSent()
+			return nil
+		}
+	}
 	if pingDue {
+		factsSeq, err := r.currentFactsSequence()
+		if err != nil {
+			return err
+		}
 		// The sequence is carried so the mirror's log line and the primary's
 		// can be read against each other; the reply is the same either way.
-		if err := writeFrame(conn, Frame{Type: FramePing, Seq: seq}); err != nil {
+		if err := writeFrame(conn, Frame{Type: FramePing, Seq: seq, FactsSeq: factsSeq}); err != nil {
 			return err
 		}
 		r.markSent()
 	}
 	return nil
+}
+
+func (r *Replicator) sendFactsDelta(ctx context.Context, conn net.Conn, after int64) (bool, int64, error) {
+	tx, err := r.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return false, 0, fmt.Errorf("ha: opening facts delta read: %w", err)
+	}
+	defer tx.Rollback()
+	outbox, err := facts.NewObservationOutbox(r.store.DB)
+	if err != nil {
+		return false, 0, err
+	}
+	highWater, err := outbox.ReplicaHighWaterTx(ctx, tx)
+	if err != nil {
+		return false, 0, err
+	}
+	if highWater <= after {
+		if err := tx.Commit(); err != nil {
+			return false, 0, fmt.Errorf("ha: closing facts delta read: %w", err)
+		}
+		return false, 0, nil
+	}
+	var idBytes [16]byte
+	if _, err := rand.Read(idBytes[:]); err != nil {
+		return false, 0, fmt.Errorf("ha: generating facts delta ID: %w", err)
+	}
+	id := hex.EncodeToString(idBytes[:])
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{Type: FrameFactsDeltaStart, SnapshotID: id, Seq: after, FactsSeq: highWater}); err != nil {
+		return false, 0, err
+	}
+	manifest, err := outbox.StreamReplicaChangesTx(ctx, tx, after, 256, func(chunk facts.ReplicaSnapshotChunk) error {
+		conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+		return writeFrame(conn, Frame{Type: FrameFactsChunk, SnapshotID: id, FactsChunk: &chunk})
+	})
+	if err != nil {
+		return false, 0, err
+	}
+	if manifest.AfterSequence != after || manifest.LastSequence != highWater {
+		return false, 0, fmt.Errorf("ha: facts delta range changed: base=%d/%d high=%d/%d", after, manifest.AfterSequence, highWater, manifest.LastSequence)
+	}
+	// Record the in-flight watermark before the end frame can provoke an
+	// immediate ACK. Otherwise noteConfirmed can clear zero, then this sender
+	// can overwrite that confirmation with a stale in-flight value.
+	r.mu.Lock()
+	r.factsInFlight = highWater
+	r.mu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{Type: FrameFactsDeltaEnd, SnapshotID: id, FactsManifest: &manifest}); err != nil {
+		r.mu.Lock()
+		if r.factsInFlight == highWater {
+			r.factsInFlight = 0
+		}
+		r.mu.Unlock()
+		return false, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, fmt.Errorf("ha: closing facts delta read: %w", err)
+	}
+	return true, highWater, nil
 }
 
 func (r *Replicator) markSent() {
@@ -668,17 +845,17 @@ func (r *Replicator) prunePending(seq int64) {
 	r.pending = keep
 }
 
-// readSnapshot materialises the whole lease table and the sequence that
-// describes it, in one read transaction.
+// sendSnapshot streams one lease/facts cut to the mirror. The bounded facts
+// chunks and lease rows all come from the same SQLite read transaction.
 //
 // The cursor is fully drained and closed before the sequence is read. SQLite
 // runs on a single connection per handle, and issuing a statement while a
 // cursor is open waits on the connection that cursor holds -- with no error and
 // no timeout.
-func (r *Replicator) readSnapshot(ctx context.Context) (int64, []LeaseRow, error) {
+func (r *Replicator) sendSnapshot(ctx context.Context, conn net.Conn) (int64, int64, int, error) {
 	tx, err := r.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return 0, nil, fmt.Errorf("ha: opening the snapshot read: %w", err)
+		return 0, 0, 0, fmt.Errorf("ha: opening the snapshot read: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -691,7 +868,7 @@ func (r *Replicator) readSnapshot(ctx context.Context) (int64, []LeaseRow, error
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT "+cols+" FROM dhcp_leases ORDER BY id")
 	if err != nil {
-		return 0, nil, fmt.Errorf("ha: reading the lease table: %w", err)
+		return 0, 0, 0, fmt.Errorf("ha: reading the lease table: %w", err)
 	}
 	var out []LeaseRow
 	for rows.Next() {
@@ -699,29 +876,62 @@ func (r *Replicator) readSnapshot(ctx context.Context) (int64, []LeaseRow, error
 		if err := rows.Scan(&l.ID, &l.ScopeID, &l.IPAddress, &l.MACAddress, &l.Hostname,
 			&l.ClientID, &l.LeaseStart, &l.LeaseEnd, &l.Status, &l.LastSeen, &l.Generation); err != nil {
 			rows.Close()
-			return 0, nil, fmt.Errorf("ha: scanning a lease for the snapshot: %w", err)
+			return 0, 0, 0, fmt.Errorf("ha: scanning a lease for the snapshot: %w", err)
 		}
 		out = append(out, l)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, nil, fmt.Errorf("ha: reading the lease table: %w", err)
+		return 0, 0, 0, fmt.Errorf("ha: reading the lease table: %w", err)
 	}
 	rows.Close()
 
 	var raw string
 	err = tx.QueryRowContext(ctx, `SELECT value FROM dataplane_meta WHERE key = ?`, metaSeq).Scan(&raw)
 	if err != nil && err != sql.ErrNoRows {
-		return 0, nil, fmt.Errorf("ha: reading the sequence for the snapshot: %w", err)
+		return 0, 0, 0, fmt.Errorf("ha: reading the sequence for the snapshot: %w", err)
 	}
 	var seq int64
 	if raw != "" {
 		if _, err := fmt.Sscanf(raw, "%d", &seq); err != nil {
-			return 0, nil, fmt.Errorf("ha: the sequence %q is not a number: %w", raw, err)
+			return 0, 0, 0, fmt.Errorf("ha: the sequence %q is not a number: %w", raw, err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, nil, fmt.Errorf("ha: closing the snapshot read: %w", err)
+	outbox, err := facts.NewObservationOutbox(r.store.DB)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	return seq, out, nil
+	factsSeq, err := outbox.ReplicaHighWaterTx(ctx, tx)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	var snapshotIDBytes [16]byte
+	if _, err := rand.Read(snapshotIDBytes[:]); err != nil {
+		return 0, 0, 0, fmt.Errorf("ha: generating snapshot ID: %w", err)
+	}
+	snapshotID := hex.EncodeToString(snapshotIDBytes[:])
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{
+		Type: FrameSnapshot, SnapshotID: snapshotID, Seq: seq, FactsSeq: factsSeq, Leases: out,
+	}); err != nil {
+		return 0, 0, 0, err
+	}
+	manifest, err := outbox.StreamReplicaSnapshotTx(ctx, tx, 256, func(chunk facts.ReplicaSnapshotChunk) error {
+		conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+		return writeFrame(conn, Frame{Type: FrameFactsChunk, SnapshotID: snapshotID, FactsChunk: &chunk})
+	})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if manifest.LastSequence != factsSeq {
+		return 0, 0, 0, fmt.Errorf("ha: snapshot facts high water changed: read=%d manifest=%d", factsSeq, manifest.LastSequence)
+	}
+	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	if err := writeFrame(conn, Frame{Type: FrameSnapshotEnd, SnapshotID: snapshotID, FactsManifest: &manifest}); err != nil {
+		return 0, 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("ha: closing the snapshot read: %w", err)
+	}
+	return seq, factsSeq, len(out), nil
 }

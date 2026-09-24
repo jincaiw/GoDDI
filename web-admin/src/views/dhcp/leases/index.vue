@@ -73,7 +73,7 @@ const columns = [
   { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: statusTagType[row.status] ?? 'default' }, { default: () => row.status }) },
   { title: () => t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
   { title: () => t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
+  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { if (!perm.canDelete('dhcp')) return; releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
 ]
 
 async function loadData() {
@@ -92,6 +92,7 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 async function handleRelease() {
+  if (!perm.canDelete('dhcp')) return
   try { await deleteDHCPLease(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showReleaseConfirm.value = false
 }

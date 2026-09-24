@@ -31,7 +31,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -79,6 +79,7 @@ const importSubnetId = ref('')
 const importSubnetLabel = ref('')
 
 function openImport(row: IPAMSubnet) {
+  if (!perm.canRead('ipam')) return
   importSubnetId.value = row.id
   importSubnetLabel.value = `${row.name} (${row.cidr})`
   showImport.value = true
@@ -91,6 +92,7 @@ const poolSubnetId = ref('')
 const poolSubnetLabel = ref('')
 
 function openPool(row: IPAMSubnet) {
+  if (!perm.canWrite('ipam')) return
   poolSubnetId.value = row.id
   poolSubnetLabel.value = `${row.name} (${row.cidr})`
   showPool.value = true
@@ -104,6 +106,7 @@ const reverseZoneSubnetId = ref('')
 const reverseZoneSubnetLabel = ref('')
 
 function openReverseZone(row: IPAMSubnet) {
+  if (!perm.canWrite('ipam')) return
   reverseZoneSubnetId.value = row.id
   reverseZoneSubnetLabel.value = `${row.name} (${row.cidr})`
   showReverseZone.value = true
@@ -121,11 +124,11 @@ const columns = [
   { title: () => t('ipam.subnets.location'), key: 'location' },
   { title: () => t('common.actions'), key: 'actions', width: 340, render: (row: IPAMSubnet) => h(NSpace, null, {
     default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openImport(row) }, { default: () => t('ipam.subnets.importAddresses') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; editing.value = row; Object.assign(formData, { name: row.name, space_id: row.space_id, cidr: row.cidr, vlan_id: row.vlan_id, location: row.location, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
+      h(NButton, { size: 'small', text: true, disabled: !perm.canRead('ipam'), onClick: () => openImport(row) }, { default: () => t('ipam.subnets.importAddresses') }),
       h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openPool(row) }, { default: () => t('ipam.subnets.createDhcpScope') }),
       h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => openReverseZone(row) }, { default: () => t('ipam.subnets.generateReverseZone') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
+      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { if (!perm.canDelete('ipam')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
     ],
   }) },
 ]
@@ -148,12 +151,14 @@ function handlePageChange(page: number) { pagination.page = page; loadData() }
 function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
+  if (!perm.canWrite('ipam')) return
   editing.value = null
   Object.assign(formData, { name: '', space_id: '', cidr: '', vlan_id: undefined, location: '', description: '' })
   showModal.value = true
 }
 
 async function handleSubmit() {
+  if (!perm.canWrite('ipam')) return
   submitting.value = true
   try {
     if (editing.value) { await updateIPAMSubnet(editing.value.id, formData); message.success(t('common.updateSuccess')) }
@@ -163,6 +168,7 @@ async function handleSubmit() {
 }
 
 async function handleDelete() {
+  if (!perm.canDelete('ipam')) return
   try { await deleteIPAMSubnet(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showDeleteConfirm.value = false
 }

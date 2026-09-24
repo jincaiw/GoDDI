@@ -137,6 +137,15 @@ func Conflict(w http.ResponseWriter, message string) {
 	})
 }
 
+// ConflictWithData sends a 409 Conflict response with structured details.
+func ConflictWithData(w http.ResponseWriter, message string, data interface{}) {
+	writeJSON(w, http.StatusConflict, Response{
+		Code:    409,
+		Message: message,
+		Data:    data,
+	})
+}
+
 // TooManyRequests sends a 429 Too Many Requests response.
 func TooManyRequests(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusTooManyRequests, Response{

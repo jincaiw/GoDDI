@@ -48,16 +48,76 @@ func withProviders(t *testing.T) {
 	t.Cleanup(func() {
 		dhcpScopeStatsFn = nil
 		dhcpScopeLabels = make(map[string]struct{})
+		dhcpHAStatsFn = nil
 		backupStatsFn = nil
 		secondaryZoneStatsFn = nil
 		dataPlaneStatsFn = nil
 		factsConsumerStatsFn = nil
+		factsProducerStatsFn = nil
 		dhcpScopeLabels = make(map[string]struct{})
 		DHCPLeasesActive.Reset()
 		DHCPScopeUsageRatio.Reset()
 		DHCPScopeUtilizationScrapeError.Set(0)
 		DHCPScopeUtilizationLastSuccessTimestampSeconds.Reset()
+		DHCPHARedundant.Reset()
+		DHCPHAPromising.Reset()
+		DHCPHASequence.Reset()
+		DHCPHAAcknowledgedSequence.Reset()
+		DHCPHAPeerAppliedSequence.Reset()
+		DHCPHAFactsSequence.Reset()
+		DHCPHAFactsAcknowledgedSequence.Reset()
+		DHCPHAPeerAppliedFactsSequence.Reset()
+		DHCPHAFactsReplicationLag.Reset()
 	})
+}
+
+func TestSampleProvidersPublishesDHCPHAWatermarks(t *testing.T) {
+	withProviders(t)
+	dhcpHAStatsFn = func() []DHCPHASample {
+		return []DHCPHASample{{
+			NodeID: "primary-a", Redundant: true, Promising: true,
+			Sequence: 18, AcknowledgedSequence: 17, PeerAppliedSequence: 18,
+			FactsSequence: 27, FactsAcknowledgedSequence: 25, PeerAppliedFactsSequence: 26,
+		}}
+	}
+	sampleProviders()
+	text := expose(t, DHCPHASequence, DHCPHAAcknowledgedSequence, DHCPHAPeerAppliedSequence,
+		DHCPHAFactsSequence, DHCPHAFactsAcknowledgedSequence, DHCPHAPeerAppliedFactsSequence, DHCPHAFactsReplicationLag)
+	for _, want := range []string{
+		`goddi_dhcp_ha_sequence{node_id="primary-a"} 18`,
+		`goddi_dhcp_ha_acknowledged_sequence{node_id="primary-a"} 17`,
+		`goddi_dhcp_ha_peer_applied_sequence{node_id="primary-a"} 18`,
+		`goddi_dhcp_ha_facts_sequence{node_id="primary-a"} 27`,
+		`goddi_dhcp_ha_facts_acknowledged_sequence{node_id="primary-a"} 25`,
+		`goddi_dhcp_ha_peer_applied_facts_sequence{node_id="primary-a"} 26`,
+		`goddi_dhcp_ha_facts_replication_lag{node_id="primary-a"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSampleProvidersPublishesFactsProducerStatus(t *testing.T) {
+	withProviders(t)
+	factsProducerStatsFn = func() []FactsProducerSample {
+		return []FactsProducerSample{{
+			Domain: "ipam", Pending: 3, Failed: 1, HeadSequence: 12,
+			FirstOutstandingSequence: 9,
+		}}
+	}
+	sampleProviders()
+	text := expose(t, FactsProducerPending, FactsProducerFailed, FactsProducerHeadSequence, FactsProducerFirstOutstandingSequence)
+	for _, want := range []string{
+		`goddi_facts_producer_pending{domain="ipam"} 3`,
+		`goddi_facts_producer_failed{domain="ipam"} 1`,
+		`goddi_facts_producer_head_sequence{domain="ipam"} 12`,
+		`goddi_facts_producer_first_outstanding_sequence{domain="ipam"} 9`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("exposition does not contain %q:\n%s", want, text)
+		}
+	}
 }
 
 // samples returns only the sample lines of one metric: the ones that carry a

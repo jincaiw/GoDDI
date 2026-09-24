@@ -183,6 +183,35 @@ var (
 		Help: "1 when this DHCP node may acknowledge a binding or a renewal, 0 when it is withholding them. Absent when HA is disabled.",
 	}, []string{"node_id"})
 
+	DHCPHASequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_sequence",
+		Help: "Highest lease replication sequence assigned by this DHCP primary.",
+	}, []string{"node_id"})
+	DHCPHAAcknowledgedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_acknowledged_sequence",
+		Help: "Highest lease replication sequence durably acknowledged by the standby.",
+	}, []string{"node_id"})
+	DHCPHAPeerAppliedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_applied_sequence",
+		Help: "Highest lease replication sequence the primary most recently observed applied by its standby.",
+	}, []string{"node_id"})
+	DHCPHAFactsSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_sequence",
+		Help: "Highest DHCP IPAM facts sequence durably produced by this primary.",
+	}, []string{"node_id"})
+	DHCPHAFactsAcknowledgedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_acknowledged_sequence",
+		Help: "Highest DHCP IPAM facts sequence durably acknowledged by the standby.",
+	}, []string{"node_id"})
+	DHCPHAPeerAppliedFactsSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_applied_facts_sequence",
+		Help: "Highest DHCP IPAM facts sequence the primary most recently observed applied by its standby.",
+	}, []string{"node_id"})
+	DHCPHAFactsReplicationLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_replication_lag",
+		Help: "Difference between the primary's durable DHCP IPAM facts sequence and its standby's applied sequence.",
+	}, []string{"node_id"})
+
 	DHCPRequestsInflight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_requests_inflight",
 		Help: "Current number of DHCP requests being processed by workers.",
@@ -297,6 +326,22 @@ var (
 	FactsConsumerReadiness = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "goddi_facts_consumer_readiness",
 		Help: "Facts consumer readiness: 1 at ok, 0.5 at degraded, 0 otherwise.",
+	}, []string{"domain"})
+	FactsProducerPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_pending",
+		Help: "Durable facts events awaiting delivery from a producer outbox.",
+	}, []string{"domain"})
+	FactsProducerFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_failed",
+		Help: "Durable facts events retained after producer delivery failure.",
+	}, []string{"domain"})
+	FactsProducerHeadSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_head_sequence",
+		Help: "Highest durable facts sequence allocated by the producer.",
+	}, []string{"domain"})
+	FactsProducerFirstOutstandingSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_facts_producer_first_outstanding_sequence",
+		Help: "Lowest pending or failed facts sequence; zero means no event is outstanding.",
 	}, []string{"domain"})
 
 	DataPlaneHeldLeases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -506,6 +551,18 @@ type DHCPHASample struct {
 	// It is false while the node is withholding, which is a different fact
 	// from "this node is broken".
 	Promising bool
+	// Sequence is the primary's highest assigned replication sequence.
+	Sequence int64
+	// AcknowledgedSequence is the highest sequence confirmed durable by the standby.
+	AcknowledgedSequence int64
+	// PeerAppliedSequence is the last applied watermark reported by the standby.
+	PeerAppliedSequence int64
+	// FactsSequence is the primary's durable facts allocator high water.
+	FactsSequence int64
+	// FactsAcknowledgedSequence is the facts high water durably acknowledged by the standby.
+	FactsAcknowledgedSequence int64
+	// PeerAppliedFactsSequence is the latest applied facts watermark reported by the standby.
+	PeerAppliedFactsSequence int64
 }
 
 // SecondaryZoneSample is one secondary zone's refresh health.
@@ -564,6 +621,16 @@ type FactsConsumerSample struct {
 	Lag       int64
 	Gap       bool
 	Readiness string
+}
+
+// FactsProducerSample is a point-in-time view of one durable producer outbox.
+// Domain is a stable low-cardinality identifier such as "ipam".
+type FactsProducerSample struct {
+	Domain                   string
+	Pending                  int64
+	Failed                   int64
+	HeadSequence             int64
+	FirstOutstandingSequence int64
 }
 
 type DataPlaneSample struct {
@@ -627,6 +694,7 @@ var (
 	dataPlaneStatsFn func() []DataPlaneSample
 
 	factsConsumerStatsFn func() []FactsConsumerSample
+	factsProducerStatsFn func() []FactsProducerSample
 
 	// last samples used to convert absolute gauges into counter deltas.
 	lastCacheHits           int64
@@ -702,6 +770,12 @@ func RegisterDataPlaneStatsProvider(fn func() []DataPlaneSample) {
 // the metrics ticker. It does not construct or start a consumer.
 func RegisterFactsConsumerStatsProvider(fn func() []FactsConsumerSample) {
 	factsConsumerStatsFn = fn
+}
+
+// RegisterFactsProducerStatsProvider registers an optional durable outbox
+// callback sampled by the metrics ticker.
+func RegisterFactsProducerStatsProvider(fn func() []FactsProducerSample) {
+	factsProducerStatsFn = fn
 }
 
 // dataPlaneReadyValue maps a readiness level onto the gauge. Degraded is
@@ -800,8 +874,19 @@ func InitMetrics() {
 			FactsConsumerLag,
 			FactsConsumerGap,
 			FactsConsumerReadiness,
+			FactsProducerPending,
+			FactsProducerFailed,
+			FactsProducerHeadSequence,
+			FactsProducerFirstOutstandingSequence,
 			DHCPHARedundant,
 			DHCPHAPromising,
+			DHCPHASequence,
+			DHCPHAAcknowledgedSequence,
+			DHCPHAPeerAppliedSequence,
+			DHCPHAFactsSequence,
+			DHCPHAFactsAcknowledgedSequence,
+			DHCPHAPeerAppliedFactsSequence,
+			DHCPHAFactsReplicationLag,
 			DHCPRequestsInflight,
 			DHCPRequestQueueDepth,
 			DHCPRequestQueueCapacity,
@@ -915,6 +1000,17 @@ func sampleProviders() {
 		for _, s := range fn() {
 			DHCPHARedundant.WithLabelValues(s.NodeID).Set(boolGauge(s.Redundant))
 			DHCPHAPromising.WithLabelValues(s.NodeID).Set(boolGauge(s.Promising))
+			DHCPHASequence.WithLabelValues(s.NodeID).Set(float64(s.Sequence))
+			DHCPHAAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.AcknowledgedSequence))
+			DHCPHAPeerAppliedSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedSequence))
+			DHCPHAFactsSequence.WithLabelValues(s.NodeID).Set(float64(s.FactsSequence))
+			DHCPHAFactsAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.FactsAcknowledgedSequence))
+			DHCPHAPeerAppliedFactsSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedFactsSequence))
+			lag := s.FactsSequence - s.PeerAppliedFactsSequence
+			if lag < 0 {
+				lag = 0
+			}
+			DHCPHAFactsReplicationLag.WithLabelValues(s.NodeID).Set(float64(lag))
 		}
 	}
 	if fn := secondaryZoneStatsFn; fn != nil {
@@ -936,6 +1032,17 @@ func sampleProviders() {
 			FactsConsumerLag.WithLabelValues(s.Domain).Set(float64(s.Lag))
 			FactsConsumerGap.WithLabelValues(s.Domain).Set(boolGauge(s.Gap))
 			FactsConsumerReadiness.WithLabelValues(s.Domain).Set(dataPlaneReadyValue(s.Readiness))
+		}
+	}
+	if fn := factsProducerStatsFn; fn != nil {
+		for _, s := range fn() {
+			if s.Domain == "" {
+				continue
+			}
+			FactsProducerPending.WithLabelValues(s.Domain).Set(float64(s.Pending))
+			FactsProducerFailed.WithLabelValues(s.Domain).Set(float64(s.Failed))
+			FactsProducerHeadSequence.WithLabelValues(s.Domain).Set(float64(s.HeadSequence))
+			FactsProducerFirstOutstandingSequence.WithLabelValues(s.Domain).Set(float64(s.FirstOutstandingSequence))
 		}
 	}
 	if fn := dataPlaneStatsFn; fn != nil {

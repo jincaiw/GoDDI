@@ -201,6 +201,17 @@ func CreateDHCPScope(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ipam.ErrDHCPScopePlanStale):
 			response.Conflict(w, err.Error())
 			return
+		case errors.Is(err, ipam.ErrDHCPScopePlanConflict):
+			var conflictErr *ipam.PlanConflictError
+			if errors.As(err, &conflictErr) {
+				response.ConflictWithData(w, err.Error(), map[string]interface{}{
+					"subnet_id": conflictErr.SubnetID,
+					"conflicts": conflictErr.Conflicts,
+				})
+			} else {
+				response.Conflict(w, err.Error())
+			}
+			return
 		default:
 			response.InternalErrorWithLog(w, "校验作用域计划失败", err)
 			return

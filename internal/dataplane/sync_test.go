@@ -86,6 +86,38 @@ func TestSyncCopiesConfigurationAndThenDoesNothing(t *testing.T) {
 	}
 }
 
+func TestSyncCarriesIPAMSpaceLookupAndTracksSubnetChanges(t *testing.T) {
+	control, store, rep := newPair(t)
+	if _, err := control.Exec(`INSERT INTO ipam_spaces(id, name) VALUES ('sp-a', 'A'), ('sp-b', 'B')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.Exec(`INSERT INTO ipam_subnets(id, space_id, name, cidr) VALUES ('sn-1', 'sp-a', 'lan', '192.0.2.0/24')`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := rep.Sync(context.Background(), DomainDHCP); err != nil || !res.Applied {
+		t.Fatalf("initial mapping sync = %+v, %v", res, err)
+	}
+	var spaceID, cidr string
+	if err := store.QueryRow(`SELECT space_id, cidr FROM ipam_subnets WHERE id='sn-1'`).Scan(&spaceID, &cidr); err != nil {
+		t.Fatal(err)
+	}
+	if spaceID != "sp-a" || cidr != "192.0.2.0/24" {
+		t.Fatalf("local mapping = %q %q", spaceID, cidr)
+	}
+	if _, err := control.Exec(`UPDATE ipam_subnets SET space_id='sp-b' WHERE id='sn-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := rep.Sync(context.Background(), DomainDHCP); err != nil || !res.Applied {
+		t.Fatalf("mapping change sync = %+v, %v", res, err)
+	}
+	if err := store.QueryRow(`SELECT space_id FROM ipam_subnets WHERE id='sn-1'`).Scan(&spaceID); err != nil {
+		t.Fatal(err)
+	}
+	if spaceID != "sp-b" {
+		t.Fatalf("updated local space = %q, want sp-b", spaceID)
+	}
+}
+
 func TestSyncPicksUpAChange(t *testing.T) {
 	control, store, rep := newPair(t)
 	ctx := context.Background()

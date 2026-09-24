@@ -250,7 +250,7 @@ func newLatencyWorld(t *testing.T) *latencyWorld {
 			},
 			Interval:    latencyInterval,
 			PushRecords: true,
-			OnApplied: func(d dataplane.Domain) {
+			OnApplied: func(d dataplane.Domain, _ []string) {
 				if d == dataplane.DomainDNS {
 					zoneStore.ReloadNow()
 				}

@@ -41,7 +41,7 @@
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAllocateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="allocating" @click="handleAllocate">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :loading="allocating" :disabled="!perm.canWrite('ipam')" @click="handleAllocate">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -122,7 +122,7 @@ const columns = [
         default: () => [
           h(NButton, { size: 'small', text: true, onClick: () => openDetail(row) }, { default: () => t('ipam.addresses.viewDetail') }),
           row.status === 'used'
-            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
+            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
             : null,
         ].filter(Boolean),
       }),
@@ -152,6 +152,7 @@ async function loadSubnets() {
 }
 
 async function handleAllocate() {
+  if (!perm.canWrite('ipam')) return
   allocating.value = true
   try {
     await allocateIP(allocateForm)
@@ -162,6 +163,7 @@ async function handleAllocate() {
 }
 
 async function handleRelease() {
+  if (!perm.canWrite('ipam')) return
   try { await releaseIP(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
   showReleaseConfirm.value = false
 }

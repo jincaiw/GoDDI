@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -194,6 +195,10 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 	if err != nil {
 		return fmt.Errorf("read zone: %w", err)
 	}
+	before, err := snapshotServedRRs(tx, id)
+	if err != nil {
+		return fmt.Errorf("snapshot zone records before release: %w", err)
+	}
 
 	if _, err := tx.Exec(
 		`DELETE FROM dns_records WHERE zone_id = ? AND authored_locally = 0`, id); err != nil {
@@ -215,16 +220,194 @@ func (*DNSRecordsAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 		if rowID == "" {
 			rowID = uuid.New().String()
 		}
+		name := zone.NormalizeRecordName(rec.Name, zoneName)
 		expiresAt, err := parseRecordInstant(rec.ExpiresAt)
 		if err != nil {
 			return fmt.Errorf("record %s: expires_at: %w", rec.Name, err)
 		}
+		live := rec.Enabled
+		if expiryText, ok := expiresAt.(string); ok {
+			if expiresAtTime, parseErr := time.Parse("2006-01-02 15:04:05", expiryText); parseErr == nil && !expiresAtTime.After(time.Now()) {
+				live = false
+			}
+		}
+		if live {
+			if err := zone.ValidateRRsetTTLTx(tx, id, name, rec.Type, rec.TTL, ""); err != nil {
+				return fmt.Errorf("record %s %s: %w", rec.Name, rec.Type, err)
+			}
+			if err := zone.ValidateCNAMEExclusivityTx(tx, id, name, rec.Type, rec.Value, ""); err != nil {
+				return fmt.Errorf("record %s %s: %w", rec.Name, rec.Type, err)
+			}
+		}
 		if _, err := stmt.Exec(
-			rowID, id, zone.NormalizeRecordName(rec.Name, zoneName), rec.Type, rec.Value,
+			rowID, id, name, rec.Type, rec.Value,
 			rec.TTL, intOrNil(rec.Priority), intOrNil(rec.Weight), intOrNil(rec.Port),
 			intOrNil(rec.Flag), rec.Enabled, rec.Comment, rec.Tags, rec.Owner, expiresAt,
 		); err != nil {
 			return fmt.Errorf("insert record %s %s: %w", rec.Name, rec.Type, err)
+		}
+	}
+	after, err := snapshotServedRRs(tx, id)
+	if err != nil {
+		return fmt.Errorf("snapshot zone records after release: %w", err)
+	}
+	if !sameServedRRs(before, after) {
+		serial, err := bumpZoneSerialForRelease(tx, id)
+		if err != nil {
+			return fmt.Errorf("bump zone serial after record release: %w", err)
+		}
+		if err := journalServedRRChangesForRelease(tx, id, serial, before, after); err != nil {
+			return fmt.Errorf("journal zone record release: %w", err)
+		}
+		soaState, err := zone.ReadSOAHistoryStateTx(tx, id)
+		if err != nil {
+			return fmt.Errorf("read updated SOA after record release: %w", err)
+		}
+		if err := zone.LogSOARecordTx(tx, id, serial, "add", soaState); err != nil {
+			return fmt.Errorf("journal updated SOA after record release: %w", err)
+		}
+	}
+	return nil
+}
+
+type servedRR struct {
+	name, rtype, value string
+	ttl                int
+	priority, weight   int64
+	port, flag         int64
+	tag                string
+}
+
+func snapshotServedRRs(tx *sql.Tx, zoneID string) ([]servedRR, error) {
+	rows, err := tx.Query(`
+		SELECT name, type, value, ttl, COALESCE(priority, 0), COALESCE(weight, 0),
+			COALESCE(port, 0), COALESCE(flag, 0), COALESCE(tag, '')
+		FROM dns_records WHERE zone_id = ? AND enabled = 1`, zoneID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []servedRR
+	for rows.Next() {
+		var rr servedRR
+		if err := rows.Scan(&rr.name, &rr.rtype, &rr.value, &rr.ttl, &rr.priority, &rr.weight,
+			&rr.port, &rr.flag, &rr.tag); err != nil {
+			return nil, err
+		}
+		records = append(records, rr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].name != records[j].name {
+			return records[i].name < records[j].name
+		}
+		if records[i].rtype != records[j].rtype {
+			return records[i].rtype < records[j].rtype
+		}
+		if records[i].value != records[j].value {
+			return records[i].value < records[j].value
+		}
+		if records[i].ttl != records[j].ttl {
+			return records[i].ttl < records[j].ttl
+		}
+		if records[i].priority != records[j].priority {
+			return records[i].priority < records[j].priority
+		}
+		if records[i].weight != records[j].weight {
+			return records[i].weight < records[j].weight
+		}
+		if records[i].port != records[j].port {
+			return records[i].port < records[j].port
+		}
+		if records[i].flag != records[j].flag {
+			return records[i].flag < records[j].flag
+		}
+		return records[i].tag < records[j].tag
+	})
+	return records, nil
+}
+
+func sameServedRRs(a, b []servedRR) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func bumpZoneSerialForRelease(tx *sql.Tx, zoneID string) (uint32, error) {
+	beforeSOA, err := zone.ReadSOAHistoryStateTx(tx, zoneID)
+	if err != nil {
+		return 0, err
+	}
+	return bumpZoneSerialForReleaseWithBefore(tx, zoneID, beforeSOA)
+}
+
+func bumpZoneSerialForReleaseWithBefore(tx *sql.Tx, zoneID string, beforeSOA zone.SOAHistoryState) (uint32, error) {
+	current := beforeSOA.Serial
+	next := zone.NextSerial(current)
+	res, err := tx.Exec(`UPDATE dns_zones SET serial = ?, updated_at = datetime('now') WHERE id = ? AND serial = ?`, next, zoneID, current)
+	if err != nil {
+		return 0, err
+	}
+	if affected, err := res.RowsAffected(); err != nil {
+		return 0, err
+	} else if affected != 1 {
+		return 0, fmt.Errorf("zone serial changed concurrently")
+	}
+	if err := zone.LogSOARecordTx(tx, zoneID, next, "delete", beforeSOA); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+// journalServedRRChangesForRelease records the multiset difference between
+// the records served before and after a config release. The journal shares the
+// release transaction, so a secondary can never observe a serial without its
+// record changes (or changes without the matching serial).
+func journalServedRRChangesForRelease(tx *sql.Tx, zoneID string, serial uint32, before, after []servedRR) error {
+	remaining := make(map[servedRR]int, len(after))
+	for _, rr := range after {
+		remaining[rr]++
+	}
+	var deleted, added []servedRR
+	for _, rr := range before {
+		if remaining[rr] > 0 {
+			remaining[rr]--
+		} else {
+			deleted = append(deleted, rr)
+		}
+	}
+	remaining = make(map[servedRR]int, len(before))
+	for _, rr := range before {
+		remaining[rr]++
+	}
+	for _, rr := range after {
+		if remaining[rr] > 0 {
+			remaining[rr]--
+		} else {
+			added = append(added, rr)
+		}
+	}
+	for _, change := range []struct {
+		kind    string
+		records []servedRR
+	}{{"delete", deleted}, {"add", added}} {
+		for _, rr := range change.records {
+			if _, err := tx.Exec(`
+				INSERT INTO dns_zone_changes
+					(id, zone_id, serial, change_type, name, type, value, ttl, priority, weight, port, flag, tag)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, uuid.New().String(), zoneID, serial, change.kind, rr.name, rr.rtype, rr.value,
+				rr.ttl, rr.priority, rr.weight, rr.port, rr.flag, rr.tag); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -240,7 +240,7 @@
           <n-button
             type="warning"
             :loading="rollbackLoading"
-            :disabled="rollbackBaselineLoading"
+            :disabled="!writeAllowed || rollbackBaselineLoading"
             @click="submitRollback"
           >
             {{ t('settings.configVersions.rollbackConfirm') }}
@@ -739,6 +739,7 @@ const rollbackBaselineLoading = ref(false)
  * did you think was current", so it is what this resource is at now.
  */
 async function openRollback(row: ConfigRevision) {
+  if (!canWrite('settings')) return
   rollbackRow.value = row
   rollbackExpected.value = row.revision
   rollbackNote.value = ''
@@ -765,6 +766,7 @@ async function openRollback(row: ConfigRevision) {
 }
 
 async function submitRollback() {
+  if (!canWrite('settings')) return
   const row = rollbackRow.value
   if (!row) return
   rollbackLoading.value = true
@@ -823,6 +825,7 @@ async function loadQueue() {
 }
 
 async function retryFailed(scoped?: ConfigRelease) {
+  if (!canWrite('settings')) return
   retrying.value = true
   try {
     const res = await retryConfigReleases(
