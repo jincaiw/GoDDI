@@ -262,7 +262,7 @@ W12-a/W12-c 隔离式 restore 演练通过。实现提交 `8641d20` 和当前代
 - 地址无法映射到本地 IPAM space 时，DHCP 操作沿用现有 lease 路径，到期仍会清理租约；不会伪造 facts。映射数据库出现其他错误时，单次 facts mutation 回滚并返回错误。
 - 非 HA 控制进程默认启动 IPAM facts consumer；投影、水位推进与 inbox 完成同事务，消费失败保留待处理事件并反映在 `/ready` 与 Prometheus。已映射地址不再同步双写 IPAM；无本地映射时继续使用原观察路径，避免丢掉既有的可见性。
 - 定向回归覆盖首次传输、远端已消费后的崩溃重放、远端消费状态不被覆盖、sequence 冲突保留重试、IPAM 映射同步和最具体网段选择、事实绑定原子提交、REQUEST/RELEASE 路由、unmapped expiry，以及分离的 DHCP/控制库到 IPAM 投影端到端路径。当前 `go test ./...` 全量通过。
-- HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管。**2026-09-24 更新**：HA protocol v2 已加入 lease/facts 双水位和分块 facts 快照；primary 在单一只读事务中读取 lease rows、facts outbox 与 allocator 水位，standby staging 后校验 manifest 并在同一事务联合应用。facts applied watermark 已随确认返回，坏 manifest 集成回归确认不会替换租约；HA/facts 定向测试、vet 和 staging migration 检查通过。仍未将 DHCP mutation identity/sequence 纳入 lease REQUEST/续租 ACK gate，takeover/rejoin 尚无 facts gap 接受与审计语义，HA facts producer 仍关闭。故 W04/W09 和版本发布门槛保持未完成；控制库分离故障恢复、自动化故障矩阵及真实双主机网络演练仍待完成。
+- HA 部署继续使用原 IPAM 观察路径，facts 生产者/消费者暂不接管。**2026-09-24 更新**：HA protocol v2 已加入 lease/facts 双水位和分块 facts 快照；primary 在单一只读事务中读取 lease rows、facts outbox 与 allocator 水位，standby staging 后校验 manifest 并在同一事务联合应用。facts applied watermark 已随确认返回，坏 manifest 集成回归确认不会替换租约；takeover 现报告 facts gap，并在 facts 缺口非零时 fail closed，因为跳过 sequence 会令后续快照传输 fail closed。HA/facts 定向测试、vet 和 staging migration 检查通过。仍未将 DHCP mutation identity/sequence 纳入 lease REQUEST/续租 ACK gate，promoted primary 也未装配 HA facts producer。故 W04/W09 和版本发布门槛保持未完成；控制库分离故障恢复、自动化故障矩阵及真实双主机网络演练仍待完成。
 
 ### W01 配置发布写路径补齐（2026-09-24，阶段记录）
 

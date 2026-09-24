@@ -298,12 +298,13 @@ func main() {
 			"  --old-primary-cannot-write the node that was primary has been stopped, disconnected\n" +
 			"                            or fenced. A dead primary and a partitioned one are both\n" +
 			"                            silent to this node, so only a person can tell them apart;\n" +
-			"  --accept-gap <n>          the exact number of changes the primary handed out that this\n" +
+			"  --accept-gap <n>          the exact number of lease changes the primary handed out that this\n" +
 			"                            node does not hold, when there are any. A binding is\n" +
 			"                            acknowledged only once the standby has applied it, so those\n" +
 			"                            changes were never acknowledged -- but the number says how\n" +
 			"                            far the two nodes had drifted, and it has to be read before\n" +
 			"                            it is accepted.\n" +
+			"  facts gap                cannot be accepted: restore the missing snapshot first.\n" +
 			"The promotion takes effect at the next start. A standby runs no DHCP server, so that\n" +
 			"is not an interruption of anything being served: it is the start of one.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -2793,6 +2794,9 @@ func runHAStatus(configPath string, asJSON bool) error {
 		fmt.Printf("  applied sequence: %d\n", status.AppliedSeq)
 		fmt.Printf("  primary sequence: %d (heard %s)\n", status.PeerSeq, haAge(status.PeerSeqAt))
 		fmt.Printf("  shortfall:        %d\n", status.Gap)
+		fmt.Printf("  facts applied:    %d\n", status.FactsAppliedSeq)
+		fmt.Printf("  primary facts:    %d\n", status.PeerFactsSeq)
+		fmt.Printf("  facts shortfall:  %d\n", status.FactsGap)
 	}
 	if status.Degraded {
 		fmt.Printf("  permission:       running without a second copy, since %s\n", status.DegradedAt.Format(time.RFC3339))
@@ -2881,6 +2885,7 @@ func runHATakeover(configPath string, confirm, oldStopped bool, acceptGap int64)
 	fmt.Printf("goddi ha takeover: %s is now the primary\n", node.Config.NodeID)
 	fmt.Printf("  held before:        %d\n", out.AppliedSeq)
 	fmt.Printf("  the primary reached %d, shortfall %d\n", out.PeerSeq, out.Gap)
+	fmt.Printf("  facts watermark:     %d of %d, shortfall %d\n", out.FactsAppliedSeq, out.PeerFactsSeq, out.FactsGap)
 	fmt.Printf("  sequence resumes:   %d\n", out.Seq)
 	fmt.Println()
 	fmt.Println("  It starts as primary-degraded: a promotion comes with the permission to serve")

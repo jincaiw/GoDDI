@@ -394,6 +394,27 @@ func TestAShortfallMustBeNamedToBeAccepted(t *testing.T) {
 	}
 }
 
+func TestFactsShortfallMustBeNamedToBeAccepted(t *testing.T) {
+	store := openStore(t, "facts-gap-standby")
+	cfg := testConfig(t, "standby")
+	setMetaText(store.DB, metaAppliedSeq, "7")
+	setMetaText(store.DB, metaPeerSeq, "7")
+	setMetaText(store.DB, metaFactsAppliedSeq, "2")
+	setMetaText(store.DB, metaPeerFactsSeq, "5")
+	setMetaText(store.DB, metaPeerSeqAt, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano))
+	op := NewOperator(cfg, store)
+	out, err := op.Takeover(TakeoverOptions{Confirmed: true, OldPrimaryCannotWrite: true})
+	if !errors.Is(err, ErrUnexplainedFactsGap) {
+		t.Fatalf("Takeover with an unaccepted facts shortfall = %v, want ErrUnexplainedFactsGap", err)
+	}
+	if out.FactsGap != 3 || out.FactsAppliedSeq != 2 || out.PeerFactsSeq != 5 {
+		t.Fatalf("refusal reported applied=%d peer=%d gap=%d, want 2/5/3", out.FactsAppliedSeq, out.PeerFactsSeq, out.FactsGap)
+	}
+	if role, _ := EffectiveRole(cfg, store); role != config.HARoleStandby {
+		t.Fatalf("facts-gap refusal changed role to %q", role)
+	}
+}
+
 // TestAShortfallIsOnlyReportedWhereItMeansSomething pins the role the figure
 // is computed on.
 //

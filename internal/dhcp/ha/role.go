@@ -92,7 +92,8 @@ var (
 	ErrPeerStillAnswering = errors.New("ha: the primary is still answering")
 	// ErrUnexplainedGap means this node does not hold everything the primary
 	// handed out, and the gap was not accepted by its exact size.
-	ErrUnexplainedGap = errors.New("ha: this node does not hold every change the primary handed out")
+	ErrUnexplainedGap      = errors.New("ha: this node does not hold every change the primary handed out")
+	ErrUnexplainedFactsGap = errors.New("ha: this node does not hold every facts event the primary reached")
 	// ErrWrongRole means this node is not in the role the action applies to.
 	ErrWrongRole = errors.New("ha: this node is not in the role that action applies to")
 	// ErrNotFenced means a rejoin was asked for on a node that is not fenced.
@@ -181,7 +182,10 @@ type Status struct {
 	// by the promotion itself, would be reported as a shortfall of everything
 	// the peer had ever handed out, permanently. A number that describes
 	// nothing is worse than no number, so it is zero off a standby.
-	Gap int64 `json:"gap"`
+	Gap             int64 `json:"gap"`
+	FactsAppliedSeq int64 `json:"facts_applied_seq"`
+	PeerFactsSeq    int64 `json:"peer_facts_seq"`
+	FactsGap        int64 `json:"facts_gap"`
 	// AcceptedGap is the shortfall this node's promotion accepted, and zero on
 	// a node that has never been promoted.
 	//
@@ -237,6 +241,12 @@ func (o *Operator) Status() (Status, error) {
 	if st.PeerSeq, err = readWatermark(o.store.DB, metaPeerSeq); err != nil {
 		return Status{}, err
 	}
+	if st.FactsAppliedSeq, err = readWatermark(o.store.DB, metaFactsAppliedSeq); err != nil {
+		return Status{}, err
+	}
+	if st.PeerFactsSeq, err = readWatermark(o.store.DB, metaPeerFactsSeq); err != nil {
+		return Status{}, err
+	}
 
 	var marker string
 	if marker, err = o.store.Meta(metaDegraded); err != nil {
@@ -265,6 +275,9 @@ func (o *Operator) Status() (Status, error) {
 	if role == config.HARoleStandby {
 		if st.Gap = st.PeerSeq - st.AppliedSeq; st.Gap < 0 {
 			st.Gap = 0
+		}
+		if st.FactsGap = st.PeerFactsSeq - st.FactsAppliedSeq; st.FactsGap < 0 {
+			st.FactsGap = 0
 		}
 	}
 	// The applied watermark is cleared by a promotion, so this figure -- not
@@ -391,9 +404,12 @@ type TakeoverOptions struct {
 type TakeoverOutcome struct {
 	// AppliedSeq is what this node held, PeerSeq what the primary had reported,
 	// and Gap the difference.
-	AppliedSeq int64
-	PeerSeq    int64
-	Gap        int64
+	AppliedSeq      int64
+	PeerSeq         int64
+	Gap             int64
+	FactsAppliedSeq int64
+	PeerFactsSeq    int64
+	FactsGap        int64
 	// PeerSeqAt is when the primary last said anything. It is the evidence
 	// behind "the primary is still answering" when this call refuses.
 	PeerSeqAt time.Time
@@ -435,8 +451,17 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 	if out.PeerSeqAt, err = o.timestamp(metaPeerSeqAt); err != nil {
 		return out, err
 	}
+	if out.FactsAppliedSeq, err = readWatermark(o.store.DB, metaFactsAppliedSeq); err != nil {
+		return out, err
+	}
+	if out.PeerFactsSeq, err = readWatermark(o.store.DB, metaPeerFactsSeq); err != nil {
+		return out, err
+	}
 	if out.Gap = out.PeerSeq - out.AppliedSeq; out.Gap < 0 {
 		out.Gap = 0
+	}
+	if out.FactsGap = out.PeerFactsSeq - out.FactsAppliedSeq; out.FactsGap < 0 {
+		out.FactsGap = 0
 	}
 
 	// A primary that answered within the quiet window is alive, and two writers
@@ -456,6 +481,10 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 	if out.Gap > 0 && opts.AcceptGap != out.Gap {
 		return out, fmt.Errorf("%w: the primary reached sequence %d and this node holds %d, so %d changes are missing; re-run with --accept-gap %d if that is understood",
 			ErrUnexplainedGap, out.PeerSeq, out.AppliedSeq, out.Gap, out.Gap)
+	}
+	if out.FactsGap > 0 {
+		return out, fmt.Errorf("%w: the primary facts sequence reached %d and this node holds %d, so %d events are missing; restore the missing facts snapshot before takeover",
+			ErrUnexplainedFactsGap, out.PeerFactsSeq, out.FactsAppliedSeq, out.FactsGap)
 	}
 
 	tx, err := o.store.Begin()
@@ -531,9 +560,9 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 	}
 
 	o.audit(auditlog.ActionHATakeover,
-		fmt.Sprintf("promoted to primary: applied_seq %d, primary_seq %d, gap %d, resuming at seq %d",
-			out.AppliedSeq, out.PeerSeq, out.Gap, out.Seq),
-		fmt.Sprintf("applied_seq=%d primary_seq=%d", out.AppliedSeq, out.PeerSeq),
+		fmt.Sprintf("promoted to primary: applied_seq %d, primary_seq %d, gap %d, facts_applied_seq %d, peer_facts_seq %d, facts_gap %d, resuming at seq %d",
+			out.AppliedSeq, out.PeerSeq, out.Gap, out.FactsAppliedSeq, out.PeerFactsSeq, out.FactsGap, out.Seq),
+		fmt.Sprintf("applied_seq=%d primary_seq=%d facts_applied_seq=%d peer_facts_seq=%d", out.AppliedSeq, out.PeerSeq, out.FactsAppliedSeq, out.PeerFactsSeq),
 		fmt.Sprintf("role=primary seq=%d serving_without_a_second_copy=true", out.Seq))
 	return out, nil
 }
