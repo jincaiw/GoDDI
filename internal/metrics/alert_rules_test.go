@@ -231,10 +231,11 @@ func TestTheKeySignalsAreAlertedOn(t *testing.T) {
 		"goddi_dhcp_ha_promising",                                     // a node that stopped handing out addresses
 		"goddi_dhcp_ha_sequence",                                      // a primary's applied send watermark
 		"goddi_dhcp_ha_acknowledged_sequence",                         // the primary's durable mirror acknowledgement
-		"goddi_facts_consumer_gap",                                     // a projection that stopped at a missing sequence
-		"goddi_facts_consumer_failed",                                  // an event retained after projection failure
-		"goddi_facts_producer_failed",                                  // an event retained after delivery failure
-		"goddi_facts_producer_pending",                                 // facts that remain in the local delivery queue
+		"goddi_dhcp_ha_facts_replication_lag",                         // facts not yet durably applied at the standby
+		"goddi_facts_consumer_gap",                                    // a projection that stopped at a missing sequence
+		"goddi_facts_consumer_failed",                                 // an event retained after projection failure
+		"goddi_facts_producer_failed",                                 // an event retained after delivery failure
+		"goddi_facts_producer_pending",                                // facts that remain in the local delivery queue
 		"goddi_db_errors_total",                                       // the counter that had no producer
 		"goddi_dns_secondary_zone_sync_failures",                      // secondary refresh health
 		"goddi_backup_last_success_timestamp_seconds",                 // backup age

@@ -1617,7 +1617,16 @@ func runServer(configPath string) error {
 			if haRepl != nil {
 				sample.Sequence = haRepl.Seq()
 				sample.AcknowledgedSequence = haRepl.AckedSeq()
-				sample.PeerAppliedSequence = haRepl.PeerWatermarks().AppliedSeq
+				peer := haRepl.PeerWatermarks()
+				sample.PeerAppliedSequence = peer.AppliedSeq
+				sample.PeerAppliedFactsSequence = peer.FactsAppliedSeq
+				sample.FactsAcknowledgedSequence = haRepl.FactsAckedSeq()
+				factsSequence, err := haRepl.FactsSequence()
+				if err != nil {
+					slog.Warn("metrics: could not read DHCP HA facts sequence", "error", err)
+					return nil
+				}
+				sample.FactsSequence = factsSequence
 			}
 			return []metrics.DHCPHASample{sample}
 		})

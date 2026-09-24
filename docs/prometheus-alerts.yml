@@ -160,6 +160,15 @@ groups:
           summary: "DHCP HA 备端确认水位落后"
           description: "node {{ $labels.node_id }} 的租约复制水位持续落后超过 2 分钟。检查主备链路、备端磁盘和 `/ready` 的 HA 状态；在确认水位追平前，不得将备端作为完整副本使用。"
 
+      - alert: GoDDIDHCPHAFactsMirrorBehind
+        expr: goddi_dhcp_ha_facts_replication_lag > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP HA facts 备端应用水位落后"
+          description: "node {{ $labels.node_id }} 的事实事件复制水位持续落后超过 2 分钟。REQUEST/续租 ACK 会受双水位 gate 保护；检查 facts delta 链路、备端数据库和 `/ready`，恢复前不要将备端视作 IPAM facts 完整副本。"
+
   # facts 系列只在相应 producer/consumer 已装配的进程上出现。缺席表示
   # 此进程没有承担该角色，不能用 absent() 将未启用功能误报为故障。
   - name: goddi-facts

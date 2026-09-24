@@ -81,6 +81,20 @@ func (h *linkHealth) touch() {
 	h.lastSeen = time.Now()
 }
 
+// updateApplied advances the peer watermarks from a durable confirmation.
+// Handshake values are only a starting point; ACK frames carry the live
+// applied watermarks and must be reflected in status and metrics.
+func (h *linkHealth) updateApplied(leaseSeq, factsSeq int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if leaseSeq > h.peer.AppliedSeq {
+		h.peer.AppliedSeq = leaseSeq
+	}
+	if factsSeq > h.peer.FactsAppliedSeq {
+		h.peer.FactsAppliedSeq = factsSeq
+	}
+}
+
 func (h *linkHealth) markDown() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

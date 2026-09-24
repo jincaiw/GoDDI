@@ -74,7 +74,7 @@ v1.1 的 v0.6—v1.0 阶段次序可作骨架，但应以能力与证据退出�
 | W08 DNS HA | secondary 周期刷新、EXPIRE 与健康状态已有代码 | 双 DNS 地址/策略同步、客户端切换和真实节点断连恢复 |
 | W09 DHCP HA | 单写复制水位、显式 takeover/fence/rejoin 机制存在；当前不自动 promote；HA lease/facts 双水位协议与 ACK gate 已实现 | promoted primary/旧主回归对账、生产 fencing 和网络分区验收；未完成前不能宣称 HA GA |
 | W10 安全/备份 | 加密备份、restore 版本/schema 门禁和全状态归档已有实现 | 密钥异机保存/找回、真实权限/TSIG 恢复、硬件断电持久性 |
-| W11 可观测性 | facts consumer gap/失败、producer backlog/失败、HA 确认落后及备份年龄指标已接线；facts/HA 关键状态已有随仓告警规则与指标存在性守卫 | 正式 Prometheus 抓取、按部署调整阈值、告警路由/恢复动作与触发演练 |
+| W11 可观测性 | facts consumer gap/失败、producer backlog/失败、HA lease/facts ACK 与 peer-applied 水位、facts replication lag 和备份年龄指标已接线；关键规则有指标存在性守卫 | 正式 Prometheus 抓取、按部署调整阈值、告警路由/恢复动作与触发演练 |
 | W12 升级/灾备 | 在线 WAL 原地 restore 与空白异路径整机恢复 smoke 均通过 | 逐节点升级、expand-contract 兼容性、现场密钥及介质恢复 |
 | W13 产品体验 | IP 地址详情抽屉、子网导入与建池向导、DNS CSV/BIND 预检导入均已有实现；建池冲突服务端闸门和跨模块详情权限隔离已接通；DNS、DHCP、IPAM、RBAC、备份、系统配置和 token 页面操作入口及处理器已完成静态权限逐项核对；只读 UI 场景覆盖九类资源页面、关键 RBAC 按钮及九类写入拒绝；API 浏览器回归覆盖九类单资源读取隔离、双角色权限并集和受限管理员的 user/role/group 授权工作流；本地真实服务用例通过 | 最新提交 CI 待完成；授权写入流程覆盖 API 工作流，未覆盖每个管理对话框的 UI 点击路径 |
 | W14 容量认证 | 当前无固定硬件/混合负载容量结论 | 固定硬件、负载、故障矩阵和长稳实测；未测数字不对外承诺 |
@@ -108,7 +108,7 @@ W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `b
 - W05 复核最新版已有的 revision、expected version、幂等和发布 outbox；仅补仍缺失的多节点 applied 确认和失败保留 LKG。
 - W06 逐项核对 space 唯一性、CAS、导入预检与多 DNS 关联，按代码/回归证据补缺，不重建已有能力。
 - W07 审查三角色和启动恢复实现；验证坏快照、旧 schema、磁盘故障、控制进程退出及 DHCP 本地租约库恢复。
-- W11 对账现有 metrics/ready，再补 facts producer outstanding、HA 复制确认/peer applied 水位和真实告警阈值；consumer gap/失败、备份年龄已有对应系列，仍需核对部署抓取与告警规则。
+- W11 的 facts producer outstanding、HA lease/facts durable ACK 与 peer-applied 水位及 facts lag gauge 已接线并由规则告警；仍需在目标部署验证 Prometheus 抓取、阈值、告警路由和恢复动作。
 
 退出条件：并发分配唯一；配置失败保留最后有效版本；控制面退出不改变健康数据面状态；租约库异常时不发送无持久保护的新成功 ACK。
 
@@ -297,7 +297,7 @@ W12-a/W12-c 隔离式 restore 演练通过。历史实现提交 `8641d20` 和 `b
 - DHCP facts outbox 增加低基数 Prometheus 样本：pending/failed 数、已分配最高 sequence、首个未完成 sequence。非 HA 节点与 HA primary 注册 producer 样本；查询带 2 秒超时，读取失败只记告警，不伪造零水位。
 - 指标能区分“控制端 consumer 已追平”与“DHCP 生产 outbox 尚未送达”，也能直接暴露失败事件阻塞点；事件 ID、错误文本不作为标签。
 - `docs/prometheus-alerts.yml` 现包含 consumer gap/保留失败、producer 保留失败/持续积压和 HA 确认水位落后规则；`TestTheKeySignalsAreAlertedOn` 钉住这些指标仍被告警引用，`TestEveryAlertedMetricExists` 检查所有表达式中的 GoDDI 指标有注册及生产者。
-- `go test ./internal/metrics` 通过。备份年龄已有系列；正式抓取、阈值调整、告警路由/恢复动作和真实触发仍需部署验收。facts producer 样本现包含 HA primary，但 facts ACK/applied 差值的独立 Prometheus gauge 和正式告警阈值仍待补齐。
+- `go test ./internal/metrics` 通过。备份年龄已有系列；HA primary 样本报告 facts allocator head、durable ACK、最新 peer-applied 水位，并输出 `goddi_dhcp_ha_facts_replication_lag`；该 lag 信号已加到告警规则及指标存在性测试。正式抓取、阈值调整、告警路由/恢复动作和真实触发仍需部署验收。
 - primary HA replication gauges 报告 lease 本机 sequence、mirror durable ACK sequence 和 peer applied sequence，并以 `node_id` 区分。facts 同样具有独立 durable watermark 与 takeover gap 报告；HA 实网触发与恢复对账尚待演练。
 
 ### W06 DNS owner 名规范化与 catalog 冲突修复（2026-09-24，代码完成）

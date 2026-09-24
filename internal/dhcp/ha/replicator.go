@@ -164,6 +164,11 @@ func (r *Replicator) FactsAckedSeq() int64 {
 	return r.factsAcked
 }
 
+// FactsSequence reports the durable local facts allocator high water.
+func (r *Replicator) FactsSequence() (int64, error) {
+	return r.currentFactsSequence()
+}
+
 func (r *Replicator) currentFactsSequence() (int64, error) {
 	allocator, err := facts.NewSequenceAllocator(r.store.DB)
 	if err != nil {
@@ -545,6 +550,7 @@ func (r *Replicator) handleFrame(f Frame) error {
 		if f.FactsSeq > factsSeq {
 			return fmt.Errorf("ha: mirror confirmed facts sequence %d beyond primary sequence %d", f.FactsSeq, factsSeq)
 		}
+		r.link.updateApplied(f.Seq, f.FactsSeq)
 		r.noteConfirmed(f.Seq, f.FactsSeq, factsSeq)
 		return nil
 	case FrameHello:

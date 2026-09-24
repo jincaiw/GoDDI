@@ -523,6 +523,17 @@ func TestFactsAcknowledgementClearsInFlightDelta(t *testing.T) {
 	}
 }
 
+func TestLiveAcknowledgementUpdatesPeerWatermarksMonotonically(t *testing.T) {
+	link := &linkHealth{}
+	link.markUp(Watermarks{AppliedSeq: 2, FactsAppliedSeq: 3})
+	link.updateApplied(7, 9)
+	link.updateApplied(6, 8)
+	_, _, got := link.snapshot()
+	if got.AppliedSeq != 7 || got.FactsAppliedSeq != 9 {
+		t.Fatalf("peer applied watermarks after ACKs = lease %d facts %d; want 7/9", got.AppliedSeq, got.FactsAppliedSeq)
+	}
+}
+
 func TestInvalidFactsManifestDoesNotReplaceMirrorLeases(t *testing.T) {
 	store := openStore(t, "manifest-mirror")
 	insertLease(t, store, "existing", "192.0.2.10", "02:00:00:00:00:10", "active")

@@ -195,6 +195,22 @@ var (
 		Name: "goddi_dhcp_ha_peer_applied_sequence",
 		Help: "Highest lease replication sequence the primary most recently observed applied by its standby.",
 	}, []string{"node_id"})
+	DHCPHAFactsSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_sequence",
+		Help: "Highest DHCP IPAM facts sequence durably produced by this primary.",
+	}, []string{"node_id"})
+	DHCPHAFactsAcknowledgedSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_acknowledged_sequence",
+		Help: "Highest DHCP IPAM facts sequence durably acknowledged by the standby.",
+	}, []string{"node_id"})
+	DHCPHAPeerAppliedFactsSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_applied_facts_sequence",
+		Help: "Highest DHCP IPAM facts sequence the primary most recently observed applied by its standby.",
+	}, []string{"node_id"})
+	DHCPHAFactsReplicationLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_facts_replication_lag",
+		Help: "Difference between the primary's durable DHCP IPAM facts sequence and its standby's applied sequence.",
+	}, []string{"node_id"})
 
 	DHCPRequestsInflight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_requests_inflight",
@@ -541,6 +557,12 @@ type DHCPHASample struct {
 	AcknowledgedSequence int64
 	// PeerAppliedSequence is the last applied watermark reported by the standby.
 	PeerAppliedSequence int64
+	// FactsSequence is the primary's durable facts allocator high water.
+	FactsSequence int64
+	// FactsAcknowledgedSequence is the facts high water durably acknowledged by the standby.
+	FactsAcknowledgedSequence int64
+	// PeerAppliedFactsSequence is the latest applied facts watermark reported by the standby.
+	PeerAppliedFactsSequence int64
 }
 
 // SecondaryZoneSample is one secondary zone's refresh health.
@@ -861,6 +883,10 @@ func InitMetrics() {
 			DHCPHASequence,
 			DHCPHAAcknowledgedSequence,
 			DHCPHAPeerAppliedSequence,
+			DHCPHAFactsSequence,
+			DHCPHAFactsAcknowledgedSequence,
+			DHCPHAPeerAppliedFactsSequence,
+			DHCPHAFactsReplicationLag,
 			DHCPRequestsInflight,
 			DHCPRequestQueueDepth,
 			DHCPRequestQueueCapacity,
@@ -977,6 +1003,14 @@ func sampleProviders() {
 			DHCPHASequence.WithLabelValues(s.NodeID).Set(float64(s.Sequence))
 			DHCPHAAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.AcknowledgedSequence))
 			DHCPHAPeerAppliedSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedSequence))
+			DHCPHAFactsSequence.WithLabelValues(s.NodeID).Set(float64(s.FactsSequence))
+			DHCPHAFactsAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.FactsAcknowledgedSequence))
+			DHCPHAPeerAppliedFactsSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedFactsSequence))
+			lag := s.FactsSequence - s.PeerAppliedFactsSequence
+			if lag < 0 {
+				lag = 0
+			}
+			DHCPHAFactsReplicationLag.WithLabelValues(s.NodeID).Set(float64(lag))
 		}
 	}
 	if fn := secondaryZoneStatsFn; fn != nil {
