@@ -79,6 +79,9 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 		if event.Envelope.Sequence != expected {
 			return fmt.Errorf("%w: expected=%d got=%d", ErrReplicaSequenceGap, expected, event.Envelope.Sequence)
 		}
+		if err := validateReplicaEvent(event); err != nil {
+			return err
+		}
 		encoded, err := json.Marshal(event)
 		if err != nil {
 			return fmt.Errorf("facts: encode replica event %s: %w", event.Envelope.EventID, err)
@@ -111,6 +114,19 @@ func (a *ReplicaSnapshotAccumulator) AddPage(page ReplicaPage) error {
 	return nil
 }
 
+func validateReplicaEvent(event ReplicaEvent) error {
+	if err := event.Envelope.Validate(); err != nil {
+		return err
+	}
+	if event.Attempts < 0 || event.NextAttemptAt == "" || !validReplicaEventStatus(event.Status) ||
+		(event.Status == ReplicaEventDone && event.Delivery != nil) ||
+		(event.Status != ReplicaEventDone && event.Delivery == nil) ||
+		(event.Delivery != nil && (event.Delivery.QueuedAt == "" || event.Delivery.Attempts < 0)) {
+		return fmt.Errorf("facts: invalid replica delivery state for event %s", event.Envelope.EventID)
+	}
+	return nil
+}
+
 // AddChunk checks the declared chunk index and sequence range before adding
 // its events to the snapshot digest.
 func (a *ReplicaSnapshotAccumulator) AddChunk(chunk ReplicaSnapshotChunk) error {
@@ -119,6 +135,9 @@ func (a *ReplicaSnapshotAccumulator) AddChunk(chunk ReplicaSnapshotChunk) error 
 	}
 	if len(chunk.Events) == 0 {
 		return errors.New("facts: replica snapshot chunk is empty")
+	}
+	if len(chunk.Events) > maxReplicaPageEvents {
+		return errors.New("facts: replica snapshot chunk exceeds event limit")
 	}
 	if chunk.Index != a.chunkCount {
 		return fmt.Errorf("facts: replica snapshot chunk index=%d expected=%d", chunk.Index, a.chunkCount)

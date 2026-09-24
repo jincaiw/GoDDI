@@ -132,17 +132,11 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 				item.Delivery.NextAttemptAt = &next
 			}
 		}
-		if err := item.Envelope.Validate(); err != nil {
-			return ReplicaPage{}, err
-		}
 		if item.Envelope.Sequence != expected {
 			return ReplicaPage{}, fmt.Errorf("%w: expected=%d got=%d", ErrReplicaSequenceGap, expected, item.Envelope.Sequence)
 		}
-		if item.Attempts < 0 || item.NextAttemptAt == "" || !validReplicaEventStatus(item.Status) ||
-			(item.Status == ReplicaEventDone && item.Delivery != nil) ||
-			(item.Status != ReplicaEventDone && item.Delivery == nil) ||
-			(item.Delivery != nil && (item.Delivery.QueuedAt == "" || item.Delivery.Attempts < 0)) {
-			return ReplicaPage{}, fmt.Errorf("facts: invalid replica delivery state for event %s", item.Envelope.EventID)
+		if err := validateReplicaEvent(item); err != nil {
+			return ReplicaPage{}, err
 		}
 		page.Events = append(page.Events, item)
 		page.NextAfter = item.Envelope.Sequence
