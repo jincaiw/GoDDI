@@ -391,6 +391,70 @@ func TestSnapshotCopiesFactsOutboxAndConfirmsItsWatermark(t *testing.T) {
 	}
 }
 
+func TestFactsProducedDuringDisconnectAreRestoredOnMirrorReconnect(t *testing.T) {
+	primaryStore := openStore(t, "reconnect-facts-primary")
+	primary, _ := startPrimary(t, primaryStore)
+	mirrorStore := openStore(t, "reconnect-facts-mirror")
+	mirrorCfg := testConfig(t, "standby")
+	mirrorCfg.NodeID = "reconnect-facts-mirror"
+	mirrorCfg.PeerAddress = primary.Addr().String()
+	firstMirror, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, stopFirst := context.WithCancel(context.Background())
+	go func() { _ = firstMirror.Run(firstCtx) }()
+	waitFor(t, "initial facts snapshot", func() bool { return primary.State() == StatePrimary })
+	stopFirst()
+	waitFor(t, "the primary to observe mirror disconnect", func() bool { return primary.State() == StatePaused })
+
+	allocator, err := facts.NewSequenceAllocator(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := facts.NewObservationOutbox(primaryStore.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := primaryStore.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := allocator.NextTx(context.Background(), tx)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	event := facts.Envelope{
+		EventID: "reconnect-fact-1", Version: facts.CurrentEnvelopeVersion, Entity: "lease",
+		Action: "renew", Generation: 1, Sequence: sequence, Source: "dhcp",
+		OccurredAt: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC), PayloadVersion: 1,
+		Payload: json.RawMessage(`{"lease_id":"lease-during-disconnect"}`),
+	}
+	if err := outbox.EnqueueTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnected, err := NewMirror(mirrorCfg, mirrorStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnectCtx, stopReconnect := context.WithCancel(context.Background())
+	t.Cleanup(stopReconnect)
+	go func() { _ = reconnected.Run(reconnectCtx) }()
+	waitFor(t, "disconnected fact restored from reconnect snapshot", func() bool {
+		var count int
+		if err := mirrorStore.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events WHERE event_id='reconnect-fact-1'`).Scan(&count); err != nil {
+			return false
+		}
+		return count == 1 && reconnected.FactsAppliedSeq() == sequence && primary.FactsAckedSeq() == sequence
+	})
+}
+
 func TestLiveFactsDeltaIsAppliedBeforeFactsAwareConfirmation(t *testing.T) {
 	primaryStore := openStore(t, "live-facts-primary")
 	primary, _ := startPrimary(t, primaryStore)
