@@ -102,11 +102,12 @@ test('read-only role cannot open write actions across modules and administration
     const permissionsResponse = await api.get('/api/v1/permissions', { headers })
     expect(permissionsResponse.ok()).toBe(true)
     const permissions = (await permissionsResponse.json()).data as Array<{ id: string; resource: string; action: string }>
-    const readPermissions = ['dns', 'dhcp', 'ipam', 'settings', 'backup', 'token', 'user', 'role', 'group'].map(resource => {
+    const readResources = ['dns', 'dhcp', 'ipam', 'settings', 'backup', 'token', 'user', 'role', 'group'].map(resource => {
       const permission = permissions.find(item => item.resource === resource && item.action === 'read')
       expect(permission, `the ${resource} read permission must exist`).toBeDefined()
-      return permission!.id
+      return { resource, id: permission!.id }
     })
+    const readPermissions = readResources.map(item => item.id)
 
     const roleResponse = await api.post('/api/v1/roles', {
       headers,
@@ -140,28 +141,28 @@ test('read-only role cannot open write actions across modules and administration
     })
     expect(assignResponse.ok()).toBe(true)
 
-    const restrictRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
-      headers,
-      data: { permission_ids: [readPermissions[0]] }
-    })
-    expect(restrictRoleResponse.ok()).toBe(true)
-    const dnsOnlyLogin = await api.post('/api/v1/auth/login', { data: { username, password } })
-    expect(dnsOnlyLogin.ok()).toBe(true)
-    const dnsOnly = (await dnsOnlyLogin.json()).data
-    const dnsOnlyHeaders = { Authorization: `Bearer ${dnsOnly.token}` }
-    const readChecks = await Promise.all([
-      api.get('/api/v1/dns/zones', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/dhcp/scopes', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/ipam/spaces', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/backup', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/tokens', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/settings', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/users', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/roles', { headers: dnsOnlyHeaders }),
-      api.get('/api/v1/groups', { headers: dnsOnlyHeaders })
-    ])
-    expect(readChecks.map(response => response.status()), 'DNS-only grants must not cross resource boundaries')
-      .toEqual([200, ...Array(readChecks.length - 1).fill(403)])
+    const readPaths = [
+      '/api/v1/dns/zones', '/api/v1/dhcp/scopes', '/api/v1/ipam/spaces',
+      '/api/v1/settings', '/api/v1/backup', '/api/v1/tokens',
+      '/api/v1/users', '/api/v1/roles', '/api/v1/groups'
+    ]
+    for (const [allowedIndex, permission] of readResources.entries()) {
+      const replaceResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
+        headers,
+        data: { permission_ids: [permission.id] }
+      })
+      expect(replaceResponse.ok(), `setting the ${permission.resource}:read grant must succeed`).toBe(true)
+
+      const loginResponse = await api.post('/api/v1/auth/login', { data: { username, password } })
+      expect(loginResponse.ok()).toBe(true)
+      const loginData = (await loginResponse.json()).data
+      const readHeaders = { Authorization: `Bearer ${loginData.token}` }
+      const responses = await Promise.all(readPaths.map(path => api.get(path, { headers: readHeaders })))
+      const expected = Array(readPaths.length).fill(403)
+      expected[allowedIndex] = 200
+      expect(responses.map(response => response.status()), `${permission.resource}:read must grant only its own resource`)
+        .toEqual(expected)
+    }
 
     const restoreRoleResponse = await api.put(`/api/v1/roles/${roleID}/permissions`, {
       headers,
