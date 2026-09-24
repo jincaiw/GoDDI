@@ -239,6 +239,7 @@ func newLatencyWorld(t *testing.T) *latencyWorld {
 	go dhcpRunner.Run(ctx)
 
 	// --- the DNS plane: everything down, records up, and the consumer --------
+	var dnsConsumer *dhcpinternal.DNSConsumer
 	dnsRunner := dataplane.NewRunner(
 		dataplane.NewReplicator(control, dnsStore),
 		dataplane.RunnerConfig{
@@ -254,6 +255,9 @@ func newLatencyWorld(t *testing.T) *latencyWorld {
 				if d == dataplane.DomainDNS {
 					zoneStore.ReloadNow()
 				}
+				if d == dataplane.DomainDDNS && dnsConsumer != nil {
+					dnsConsumer.Wake()
+				}
 			},
 		})
 	if err := dnsRunner.Prime(ctx); err != nil {
@@ -262,7 +266,8 @@ func newLatencyWorld(t *testing.T) *latencyWorld {
 	go dnsRunner.Run(ctx)
 
 	link := dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
-	go dhcpinternal.NewDNSConsumer(dnsStore.DB, link).Run(ctx)
+	dnsConsumer = dhcpinternal.NewDNSConsumer(dnsStore.DB, link)
+	go dnsConsumer.Run(ctx)
 
 	s := New(leaseStore.DB, []string{"eth0"}, nil)
 	s.serverIPs = map[string]net.IP{"eth0": net.ParseIP(testServerIP)}
