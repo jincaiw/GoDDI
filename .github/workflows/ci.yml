@@ -238,3 +238,33 @@ jobs:
 
       - name: Build production container image
         run: docker build --build-arg VERSION=ci -t goddi:ci .
+
+      - name: Smoke test production container
+        run: |
+          set -euo pipefail
+          name="goddi-ci-${GITHUB_RUN_ID}"
+          cleanup() {
+            if docker inspect "$name" >/dev/null 2>&1; then
+              docker logs "$name" || true
+              docker rm -f "$name" >/dev/null
+            fi
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$name" -p 127.0.0.1::6080 \
+            -e GODDI_SECURITY_JWT_SECRET=container-smoke-only-secret-2026 \
+            -e GODDI_ADMIN_USERNAME=admin \
+            -e GODDI_ADMIN_PASSWORD=Container-Smoke-Admin-2026 \
+            -e GODDI_SERVER_DATA_DIR=/var/lib/goddi \
+            -e GODDI_DATABASE_DSN=/var/lib/goddi/goddi.db \
+            -e GODDI_DNS_ENABLED=false \
+            -e GODDI_DHCP_ENABLED=false \
+            goddi:ci
+          port="$(docker port "$name" 6080/tcp | awk -F: '{print $NF}')"
+          for attempt in $(seq 1 45); do
+            if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${port}/health" >/dev/null
+          curl -fsS "http://127.0.0.1:${port}/" | grep -q '<div id="app">'
