@@ -151,6 +151,55 @@ groups:
           summary: "DHCP 节点已停止承诺绑定与续租"
           description: "node {{ $labels.node_id }} 此刻不会 ACK 任何新建或续租（DISCOVER 仍会收到 OFFER，但客户端走不完流程），所以新客户端拿不到地址。两种状态会读到 0：`paused`（本地没有第二副本，且运维**没有**批准单副本运行——这才是需要处理的那一种）与 `fenced`（被显式移出服务，这种读数是预期的）。`/ready` 的 `ha_state` 区分二者；若是 `paused`，先看对端为什么连不上（`dhcp_ha.peer_address`、令牌、防火墙），修不好再用 `goddi ha degrade --confirm` 做一次有人负责的降级。"
 
+      - alert: GoDDIDHCPHAMirrorBehind
+        expr: goddi_dhcp_ha_sequence > goddi_dhcp_ha_acknowledged_sequence
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP HA 备端确认水位落后"
+          description: "node {{ $labels.node_id }} 的租约复制水位持续落后超过 2 分钟。检查主备链路、备端磁盘和 `/ready` 的 HA 状态；在确认水位追平前，不得将备端作为完整副本使用。"
+
+  # facts 系列只在相应 producer/consumer 已装配的进程上出现。缺席表示
+  # 此进程没有承担该角色，不能用 absent() 将未启用功能误报为故障。
+  - name: goddi-facts
+    rules:
+      - alert: GoDDIFactsConsumerSequenceGap
+        expr: goddi_facts_consumer_gap == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "IPAM facts 消费序列出现缺口"
+          description: "{{ $labels.domain }} 投影水位后存在缺失序号，consumer 已停止越过缺口应用后续事件。检查 producer outbox、控制库 inbox 和重复/冲突序号。"
+
+      - alert: GoDDIFactsConsumerRetainedFailure
+        expr: goddi_facts_consumer_failed > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IPAM facts 消费失败仍未恢复"
+          description: "{{ $labels.domain }} 有 {{ $value }} 个事件因投影失败而保留；失败事件会阻塞后续序列。检查 consumer 日志和目标 IPAM 对象状态，修复后触发重试。"
+
+      - alert: GoDDIFactsProducerRetainedFailure
+        expr: goddi_facts_producer_failed > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IPAM facts producer 投递失败"
+          description: "{{ $labels.domain }} 有 {{ $value }} 个事实事件达到失败保留状态。检查控制库可用性、序列冲突和数据面 runner 日志；事件仍保存在本地 outbox。"
+
+      - alert: GoDDIFactsProducerBacklog
+        expr: goddi_facts_producer_pending > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IPAM facts producer 积压持续存在"
+          description: "{{ $labels.domain }} 的事实事件连续 15 分钟未完成投递。检查数据面到控制库的复制链路及控制端 consumer；持续积压可能延迟 IPAM 所有权视图。"
+
   - name: goddi-dns-quality
     rules:
       - alert: GoDDIHighServfailRatio
