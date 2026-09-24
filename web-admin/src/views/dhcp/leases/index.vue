@@ -1,30 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dhcp.leases.title')">
-      <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
-    </page-header>
-
-    <div class="filter-bar">
-      <n-space>
-        <n-input v-model:value="searchQuery" :placeholder="t('common.search') + ' IP/MAC'" clearable style="width: 240px;" @keyup.enter="loadData" />
-        <n-select v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
-      </n-space>
-    </div>
-
-    <n-data-table
-      :columns="columns"
-      :data="leases"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DHCPLease) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <confirm-dialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -99,3 +72,30 @@ async function handleRelease() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dhcp.leases.title')">
+      <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
+    </PageHeader>
+
+    <div class="filter-bar">
+      <NSpace>
+        <NInput v-model:value="searchQuery" :placeholder="t('common.search') + ' IP/MAC'" clearable style="width: 240px;" @keyup.enter="loadData" />
+        <NSelect v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
+      </NSpace>
+    </div>
+
+    <NDataTable
+      :columns="columns"
+      :data="leases"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: DHCPLease) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <ConfirmDialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
+  </div>
+</template>

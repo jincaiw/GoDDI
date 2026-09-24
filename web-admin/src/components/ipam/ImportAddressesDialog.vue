@@ -1,101 +1,3 @@
-<template>
-  <n-modal
-    :show="show"
-    preset="card"
-    :title="t('ipam.import.title')"
-    style="width: 760px;"
-    @update:show="emit('update:show', $event)"
-  >
-    <n-alert v-if="subnetLabel" type="default" :show-icon="false" style="margin-bottom: 14px;">
-      {{ t('ipam.subnets.title') }}: {{ subnetLabel }}
-    </n-alert>
-
-    <!-- Step 1: pick. The backend takes the file's text as a JSON field, so
-         this reads the file rather than uploading it. -->
-    <template v-if="step === 'pick'">
-      <n-upload
-        :default-upload="false"
-        :show-file-list="false"
-        accept=".csv,.txt"
-        @change="handleFileChange"
-      >
-        <n-button>{{ t('ipam.import.chooseFile') }}</n-button>
-      </n-upload>
-      <p v-if="fileName" class="hint">{{ fileName }}</p>
-      <n-input
-        v-model:value="csvText"
-        type="textarea"
-        :rows="10"
-        style="margin-top: 12px;"
-        :placeholder="t('ipam.import.pastePlaceholder')"
-      />
-    </template>
-
-    <!-- Step 2 and 3: the report. A preview and an import answer with the same
-         shape on purpose; only `applied` and the heading differ. -->
-    <template v-else>
-      <n-alert v-if="step === 'preview'" type="info" :show-icon="false" style="margin-bottom: 14px;">
-        {{ t('ipam.import.previewTitle') }}
-      </n-alert>
-      <n-alert v-else type="success" :show-icon="false" style="margin-bottom: 14px;">
-        {{ t('ipam.import.appliedTitle') }}
-      </n-alert>
-
-      <n-alert v-if="rejected" type="error" :title="t('ipam.import.rejected')" style="margin-bottom: 14px;">
-        {{ t('ipam.import.rejectedHint') }}
-      </n-alert>
-
-      <report-summary v-if="report" :report="report" />
-
-      <template v-if="report && report.errors.length > 0">
-        <section-title :text="t('ipam.import.errors')" :count="report.errors.length" />
-        <n-alert type="error" :show-icon="false">
-          <ul style="margin: 0; padding-left: 18px;">
-            <li v-for="(line, index) in report.errors" :key="index">{{ line }}</li>
-          </ul>
-        </n-alert>
-      </template>
-
-      <template v-if="report && report.changes.length > 0">
-        <section-title :text="t('ipam.import.changes')" :count="report.changes.length" />
-        <n-data-table
-          size="small"
-          :bordered="false"
-          :single-line="false"
-          :max-height="240"
-          :row-key="(row: ImportPlan) => `${row.line}-${row.ip}`"
-          :columns="changeColumns"
-          :data="report.changes"
-        />
-        <p v-if="report.truncated" class="hint">{{ t('ipam.import.truncated') }}</p>
-      </template>
-    </template>
-
-    <template #footer>
-      <n-space justify="end">
-        <n-button v-if="step === 'pick'" @click="close">{{ t('common.cancel') }}</n-button>
-        <n-button v-else-if="step === 'preview'" :disabled="importing" @click="backToPick">
-          {{ t('ipam.import.back') }}
-        </n-button>
-        <n-button v-else @click="close">{{ t('ipam.import.close') }}</n-button>
-
-        <n-button v-if="step === 'pick'" type="primary" :loading="previewing" :disabled="!canPreview" @click="handlePreview">
-          {{ t('ipam.import.preview') }}
-        </n-button>
-        <n-button
-          v-else-if="step === 'preview'"
-          type="primary"
-          :loading="importing"
-          :disabled="hasBlockingErrors || !perm.canWrite('ipam')"
-          @click="handleImport"
-        >
-          {{ t('ipam.import.confirm') }}
-        </n-button>
-      </n-space>
-    </template>
-  </n-modal>
-</template>
-
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -270,6 +172,108 @@ watch(
   },
 )
 </script>
+
+<template>
+  <NModal
+    :show="show"
+    preset="card"
+    :title="t('ipam.import.title')"
+    style="width: 760px;"
+    @update:show="emit('update:show', $event)"
+  >
+    <NAlert v-if="subnetLabel" type="default" :show-icon="false" style="margin-bottom: 14px;">
+      {{ t('ipam.subnets.title') }}: {{ subnetLabel }}
+    </NAlert>
+
+    <!--
+ Step 1: pick. The backend takes the file's text as a JSON field, so
+         this reads the file rather than uploading it.
+-->
+    <template v-if="step === 'pick'">
+      <NUpload
+        :default-upload="false"
+        :show-file-list="false"
+        accept=".csv,.txt"
+        @change="handleFileChange"
+      >
+        <NButton>{{ t('ipam.import.chooseFile') }}</NButton>
+      </NUpload>
+      <p v-if="fileName" class="hint">{{ fileName }}</p>
+      <NInput
+        v-model:value="csvText"
+        type="textarea"
+        :rows="10"
+        style="margin-top: 12px;"
+        :placeholder="t('ipam.import.pastePlaceholder')"
+      />
+    </template>
+
+    <!--
+ Step 2 and 3: the report. A preview and an import answer with the same
+         shape on purpose; only `applied` and the heading differ.
+-->
+    <template v-else>
+      <NAlert v-if="step === 'preview'" type="info" :show-icon="false" style="margin-bottom: 14px;">
+        {{ t('ipam.import.previewTitle') }}
+      </NAlert>
+      <NAlert v-else type="success" :show-icon="false" style="margin-bottom: 14px;">
+        {{ t('ipam.import.appliedTitle') }}
+      </NAlert>
+
+      <NAlert v-if="rejected" type="error" :title="t('ipam.import.rejected')" style="margin-bottom: 14px;">
+        {{ t('ipam.import.rejectedHint') }}
+      </NAlert>
+
+      <ReportSummary v-if="report" :report="report" />
+
+      <template v-if="report && report.errors.length > 0">
+        <SectionTitle :text="t('ipam.import.errors')" :count="report.errors.length" />
+        <NAlert type="error" :show-icon="false">
+          <ul style="margin: 0; padding-left: 18px;">
+            <li v-for="(line, index) in report.errors" :key="index">{{ line }}</li>
+          </ul>
+        </NAlert>
+      </template>
+
+      <template v-if="report && report.changes.length > 0">
+        <SectionTitle :text="t('ipam.import.changes')" :count="report.changes.length" />
+        <NDataTable
+          size="small"
+          :bordered="false"
+          :single-line="false"
+          :max-height="240"
+          :row-key="(row: ImportPlan) => `${row.line}-${row.ip}`"
+          :columns="changeColumns"
+          :data="report.changes"
+        />
+        <p v-if="report.truncated" class="hint">{{ t('ipam.import.truncated') }}</p>
+      </template>
+    </template>
+
+    <template #footer>
+      <NSpace justify="end">
+        <NButton v-if="step === 'pick'" @click="close">{{ t('common.cancel') }}</NButton>
+        <NButton v-else-if="step === 'preview'" :disabled="importing" @click="backToPick">
+          {{ t('ipam.import.back') }}
+        </NButton>
+        <NButton v-else @click="close">{{ t('ipam.import.close') }}</NButton>
+
+        <NButton v-if="step === 'pick'" type="primary" :loading="previewing" :disabled="!canPreview" @click="handlePreview">
+          {{ t('ipam.import.preview') }}
+        </NButton>
+        <NButton
+          v-else-if="step === 'preview'"
+          type="primary"
+          :loading="importing"
+          :disabled="hasBlockingErrors || !perm.canWrite('ipam')"
+          @click="handleImport"
+        >
+          {{ t('ipam.import.confirm') }}
+        </NButton>
+      </NSpace>
+    </template>
+  </NModal>
+</template>
 
 <style scoped>
 .hint {

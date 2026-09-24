@@ -260,8 +260,6 @@ export const useRouteStore = defineStore(SetupStoreId.Route, () => {
    * @param routes routes to filter
    */
   function filterRoutesByPermission(routes: ElegantConstRoute[]): ElegantConstRoute[] {
-    const authStore = useAuthStore();
-
     function filterTree(nodes: ElegantConstRoute[]): ElegantConstRoute[] {
       const result: ElegantConstRoute[] = [];
 

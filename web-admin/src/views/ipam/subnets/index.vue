@@ -1,51 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('ipam.subnets.title')">
-      <n-space>
-        <n-button v-if="perm.canWrite('ipam')" type="primary" @click="openCreate">{{ t('ipam.subnets.createSubnet') }}</n-button>
-        <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
-      </n-space>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="subnets"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: IPAMSubnet) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <n-modal v-if="showModal" v-model:show="showModal" :title="editing ? t('ipam.subnets.editSubnet') : t('ipam.subnets.createSubnet')" preset="card" style="width: 550px;">
-      <n-form :model="formData" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="formData.name" /></n-form-item>
-        <n-form-item :label="t('ipam.spaces.title')">
-          <n-select v-model:value="formData.space_id" :options="spaceOptions" />
-        </n-form-item>
-        <n-form-item :label="t('ipam.subnets.cidr')"><n-input v-model:value="formData.cidr" placeholder="192.168.1.0/24" /></n-form-item>
-        <n-form-item :label="t('ipam.subnets.vlanId')"><n-input-number v-model:value="formData.vlan_id" :min="1" :max="4094" clearable /></n-form-item>
-        <n-form-item :label="t('ipam.subnets.location')"><n-input v-model:value="formData.location" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="formData.description" type="textarea" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-
-    <import-addresses-dialog v-model:show="showImport" :subnet-id="importSubnetId" :subnet-label="importSubnetLabel" @imported="loadData" />
-
-    <pool-wizard-dialog v-model:show="showPool" :subnet-id="poolSubnetId" :subnet-label="poolSubnetLabel" @created="loadData" />
-
-    <reverse-zone-dialog v-model:show="showReverseZone" :subnet-id="reverseZoneSubnetId" :subnet-label="reverseZoneSubnetLabel" @created="loadData" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -175,3 +127,51 @@ async function handleDelete() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('ipam.subnets.title')">
+      <NSpace>
+        <NButton v-if="perm.canWrite('ipam')" type="primary" @click="openCreate">{{ t('ipam.subnets.createSubnet') }}</NButton>
+        <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
+      </NSpace>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="subnets"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: IPAMSubnet) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('ipam.subnets.editSubnet') : t('ipam.subnets.createSubnet')" preset="card" style="width: 550px;">
+      <NForm :model="formData" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" /></NFormItem>
+        <NFormItem :label="t('ipam.spaces.title')">
+          <NSelect v-model:value="formData.space_id" :options="spaceOptions" />
+        </NFormItem>
+        <NFormItem :label="t('ipam.subnets.cidr')"><NInput v-model:value="formData.cidr" placeholder="192.168.1.0/24" /></NFormItem>
+        <NFormItem :label="t('ipam.subnets.vlanId')"><NInputNumber v-model:value="formData.vlan_id" :min="1" :max="4094" clearable /></NFormItem>
+        <NFormItem :label="t('ipam.subnets.location')"><NInput v-model:value="formData.location" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+
+    <ImportAddressesDialog v-model:show="showImport" :subnet-id="importSubnetId" :subnet-label="importSubnetLabel" @imported="loadData" />
+
+    <PoolWizardDialog v-model:show="showPool" :subnet-id="poolSubnetId" :subnet-label="poolSubnetLabel" @created="loadData" />
+
+    <ReverseZoneDialog v-model:show="showReverseZone" :subnet-id="reverseZoneSubnetId" :subnet-label="reverseZoneSubnetLabel" @created="loadData" />
+  </div>
+</template>

@@ -1,57 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('ipam.addresses.title')">
-      <n-space>
-        <n-button v-if="perm.canWrite('ipam')" type="primary" @click="showAllocateModal = true">{{ t('ipam.addresses.allocate') }}</n-button>
-        <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
-      </n-space>
-    </page-header>
-
-    <div class="filter-bar">
-      <n-space>
-        <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="loadData" />
-        <n-select v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
-      </n-space>
-    </div>
-
-    <n-data-table
-      :columns="columns"
-      :data="addresses"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: IPAMAddress) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Allocate IP Modal -->
-    <n-modal v-if="showAllocateModal" v-model:show="showAllocateModal" :title="t('ipam.addresses.allocate')" preset="card" style="width: 450px;">
-      <n-form :model="allocateForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('ipam.subnets.title')">
-          <n-select v-model:value="allocateForm.subnet_id" :options="subnetOptions" />
-        </n-form-item>
-        <n-form-item :label="t('ipam.addresses.ip')"><n-input v-model:value="allocateForm.ip_address" placeholder="Auto-assign if empty" /></n-form-item>
-        <n-form-item :label="t('ipam.addresses.hostname')"><n-input v-model:value="allocateForm.hostname" /></n-form-item>
-        <n-form-item :label="t('ipam.addresses.mac')"><n-input v-model:value="allocateForm.mac_address" /></n-form-item>
-        <n-form-item :label="t('ipam.addresses.owner')"><n-input v-model:value="allocateForm.owner" /></n-form-item>
-        <n-form-item :label="t('ipam.addresses.device')"><n-input v-model:value="allocateForm.device" /></n-form-item>
-        <n-form-item :label="t('ipam.addresses.location')"><n-input v-model:value="allocateForm.location" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="allocateForm.description" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showAllocateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="allocating" :disabled="!perm.canWrite('ipam')" @click="handleAllocate">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
-
-    <address-detail-drawer v-model:show="showDetail" :space-id="detailSpaceId" :ip="detailIp" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -170,3 +116,57 @@ async function handleRelease() {
 
 onMounted(() => { loadData(); loadSubnets() })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('ipam.addresses.title')">
+      <NSpace>
+        <NButton v-if="perm.canWrite('ipam')" type="primary" @click="showAllocateModal = true">{{ t('ipam.addresses.allocate') }}</NButton>
+        <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
+      </NSpace>
+    </PageHeader>
+
+    <div class="filter-bar">
+      <NSpace>
+        <NInput v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="loadData" />
+        <NSelect v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
+      </NSpace>
+    </div>
+
+    <NDataTable
+      :columns="columns"
+      :data="addresses"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: IPAMAddress) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Allocate IP Modal -->
+    <NModal v-if="showAllocateModal" v-model:show="showAllocateModal" :title="t('ipam.addresses.allocate')" preset="card" style="width: 450px;">
+      <NForm :model="allocateForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('ipam.subnets.title')">
+          <NSelect v-model:value="allocateForm.subnet_id" :options="subnetOptions" />
+        </NFormItem>
+        <NFormItem :label="t('ipam.addresses.ip')"><NInput v-model:value="allocateForm.ip_address" placeholder="Auto-assign if empty" /></NFormItem>
+        <NFormItem :label="t('ipam.addresses.hostname')"><NInput v-model:value="allocateForm.hostname" /></NFormItem>
+        <NFormItem :label="t('ipam.addresses.mac')"><NInput v-model:value="allocateForm.mac_address" /></NFormItem>
+        <NFormItem :label="t('ipam.addresses.owner')"><NInput v-model:value="allocateForm.owner" /></NFormItem>
+        <NFormItem :label="t('ipam.addresses.device')"><NInput v-model:value="allocateForm.device" /></NFormItem>
+        <NFormItem :label="t('ipam.addresses.location')"><NInput v-model:value="allocateForm.location" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="allocateForm.description" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showAllocateModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="allocating" :disabled="!perm.canWrite('ipam')" @click="handleAllocate">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
+
+    <AddressDetailDrawer v-model:show="showDetail" :space-id="detailSpaceId" :ip="detailIp" />
+  </div>
+</template>

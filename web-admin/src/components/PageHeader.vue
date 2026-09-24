@@ -1,3 +1,10 @@
+<script setup lang="ts">
+defineProps<{
+  title: string
+  subtitle?: string
+}>()
+</script>
+
 <template>
   <div class="page-header">
     <div class="page-header-left">
@@ -9,13 +16,6 @@
     </div>
   </div>
 </template>
-
-<script setup lang="ts">
-defineProps<{
-  title: string
-  subtitle?: string
-}>()
-</script>
 
 <style scoped>
 .page-header {

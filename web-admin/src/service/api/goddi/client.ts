@@ -1,5 +1,5 @@
-import axios from 'axios'
-import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
+import { create as createAxios } from 'axios'
+import type { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { setAuthStorage, getCsrfToken, clearAuthStorage } from '@/store/modules/auth/shared'
 import { router } from '@/router'
 
@@ -57,7 +57,7 @@ export interface PaginatedApiResponse<T = unknown> {
 // backend serves the UI and API on the same origin, so '/api/v1' is correct.
 const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
 
-const client: AxiosInstance = axios.create({
+const client: AxiosInstance = createAxios({
   baseURL: isHttpProxy ? '/proxy-default/api/v1' : '/api/v1',
   timeout: 30000,
   headers: {
@@ -135,14 +135,14 @@ client.interceptors.response.use(
     return response
   },
   async (error) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _skipRefresh?: boolean }
+    const originalRequest = error.config as InternalAxiosRequestConfig & { isRetryAttempt?: boolean; _skipRefresh?: boolean }
     const isRefreshRequest = originalRequest?.headers?.[SKIP_REFRESH_HEADER] !== undefined
 
     if (error.response) {
       const status = error.response.status
       const isAuthEndpoint = ['/auth/login', '/auth/refresh'].some(url => originalRequest?.url?.includes(url))
-      if (status === 401 && !originalRequest._retry && !isRefreshRequest && !isAuthEndpoint) {
-        originalRequest._retry = true
+      if (status === 401 && !originalRequest.isRetryAttempt && !isRefreshRequest && !isAuthEndpoint) {
+        originalRequest.isRetryAttempt = true
 
         if (isRefreshing) {
           // Wait for the in-progress refresh to complete, then retry
@@ -189,9 +189,19 @@ client.interceptors.response.use(
   }
 )
 
-export default client
-
 // Helper functions for common API patterns
+export function getRaw<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  return client.get<T>(url, config)
+}
+
+export function postRaw<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  return client.post<T>(url, data, config)
+}
+
+export function deleteRaw<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  return client.delete<T>(url, config)
+}
+
 export async function get<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   const response = await client.get<ApiResponse<T>>(url, { params })
   return response.data.data

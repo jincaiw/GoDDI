@@ -1,32 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('settings.backup.title')">
-      <n-button v-if="perm.canWrite('backup')" type="primary" @click="handleCreate">{{ t('settings.backup.createBackup') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="backups"
-      :loading="loading"
-      :row-key="(row: Backup) => row.id"
-    />
-
-    <confirm-dialog
-      :show="showRestoreConfirm"
-      :message="restoreTarget ? `${t('common.confirmRestore')}\n\n${t('settings.backup.backupName')}: ${backupName(restoreTarget)}\n${t('common.createdAt')}: ${restoreTarget.created_at}\n${t('settings.backup.backupSize')}: ${formatSize(restoreTarget.size_bytes)}` : t('common.confirmRestore')"
-      @confirm="handleRestore"
-      @cancel="showRestoreConfirm = false"
-    />
-
-    <confirm-dialog
-      :show="showDeleteConfirm"
-      :message="t('common.deleteConfirm')"
-      @confirm="handleDelete"
-      @cancel="showDeleteConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -118,3 +89,32 @@ async function handleDelete() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('settings.backup.title')">
+      <NButton v-if="perm.canWrite('backup')" type="primary" @click="handleCreate">{{ t('settings.backup.createBackup') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="backups"
+      :loading="loading"
+      :row-key="(row: Backup) => row.id"
+    />
+
+    <ConfirmDialog
+      :show="showRestoreConfirm"
+      :message="restoreTarget ? `${t('common.confirmRestore')}\n\n${t('settings.backup.backupName')}: ${backupName(restoreTarget)}\n${t('common.createdAt')}: ${restoreTarget.created_at}\n${t('settings.backup.backupSize')}: ${formatSize(restoreTarget.size_bytes)}` : t('common.confirmRestore')"
+      @confirm="handleRestore"
+      @cancel="showRestoreConfirm = false"
+    />
+
+    <ConfirmDialog
+      :show="showDeleteConfirm"
+      :message="t('common.deleteConfirm')"
+      @confirm="handleDelete"
+      @cancel="showDeleteConfirm = false"
+    />
+  </div>
+</template>

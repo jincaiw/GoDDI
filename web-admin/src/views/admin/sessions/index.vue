@@ -1,33 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('sessions.title')">
-      <n-button type="primary" :loading="revokingOthers" @click="showRevokeOthersConfirm = true">
-        {{ t('sessions.revokeOthers') }}
-      </n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="sessions"
-      :loading="loading"
-      :row-key="(row: SessionInfo) => row.id"
-    />
-
-    <confirm-dialog
-      :show="showRevokeConfirm"
-      :message="t('sessions.revokeConfirm')"
-      @confirm="handleRevoke"
-      @cancel="showRevokeConfirm = false"
-    />
-    <confirm-dialog
-      :show="showRevokeOthersConfirm"
-      :message="t('sessions.revokeOthersConfirm')"
-      @confirm="handleRevokeOthers"
-      @cancel="showRevokeOthersConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, computed, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -128,3 +98,33 @@ async function handleRevokeOthers() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('sessions.title')">
+      <NButton type="primary" :loading="revokingOthers" @click="showRevokeOthersConfirm = true">
+        {{ t('sessions.revokeOthers') }}
+      </NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="sessions"
+      :loading="loading"
+      :row-key="(row: SessionInfo) => row.id"
+    />
+
+    <ConfirmDialog
+      :show="showRevokeConfirm"
+      :message="t('sessions.revokeConfirm')"
+      @confirm="handleRevoke"
+      @cancel="showRevokeConfirm = false"
+    />
+    <ConfirmDialog
+      :show="showRevokeOthersConfirm"
+      :message="t('sessions.revokeOthersConfirm')"
+      @confirm="handleRevokeOthers"
+      @cancel="showRevokeOthersConfirm = false"
+    />
+  </div>
+</template>

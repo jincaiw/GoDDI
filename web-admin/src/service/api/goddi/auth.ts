@@ -1,4 +1,4 @@
-import client, { get, post } from './client'
+import { deleteRaw, get, post } from './client'
 
 export interface LoginRequest {
   username: string
@@ -87,5 +87,5 @@ export function listSessions() {
 }
 
 export function deleteSession(id: string) {
-  return client.delete(`/auth/sessions/${id}`)
+  return deleteRaw(`/auth/sessions/${id}`)
 }

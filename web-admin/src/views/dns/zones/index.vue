@@ -1,145 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.zones.title')">
-      <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateZone">
-        {{ t('dns.zones.createZone') }}
-      </n-button>
-    </page-header>
-
-    <div class="filter-bar">
-      <n-tabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
-        <n-tab name="authoritative">{{ t('dns.zones.tabAuthoritative') }}</n-tab>
-        <n-tab name="allowed">{{ t('dns.zones.tabAllowed') }}</n-tab>
-        <n-tab name="blocked">{{ t('dns.zones.tabBlocked') }}</n-tab>
-      </n-tabs>
-      <n-space align="center">
-        <n-input v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
-          <template #prefix><n-icon><search-outline /></n-icon></template>
-        </n-input>
-        <n-select v-if="activeTab === 'authoritative'" v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
-        <n-button @click="loadData">{{ t('common.refresh') }}</n-button>
-        <template v-if="checkedKeys.length > 0">
-          <n-text depth="3">{{ t('dns.zones.selectedCount', { n: checkedKeys.length }) }}</n-text>
-          <n-button v-if="perm.canDelete('dns')" type="error" secondary :loading="batchDeleting" @click="showBatchDeleteConfirm = true">
-            {{ t('dns.zones.batchDelete') }}
-          </n-button>
-        </template>
-      </n-space>
-    </div>
-
-    <n-data-table
-      :columns="columns"
-      :data="zones"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DNSZone) => row.id"
-      v-model:checked-row-keys="checkedKeys"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Create/Edit Zone Modal -->
-    <n-modal v-if="showCreateModal" v-model:show="showCreateModal" preset="card" :title="editingZone ? t('dns.zones.editZone') : t('dns.zones.createZone')" style="width: 640px;">
-      <n-form ref="formRef" :model="formData" label-placement="left" label-width="120px">
-        <n-form-item :label="t('dns.zones.zoneName')" path="name">
-          <n-input v-model:value="formData.name" :disabled="!!editingZone" />
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.zoneType')" path="type">
-          <n-select v-model:value="formData.type" :options="zoneTypeOptions" :disabled="!!editingZone" />
-        </n-form-item>
-        <template v-if="!isSpecialType">
-          <n-form-item :label="t('dns.zones.ttl')" path="default_ttl">
-            <n-input-number v-model:value="formData.default_ttl" :min="60" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.primaryNs')" path="soa_mname">
-            <n-input v-model:value="formData.soa_mname" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.adminEmail')" path="soa_rname">
-            <n-input v-model:value="formData.soa_rname" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.refresh')" path="refresh">
-            <n-input-number v-model:value="formData.refresh" :min="0" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.retry')" path="retry">
-            <n-input-number v-model:value="formData.retry" :min="0" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.expire')" path="expire">
-            <n-input-number v-model:value="formData.expire" :min="0" />
-          </n-form-item>
-          <n-form-item :label="t('dns.zones.minimum')" path="minimum">
-            <n-input-number v-model:value="formData.minimum" :min="0" />
-          </n-form-item>
-        </template>
-        <n-form-item v-if="activeTab !== 'authoritative' || isSpecialType" :label="t('dns.zones.specialHint')">
-          <n-text depth="3" style="font-size: 12px;">{{ t('dns.zones.specialHintText') }}</n-text>
-        </n-form-item>
-        <n-form-item :label="t('common.enabled')" path="enabled">
-          <n-switch v-model:value="formData.enabled" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Clone Zone Modal -->
-    <n-modal v-model:show="showCloneModal" preset="card" :title="t('dns.zones.cloneTitle')" style="width: 480px;">
-      <n-form label-placement="left" label-width="120px">
-        <n-form-item :label="t('dns.zones.zoneName')">
-          <n-text depth="2">{{ cloneSource?.name }}</n-text>
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.newName')">
-          <n-input v-model:value="cloneName" :placeholder="cloneSource ? `${cloneSource.name}-copy` : ''" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showCloneModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleClone">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Convert Zone Type Modal -->
-    <n-modal v-model:show="showConvertModal" preset="card" :title="t('dns.zones.convertTitle')" style="width: 480px;">
-      <n-form label-placement="left" label-width="120px">
-        <n-form-item :label="t('dns.zones.zoneName')">
-          <n-text depth="2">{{ convertSource?.name }}</n-text>
-        </n-form-item>
-        <n-form-item :label="t('dns.zones.convertTarget')">
-          <n-select v-model:value="convertTarget" :options="convertTargetOptions" />
-        </n-form-item>
-        <n-form-item>
-          <n-text depth="3" style="font-size: 12px;">{{ t('dns.zones.convertHint') }}</n-text>
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showConvertModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleConvert">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog
-      :show="showDeleteConfirm"
-      :message="t('common.deleteConfirm')"
-      @confirm="handleDelete"
-      @cancel="showDeleteConfirm = false"
-    />
-
-    <confirm-dialog
-      :show="showBatchDeleteConfirm"
-      :message="t('dns.zones.batchDeleteConfirm', { n: checkedKeys.length })"
-      @confirm="handleBatchDelete"
-      @cancel="showBatchDeleteConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, computed, h, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -176,8 +34,6 @@ const cloneName = ref('')
 const showConvertModal = ref(false)
 const convertSource = ref<DNSZone | null>(null)
 const convertTarget = ref('primary')
-
-const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked')
 
 const typeOptions = [
   { label: 'Primary', value: 'primary' },
@@ -224,6 +80,8 @@ const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
   minimum: 86400,
   enabled: true,
 })
+
+const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked')
 
 const columns = [
   { type: 'selection' as const },
@@ -401,3 +259,145 @@ async function handleDelete() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.zones.title')">
+      <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateZone">
+        {{ t('dns.zones.createZone') }}
+      </NButton>
+    </PageHeader>
+
+    <div class="filter-bar">
+      <NTabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
+        <NTab name="authoritative">{{ t('dns.zones.tabAuthoritative') }}</NTab>
+        <NTab name="allowed">{{ t('dns.zones.tabAllowed') }}</NTab>
+        <NTab name="blocked">{{ t('dns.zones.tabBlocked') }}</NTab>
+      </NTabs>
+      <NSpace align="center">
+        <NInput v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
+          <template #prefix><NIcon><SearchOutline /></NIcon></template>
+        </NInput>
+        <NSelect v-if="activeTab === 'authoritative'" v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
+        <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
+        <template v-if="checkedKeys.length > 0">
+          <NText depth="3">{{ t('dns.zones.selectedCount', { n: checkedKeys.length }) }}</NText>
+          <NButton v-if="perm.canDelete('dns')" type="error" secondary :loading="batchDeleting" @click="showBatchDeleteConfirm = true">
+            {{ t('dns.zones.batchDelete') }}
+          </NButton>
+        </template>
+      </NSpace>
+    </div>
+
+    <NDataTable
+      v-model:checked-row-keys="checkedKeys"
+      :columns="columns"
+      :data="zones"
+      :loading="loading" remote
+      :pagination="pagination"
+      :row-key="(row: DNSZone) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Create/Edit Zone Modal -->
+    <NModal v-if="showCreateModal" v-model:show="showCreateModal" preset="card" :title="editingZone ? t('dns.zones.editZone') : t('dns.zones.createZone')" style="width: 640px;">
+      <NForm :model="formData" label-placement="left" label-width="120px">
+        <NFormItem :label="t('dns.zones.zoneName')" path="name">
+          <NInput v-model:value="formData.name" :disabled="!!editingZone" />
+        </NFormItem>
+        <NFormItem :label="t('dns.zones.zoneType')" path="type">
+          <NSelect v-model:value="formData.type" :options="zoneTypeOptions" :disabled="!!editingZone" />
+        </NFormItem>
+        <template v-if="!isSpecialType">
+          <NFormItem :label="t('dns.zones.ttl')" path="default_ttl">
+            <NInputNumber v-model:value="formData.default_ttl" :min="60" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.primaryNs')" path="soa_mname">
+            <NInput v-model:value="formData.soa_mname" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.adminEmail')" path="soa_rname">
+            <NInput v-model:value="formData.soa_rname" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.refresh')" path="refresh">
+            <NInputNumber v-model:value="formData.refresh" :min="0" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.retry')" path="retry">
+            <NInputNumber v-model:value="formData.retry" :min="0" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.expire')" path="expire">
+            <NInputNumber v-model:value="formData.expire" :min="0" />
+          </NFormItem>
+          <NFormItem :label="t('dns.zones.minimum')" path="minimum">
+            <NInputNumber v-model:value="formData.minimum" :min="0" />
+          </NFormItem>
+        </template>
+        <NFormItem v-if="activeTab !== 'authoritative' || isSpecialType" :label="t('dns.zones.specialHint')">
+          <NText depth="3" style="font-size: 12px;">{{ t('dns.zones.specialHintText') }}</NText>
+        </NFormItem>
+        <NFormItem :label="t('common.enabled')" path="enabled">
+          <NSwitch v-model:value="formData.enabled" />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCreateModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Clone Zone Modal -->
+    <NModal v-model:show="showCloneModal" preset="card" :title="t('dns.zones.cloneTitle')" style="width: 480px;">
+      <NForm label-placement="left" label-width="120px">
+        <NFormItem :label="t('dns.zones.zoneName')">
+          <NText depth="2">{{ cloneSource?.name }}</NText>
+        </NFormItem>
+        <NFormItem :label="t('dns.zones.newName')">
+          <NInput v-model:value="cloneName" :placeholder="cloneSource ? `${cloneSource.name}-copy` : ''" />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCloneModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleClone">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Convert Zone Type Modal -->
+    <NModal v-model:show="showConvertModal" preset="card" :title="t('dns.zones.convertTitle')" style="width: 480px;">
+      <NForm label-placement="left" label-width="120px">
+        <NFormItem :label="t('dns.zones.zoneName')">
+          <NText depth="2">{{ convertSource?.name }}</NText>
+        </NFormItem>
+        <NFormItem :label="t('dns.zones.convertTarget')">
+          <NSelect v-model:value="convertTarget" :options="convertTargetOptions" />
+        </NFormItem>
+        <NFormItem>
+          <NText depth="3" style="font-size: 12px;">{{ t('dns.zones.convertHint') }}</NText>
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showConvertModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleConvert">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog
+      :show="showDeleteConfirm"
+      :message="t('common.deleteConfirm')"
+      @confirm="handleDelete"
+      @cancel="showDeleteConfirm = false"
+    />
+
+    <ConfirmDialog
+      :show="showBatchDeleteConfirm"
+      :message="t('dns.zones.batchDeleteConfirm', { n: checkedKeys.length })"
+      @confirm="handleBatchDelete"
+      @cancel="showBatchDeleteConfirm = false"
+    />
+  </div>
+</template>

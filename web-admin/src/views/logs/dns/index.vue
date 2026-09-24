@@ -1,26 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('logs.dns.title')" />
-
-    <n-alert v-if="error" type="error" closable style="margin-bottom: 16px;" @close="error = ''">
-      {{ error }}
-    </n-alert>
-
-    <n-card>
-      <n-data-table
-        :columns="columns"
-        :data="logs"
-        :loading="loading"
-        remote
-        :pagination="pagination"
-        :row-key="(row: DNSQueryLog) => row.id"
-        @update:page="handlePageChange"
-        @update:page-size="handlePageSizeChange"
-      />
-    </n-card>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { h, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -73,3 +50,26 @@ function handlePageSizeChange(pageSize: number) {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('logs.dns.title')" />
+
+    <NAlert v-if="error" type="error" closable style="margin-bottom: 16px;" @close="error = ''">
+      {{ error }}
+    </NAlert>
+
+    <NCard>
+      <NDataTable
+        :columns="columns"
+        :data="logs"
+        :loading="loading"
+        remote
+        :pagination="pagination"
+        :row-key="(row: DNSQueryLog) => row.id"
+        @update:page="handlePageChange"
+        @update:page-size="handlePageSizeChange"
+      />
+    </NCard>
+  </div>
+</template>

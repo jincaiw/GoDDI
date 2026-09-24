@@ -1,22 +1,3 @@
-<template>
-  <n-modal
-    v-model:show="showModal"
-    @update:show="handleVisibilityChange"
-    preset="card"
-    :title="title"
-    type="warning"
-    style="width: 420px;"
-  >
-    <p>{{ message }}</p>
-    <template #footer>
-      <n-space justify="end">
-        <n-button @click="handleCancel">{{ cancelLabel }}</n-button>
-        <n-button type="primary" @click="handleConfirm">{{ confirmLabel }}</n-button>
-      </n-space>
-    </template>
-  </n-modal>
-</template>
-
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -28,6 +9,7 @@ const props = withDefaults(defineProps<{
   confirmText?: string
   cancelText?: string
 }>(), {
+  title: '',
   confirmText: '',
   cancelText: ''
 })
@@ -63,3 +45,22 @@ function handleCancel() {
   emit('cancel')
 }
 </script>
+
+<template>
+  <NModal
+    v-model:show="showModal"
+    preset="card"
+    :title="title"
+    type="warning"
+    style="width: 420px;"
+    @update:show="handleVisibilityChange"
+  >
+    <p>{{ message }}</p>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="handleCancel">{{ cancelLabel }}</NButton>
+        <NButton type="primary" @click="handleConfirm">{{ confirmLabel }}</NButton>
+      </NSpace>
+    </template>
+  </NModal>
+</template>

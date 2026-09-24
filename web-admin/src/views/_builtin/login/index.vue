@@ -1,48 +1,3 @@
-<template>
-  <div class="login-container" :class="{ dark: themeStore.darkMode }">
-    <div class="login-card">
-      <div class="login-header">
-        <span class="login-logo">G</span>
-        <h1>{{ $t('system.title') }}</h1>
-        <p>Enterprise DDI Management Console</p>
-      </div>
-      <n-form ref="formRef" :model="formData" :rules="rules" label-placement="top" :show-label="false">
-        <n-form-item path="username">
-          <n-input
-            v-model:value="formData.username"
-            :placeholder="$t('auth.username')"
-            :input-props="{ autocomplete: 'username' }"
-            @keydown.enter="handleLogin"
-          />
-        </n-form-item>
-        <n-form-item path="password">
-          <n-input
-            v-model:value="formData.password"
-            type="password"
-            show-password-on="click"
-            :placeholder="$t('auth.password')"
-            :input-props="{ autocomplete: 'current-password' }"
-            @keydown.enter="handleLogin"
-          />
-        </n-form-item>
-        <n-form-item v-if="showTotp" path="totp_code">
-          <n-input
-            v-model:value="formData.totp_code"
-            :placeholder="$t('auth.totpCode')"
-            @keydown.enter="handleLogin"
-          />
-        </n-form-item>
-        <n-button type="primary" block size="large" :loading="loading" @click="handleLogin">
-          {{ $t('auth.login') }}
-        </n-button>
-      </n-form>
-      <n-alert v-if="errorMsg" type="error" style="margin-top: 16px" closable>
-        {{ errorMsg }}
-      </n-alert>
-    </div>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -101,6 +56,51 @@ async function handleLogin() {
   }
 }
 </script>
+
+<template>
+  <div class="login-container" :class="{ dark: themeStore.darkMode }">
+    <div class="login-card">
+      <div class="login-header">
+        <span class="login-logo">G</span>
+        <h1>{{ $t('system.title') }}</h1>
+        <p>Enterprise DDI Management Console</p>
+      </div>
+      <NForm ref="formRef" :model="formData" :rules="rules" label-placement="top" :show-label="false">
+        <NFormItem path="username">
+          <NInput
+            v-model:value="formData.username"
+            :placeholder="$t('auth.username')"
+            :input-props="{ autocomplete: 'username' }"
+            @keydown.enter="handleLogin"
+          />
+        </NFormItem>
+        <NFormItem path="password">
+          <NInput
+            v-model:value="formData.password"
+            type="password"
+            show-password-on="click"
+            :placeholder="$t('auth.password')"
+            :input-props="{ autocomplete: 'current-password' }"
+            @keydown.enter="handleLogin"
+          />
+        </NFormItem>
+        <NFormItem v-if="showTotp" path="totp_code">
+          <NInput
+            v-model:value="formData.totp_code"
+            :placeholder="$t('auth.totpCode')"
+            @keydown.enter="handleLogin"
+          />
+        </NFormItem>
+        <NButton type="primary" block size="large" :loading="loading" @click="handleLogin">
+          {{ $t('auth.login') }}
+        </NButton>
+      </NForm>
+      <NAlert v-if="errorMsg" type="error" style="margin-top: 16px" closable>
+        {{ errorMsg }}
+      </NAlert>
+    </div>
+  </div>
+</template>
 
 <style scoped>
 .login-container {

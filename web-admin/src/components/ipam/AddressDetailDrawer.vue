@@ -1,121 +1,3 @@
-<template>
-  <n-drawer :show="show" :width="700" placement="right" @update:show="emit('update:show', $event)">
-    <n-drawer-content :title="title" closable :native-scrollbar="false">
-      <n-spin :show="loading">
-        <template v-if="view">
-          <n-alert v-if="!view.access.dns || !view.access.dhcp || view.access.dns_partial" type="info" :show-icon="false" style="margin-bottom: 16px;">
-            {{ t('ipam.detail.permissionLimited') }}
-          </n-alert>
-          <!-- The four subsystems can disagree about one address. Saying so is
-               the reason this view exists; a conflict the operator has to
-               discover by cross-reading three pages would not be reported. -->
-          <n-alert v-if="view.conflicts.length > 0" type="warning" :title="t('ipam.detail.conflicts')" style="margin-bottom: 16px;">
-            <ul style="margin: 0; padding-left: 18px;">
-              <li v-for="(conflict, index) in view.conflicts" :key="index">{{ conflict }}</li>
-            </ul>
-          </n-alert>
-
-          <n-descriptions :column="2" bordered size="small" label-placement="left" style="margin-bottom: 20px;">
-            <n-descriptions-item :label="t('ipam.addresses.ip')" :span="2">
-              <n-space align="center" :size="8">
-                <span>{{ view.address.ip_address }}</span>
-                <n-tag size="small" :type="statusTag(view.address.status)">{{ view.address.status }}</n-tag>
-              </n-space>
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.detail.space')">{{ view.space?.name || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.subnet')">
-              {{ view.subnet ? `${view.subnet.name} (${view.subnet.cidr})` : '—' }}
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.hostname')">{{ view.address.hostname || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.mac')">{{ view.address.mac_address || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.owner')">{{ view.address.owner || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.device')">{{ view.address.device || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.addresses.location')">{{ view.address.location || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('ipam.detail.lastSeen')">{{ view.address.last_seen || '—' }}</n-descriptions-item>
-            <n-descriptions-item :label="t('common.description')" :span="2">{{ view.address.description || '—' }}</n-descriptions-item>
-          </n-descriptions>
-
-          <template v-if="view.access.dns">
-            <section-title :text="t('ipam.detail.dnsRecords')" :count="view.dns_records.length" />
-            <p v-if="view.dns_records.length === 0" class="empty">{{ t('ipam.detail.dnsRecordsEmpty') }}</p>
-            <n-data-table
-              v-else
-              size="small"
-              :bordered="false"
-              :single-line="false"
-              :row-key="(row: PublishingRecord) => row.id"
-              :columns="dnsColumns"
-              :data="view.dns_records"
-            />
-          </template>
-
-          <template v-if="view.access.dhcp">
-            <section-title :text="t('ipam.detail.scopes')" :count="view.dhcp_scopes.length" />
-            <!-- A bounded list read as an exhaustive one turns "was not listed"
-                 into "does not cover". The API says which it is. -->
-            <n-alert v-if="view.scopes_truncated" type="info" :show-icon="false" style="margin-bottom: 8px;">
-              {{ t('ipam.detail.scopesTruncated') }}
-            </n-alert>
-            <p v-if="view.dhcp_scopes.length === 0" class="empty">
-              {{ view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty') }}
-            </p>
-            <n-data-table
-              v-else
-              size="small"
-              :bordered="false"
-              :single-line="false"
-              :row-key="(row: ScopeSummary) => row.id"
-              :columns="scopeColumns"
-              :data="view.dhcp_scopes"
-            />
-
-            <section-title :text="t('ipam.detail.leases')" :count="view.dhcp_leases.length" />
-            <p v-if="view.dhcp_leases.length === 0" class="empty">{{ t('ipam.detail.leasesEmpty') }}</p>
-            <n-data-table
-              v-else
-              size="small"
-              :bordered="false"
-              :single-line="false"
-              :row-key="(row: LeaseSummary) => row.id"
-              :columns="leaseColumns"
-              :data="view.dhcp_leases"
-            />
-
-            <section-title :text="t('ipam.detail.reservations')" :count="view.dhcp_reservations.length" />
-            <p v-if="view.dhcp_reservations.length === 0" class="empty">{{ t('ipam.detail.reservationsEmpty') }}</p>
-            <n-data-table
-              v-else
-              size="small"
-              :bordered="false"
-              :single-line="false"
-              :row-key="(row: ReservationSummary) => row.id"
-              :columns="reservationColumns"
-              :data="view.dhcp_reservations"
-            />
-          </template>
-
-          <section-title :text="t('ipam.detail.history')" :count="view.history.length" />
-          <p v-if="view.history.length === 0" class="empty">{{ t('ipam.detail.historyEmpty') }}</p>
-          <n-timeline v-else size="medium" style="padding-left: 4px;">
-            <n-timeline-item
-              v-for="(entry, index) in view.history"
-              :key="index"
-              :time="entry.created_at"
-              :title="historyTitle(entry)"
-            >
-              <span v-if="entry.changed_by">{{ t('ipam.detail.changedBy') }}: {{ entry.changed_by }}</span>
-              <span v-if="entry.reason">{{ t('ipam.detail.reason') }}: {{ entry.reason }}</span>
-              <span v-if="entry.source">{{ t('ipam.detail.source') }}: {{ entry.source }}</span>
-            </n-timeline-item>
-          </n-timeline>
-        </template>
-
-        <n-empty v-else-if="!loading" :description="loadFailed || t('ipam.detail.nothingToShow')" />
-      </n-spin>
-    </n-drawer-content>
-  </n-drawer>
-</template>
-
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -284,6 +166,128 @@ watch(
   { immediate: true },
 )
 </script>
+
+<template>
+  <NDrawer :show="show" :width="700" placement="right" @update:show="emit('update:show', $event)">
+    <NDrawerContent :title="title" closable :native-scrollbar="false">
+      <NSpin :show="loading">
+        <template v-if="view">
+          <NAlert v-if="!view.access.dns || !view.access.dhcp || view.access.dns_partial" type="info" :show-icon="false" style="margin-bottom: 16px;">
+            {{ t('ipam.detail.permissionLimited') }}
+          </NAlert>
+          <!--
+ The four subsystems can disagree about one address. Saying so is
+               the reason this view exists; a conflict the operator has to
+               discover by cross-reading three pages would not be reported.
+-->
+          <NAlert v-if="view.conflicts.length > 0" type="warning" :title="t('ipam.detail.conflicts')" style="margin-bottom: 16px;">
+            <ul style="margin: 0; padding-left: 18px;">
+              <li v-for="(conflict, index) in view.conflicts" :key="index">{{ conflict }}</li>
+            </ul>
+          </NAlert>
+
+          <NDescriptions :column="2" bordered size="small" label-placement="left" style="margin-bottom: 20px;">
+            <NDescriptionsItem :label="t('ipam.addresses.ip')" :span="2">
+              <NSpace align="center" :size="8">
+                <span>{{ view.address.ip_address }}</span>
+                <NTag size="small" :type="statusTag(view.address.status)">{{ view.address.status }}</NTag>
+              </NSpace>
+            </NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.detail.space')">{{ view.space?.name || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.subnet')">
+              {{ view.subnet ? `${view.subnet.name} (${view.subnet.cidr})` : '—' }}
+            </NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.hostname')">{{ view.address.hostname || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.mac')">{{ view.address.mac_address || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.owner')">{{ view.address.owner || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.device')">{{ view.address.device || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.addresses.location')">{{ view.address.location || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('ipam.detail.lastSeen')">{{ view.address.last_seen || '—' }}</NDescriptionsItem>
+            <NDescriptionsItem :label="t('common.description')" :span="2">{{ view.address.description || '—' }}</NDescriptionsItem>
+          </NDescriptions>
+
+          <template v-if="view.access.dns">
+            <SectionTitle :text="t('ipam.detail.dnsRecords')" :count="view.dns_records.length" />
+            <p v-if="view.dns_records.length === 0" class="empty">{{ t('ipam.detail.dnsRecordsEmpty') }}</p>
+            <NDataTable
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: PublishingRecord) => row.id"
+              :columns="dnsColumns"
+              :data="view.dns_records"
+            />
+          </template>
+
+          <template v-if="view.access.dhcp">
+            <SectionTitle :text="t('ipam.detail.scopes')" :count="view.dhcp_scopes.length" />
+            <!--
+ A bounded list read as an exhaustive one turns "was not listed"
+                 into "does not cover". The API says which it is.
+-->
+            <NAlert v-if="view.scopes_truncated" type="info" :show-icon="false" style="margin-bottom: 8px;">
+              {{ t('ipam.detail.scopesTruncated') }}
+            </NAlert>
+            <p v-if="view.dhcp_scopes.length === 0" class="empty">
+              {{ view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty') }}
+            </p>
+            <NDataTable
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: ScopeSummary) => row.id"
+              :columns="scopeColumns"
+              :data="view.dhcp_scopes"
+            />
+
+            <SectionTitle :text="t('ipam.detail.leases')" :count="view.dhcp_leases.length" />
+            <p v-if="view.dhcp_leases.length === 0" class="empty">{{ t('ipam.detail.leasesEmpty') }}</p>
+            <NDataTable
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: LeaseSummary) => row.id"
+              :columns="leaseColumns"
+              :data="view.dhcp_leases"
+            />
+
+            <SectionTitle :text="t('ipam.detail.reservations')" :count="view.dhcp_reservations.length" />
+            <p v-if="view.dhcp_reservations.length === 0" class="empty">{{ t('ipam.detail.reservationsEmpty') }}</p>
+            <NDataTable
+              v-else
+              size="small"
+              :bordered="false"
+              :single-line="false"
+              :row-key="(row: ReservationSummary) => row.id"
+              :columns="reservationColumns"
+              :data="view.dhcp_reservations"
+            />
+          </template>
+
+          <SectionTitle :text="t('ipam.detail.history')" :count="view.history.length" />
+          <p v-if="view.history.length === 0" class="empty">{{ t('ipam.detail.historyEmpty') }}</p>
+          <NTimeline v-else size="medium" style="padding-left: 4px;">
+            <NTimelineItem
+              v-for="(entry, index) in view.history"
+              :key="index"
+              :time="entry.created_at"
+              :title="historyTitle(entry)"
+            >
+              <span v-if="entry.changed_by">{{ t('ipam.detail.changedBy') }}: {{ entry.changed_by }}</span>
+              <span v-if="entry.reason">{{ t('ipam.detail.reason') }}: {{ entry.reason }}</span>
+              <span v-if="entry.source">{{ t('ipam.detail.source') }}: {{ entry.source }}</span>
+            </NTimelineItem>
+          </NTimeline>
+        </template>
+
+        <NEmpty v-else-if="!loading" :description="loadFailed || t('ipam.detail.nothingToShow')" />
+      </NSpin>
+    </NDrawerContent>
+  </NDrawer>
+</template>
 
 <style scoped>
 .empty {

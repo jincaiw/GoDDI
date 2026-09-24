@@ -1,4 +1,4 @@
-import client, { get, getList, post, put, del } from './client'
+import { get, getList, getRaw, post, put, del } from './client'
 
 // --- IPAM Spaces ---
 
@@ -408,5 +408,5 @@ export function importIPAMData(req: ImportRequest) {
 }
 
 export function exportIPAMData(params?: Record<string, unknown>) {
-  return client.get('/ipam/export', { params, responseType: 'blob' })
+  return getRaw('/ipam/export', { params, responseType: 'blob' })
 }

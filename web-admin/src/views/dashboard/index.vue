@@ -1,131 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dashboard.title')" />
-    <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-      <n-gi span="4 m:2 l:1">
-        <n-card class="metric-card">
-          <n-statistic :label="t('dashboard.dnsQueriesToday')">
-            <template #prefix>
-              <n-icon color="#0a84ff"><globe-outline /></n-icon>
-            </template>
-            {{ stats.dnsQueries.toLocaleString('en-US') }}
-          </n-statistic>
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card class="metric-card">
-          <n-statistic :label="t('dashboard.cacheHitRate')">
-            <template #prefix>
-              <n-icon color="#af52de"><server-outline /></n-icon>
-            </template>
-            {{ stats.cacheHitRate }}%
-          </n-statistic>
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card class="metric-card">
-          <n-statistic :label="t('dashboard.activeLeases')">
-            <template #prefix>
-              <n-icon color="#ff9500"><desktop-outline /></n-icon>
-            </template>
-            {{ stats.activeLeases }}
-          </n-statistic>
-        </n-card>
-      </n-gi>
-      <n-gi span="4 m:2 l:1">
-        <n-card class="metric-card">
-          <n-statistic :label="t('dashboard.ipamUsage')">
-            <template #prefix>
-              <n-icon color="#0a84ff"><grid-outline /></n-icon>
-            </template>
-            {{ stats.ipamUsage }}%
-          </n-statistic>
-        </n-card>
-      </n-gi>
-    </n-grid>
-
-    <n-card style="margin-top: 16px;" :title="t('dashboard.topStats')">
-      <template #header-extra>
-        <n-radio-group v-model:value="topRange" size="small" @update:value="loadTop">
-          <n-radio-button value="hour">{{ t('dashboard.rangeHour') }}</n-radio-button>
-          <n-radio-button value="day">{{ t('dashboard.rangeDay') }}</n-radio-button>
-          <n-radio-button value="week">{{ t('dashboard.rangeWeek') }}</n-radio-button>
-        </n-radio-group>
-      </template>
-      <n-grid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <n-gi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topClients') }}</h4>
-          <n-empty v-if="topStats.top_clients.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_clients" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </n-gi>
-        <n-gi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topDomains') }}</h4>
-          <n-empty v-if="topStats.top_domains.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_domains" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </n-gi>
-        <n-gi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topBlocked') }}</h4>
-          <n-empty v-if="topStats.top_blocked.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_blocked" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </n-gi>
-      </n-grid>
-    </n-card>
-
-    <n-card style="margin-top: 16px;" :title="t('dashboard.longTermStats')">
-      <template #header-extra>
-        <n-radio-group v-model:value="statsRange" size="small" @update:value="loadLongTermStats">
-          <n-radio-button value="hour">{{ t('dashboard.rangeHour') }}</n-radio-button>
-          <n-radio-button value="day">{{ t('dashboard.rangeDay') }}</n-radio-button>
-          <n-radio-button value="week">{{ t('dashboard.rangeWeek') }}</n-radio-button>
-          <n-radio-button value="month">{{ t('dashboard.rangeMonth') }}</n-radio-button>
-          <n-radio-button value="year">{{ t('dashboard.rangeYear') }}</n-radio-button>
-        </n-radio-group>
-      </template>
-      <n-space v-if="ltStats" :size="24" style="margin-bottom: 8px;" :wrap="true">
-        <n-statistic :label="t('dashboard.statsTotal')" :value="ltStats.summary.total" />
-        <n-statistic :label="t('dashboard.statsNoError')" :value="ltStats.summary.noerror" />
-        <n-statistic :label="t('dashboard.statsNxDomain')" :value="ltStats.summary.nxdomain" />
-        <n-statistic :label="t('dashboard.statsServFail')" :value="ltStats.summary.servfail" />
-        <n-statistic :label="t('dashboard.statsRefused')" :value="ltStats.summary.refused" />
-        <n-statistic :label="t('dashboard.statsBlocked')" :value="ltStats.summary.blocked" />
-        <n-statistic :label="t('dashboard.statsCached')" :value="ltStats.summary.cached" />
-        <n-statistic :label="t('dashboard.statsClients')" :value="ltStats.summary.clients" />
-        <n-statistic :label="t('dashboard.statsAvgLatency')" :value="ltStats.summary.avg_response_ms.toFixed(1) + 'ms'" />
-      </n-space>
-      <stats-trend-chart :stats="ltStats" />
-    </n-card>
-
-    <n-grid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
-      <n-gi span="2 l:1">
-        <n-card :title="t('dashboard.queryChart')">
-          <dashboard-chart v-if="chartReady" :hours="chartData.hours" :queries="chartData.queries" />
-          <n-skeleton v-else :height="300" />
-        </n-card>
-      </n-gi>
-      <n-gi span="2 l:1">
-        <n-card :title="t('dashboard.recentEvents')">
-          <n-data-table :columns="eventColumns" :data="(recentEvents as any[])" :bordered="false" size="small" />
-        </n-card>
-      </n-gi>
-    </n-grid>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -135,7 +7,6 @@ import { getDashboardStats, getDashboardTop, getDNSStats, type HourlyDNSStats, t
 import { listAuditLogs } from '@/service/api/goddi/logs'
 
 const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
-const RcodeDonut = defineAsyncComponent(() => import('@/components/RcodeDonut.vue'))
 const StatsTrendChart = defineAsyncComponent(() => import('@/components/StatsTrendChart.vue'))
 
 const { t, locale } = useI18n()
@@ -218,6 +89,134 @@ onMounted(async () => {
   }
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dashboard.title')" />
+    <NGrid :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
+      <NGi span="4 m:2 l:1">
+        <NCard class="metric-card">
+          <NStatistic :label="t('dashboard.dnsQueriesToday')">
+            <template #prefix>
+              <NIcon color="#0a84ff"><GlobeOutline /></NIcon>
+            </template>
+            {{ stats.dnsQueries.toLocaleString('en-US') }}
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard class="metric-card">
+          <NStatistic :label="t('dashboard.cacheHitRate')">
+            <template #prefix>
+              <NIcon color="#af52de"><ServerOutline /></NIcon>
+            </template>
+            {{ stats.cacheHitRate }}%
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard class="metric-card">
+          <NStatistic :label="t('dashboard.activeLeases')">
+            <template #prefix>
+              <NIcon color="#ff9500"><DesktopOutline /></NIcon>
+            </template>
+            {{ stats.activeLeases }}
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi span="4 m:2 l:1">
+        <NCard class="metric-card">
+          <NStatistic :label="t('dashboard.ipamUsage')">
+            <template #prefix>
+              <NIcon color="#0a84ff"><GridOutline /></NIcon>
+            </template>
+            {{ stats.ipamUsage }}%
+          </NStatistic>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <NCard style="margin-top: 16px;" :title="t('dashboard.topStats')">
+      <template #header-extra>
+        <NRadioGroup v-model:value="topRange" size="small" @update:value="loadTop">
+          <NRadioButton value="hour">{{ t('dashboard.rangeHour') }}</NRadioButton>
+          <NRadioButton value="day">{{ t('dashboard.rangeDay') }}</NRadioButton>
+          <NRadioButton value="week">{{ t('dashboard.rangeWeek') }}</NRadioButton>
+        </NRadioGroup>
+      </template>
+      <NGrid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
+        <NGi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topClients') }}</h4>
+          <NEmpty v-if="topStats.top_clients.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_clients" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </NGi>
+        <NGi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topDomains') }}</h4>
+          <NEmpty v-if="topStats.top_domains.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_domains" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </NGi>
+        <NGi span="3 l:1">
+          <h4 class="top-title">{{ t('dashboard.topBlocked') }}</h4>
+          <NEmpty v-if="topStats.top_blocked.length === 0" size="small" :description="t('common.noData')" />
+          <ul v-else class="top-list">
+            <li v-for="e in topStats.top_blocked" :key="e.name">
+              <span class="top-name">{{ e.name }}</span>
+              <span class="top-count">{{ e.count }}</span>
+            </li>
+          </ul>
+        </NGi>
+      </NGrid>
+    </NCard>
+
+    <NCard style="margin-top: 16px;" :title="t('dashboard.longTermStats')">
+      <template #header-extra>
+        <NRadioGroup v-model:value="statsRange" size="small" @update:value="loadLongTermStats">
+          <NRadioButton value="hour">{{ t('dashboard.rangeHour') }}</NRadioButton>
+          <NRadioButton value="day">{{ t('dashboard.rangeDay') }}</NRadioButton>
+          <NRadioButton value="week">{{ t('dashboard.rangeWeek') }}</NRadioButton>
+          <NRadioButton value="month">{{ t('dashboard.rangeMonth') }}</NRadioButton>
+          <NRadioButton value="year">{{ t('dashboard.rangeYear') }}</NRadioButton>
+        </NRadioGroup>
+      </template>
+      <NSpace v-if="ltStats" :size="24" style="margin-bottom: 8px;" :wrap="true">
+        <NStatistic :label="t('dashboard.statsTotal')" :value="ltStats.summary.total" />
+        <NStatistic :label="t('dashboard.statsNoError')" :value="ltStats.summary.noerror" />
+        <NStatistic :label="t('dashboard.statsNxDomain')" :value="ltStats.summary.nxdomain" />
+        <NStatistic :label="t('dashboard.statsServFail')" :value="ltStats.summary.servfail" />
+        <NStatistic :label="t('dashboard.statsRefused')" :value="ltStats.summary.refused" />
+        <NStatistic :label="t('dashboard.statsBlocked')" :value="ltStats.summary.blocked" />
+        <NStatistic :label="t('dashboard.statsCached')" :value="ltStats.summary.cached" />
+        <NStatistic :label="t('dashboard.statsClients')" :value="ltStats.summary.clients" />
+        <NStatistic :label="t('dashboard.statsAvgLatency')" :value="ltStats.summary.avg_response_ms.toFixed(1) + 'ms'" />
+      </NSpace>
+      <StatsTrendChart :stats="ltStats" />
+    </NCard>
+
+    <NGrid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
+      <NGi span="2 l:1">
+        <NCard :title="t('dashboard.queryChart')">
+          <DashboardChart v-if="chartReady" :hours="chartData.hours" :queries="chartData.queries" />
+          <NSkeleton v-else :height="300" />
+        </NCard>
+      </NGi>
+      <NGi span="2 l:1">
+        <NCard :title="t('dashboard.recentEvents')">
+          <NDataTable :columns="eventColumns" :data="(recentEvents as any[])" :bordered="false" size="small" />
+        </NCard>
+      </NGi>
+    </NGrid>
+  </div>
+</template>
 
 <style scoped>
 .metric-card {

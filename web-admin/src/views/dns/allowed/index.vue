@@ -1,43 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.security.allowedTitle')">
-      <n-space>
-        <n-button v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.security.exportRules') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" @click="triggerImport">{{ t('dns.security.importRules') }}</n-button>
-        <n-button v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</n-button>
-        <n-button v-if="perm.canWrite('dns')" type="primary" @click="showAddModal = true">{{ t('dns.security.addAllowRule') }}</n-button>
-      </n-space>
-    </page-header>
-
-    <n-card>
-      <n-data-table :columns="columns" :data="rules" :loading="loading" :row-key="(row: AllowRule) => row.id" />
-    </n-card>
-
-    <input ref="importInput" type="file" accept=".txt,.conf,text/plain" style="display: none;" @change="handleImportFile" />
-
-    <n-modal v-if="showAddModal" v-model:show="showAddModal" preset="card" :title="t('dns.security.addAllowRule')" style="width: 450px;">
-      <n-form :model="form" label-placement="left" label-width="80px">
-        <n-form-item :label="t('dns.security.pattern')"><n-input v-model:value="form.pattern" /></n-form-item>
-        <n-form-item :label="t('dns.security.matchType')"><n-select v-model:value="form.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="form.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showAddModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="!perm.canWrite('dns')" @click="handleAdd">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog
-      :show="showFlushConfirm"
-      :message="t('dns.security.flushConfirm')"
-      @confirm="handleFlush"
-      @cancel="showFlushConfirm = false"
-    />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -134,3 +94,43 @@ async function handleExport() {
 
 onMounted(load)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.security.allowedTitle')">
+      <NSpace>
+        <NButton v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.security.exportRules') }}</NButton>
+        <NButton v-if="perm.canWrite('dns')" @click="triggerImport">{{ t('dns.security.importRules') }}</NButton>
+        <NButton v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</NButton>
+        <NButton v-if="perm.canWrite('dns')" type="primary" @click="showAddModal = true">{{ t('dns.security.addAllowRule') }}</NButton>
+      </NSpace>
+    </PageHeader>
+
+    <NCard>
+      <NDataTable :columns="columns" :data="rules" :loading="loading" :row-key="(row: AllowRule) => row.id" />
+    </NCard>
+
+    <input ref="importInput" type="file" accept=".txt,.conf,text/plain" style="display: none;" @change="handleImportFile" />
+
+    <NModal v-if="showAddModal" v-model:show="showAddModal" preset="card" :title="t('dns.security.addAllowRule')" style="width: 450px;">
+      <NForm :model="form" label-placement="left" label-width="80px">
+        <NFormItem :label="t('dns.security.pattern')"><NInput v-model:value="form.pattern" /></NFormItem>
+        <NFormItem :label="t('dns.security.matchType')"><NSelect v-model:value="form.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="form.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showAddModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :disabled="!perm.canWrite('dns')" @click="handleAdd">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog
+      :show="showFlushConfirm"
+      :message="t('dns.security.flushConfirm')"
+      @confirm="handleFlush"
+      @cancel="showFlushConfirm = false"
+    />
+  </div>
+</template>

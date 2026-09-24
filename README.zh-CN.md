@@ -22,18 +22,16 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.8.2 功能边界
+## v0.24.0 功能边界
 
-GoDDI v0.8.2 是一套基于 SQLite/WAL 的自托管单节点 DDI 平台，当前能力边界明确如下。
+GoDDI v0.24.0 是一套基于 SQLite/WAL 的自托管 DDI 平台，强化了 DNS IXFR 历史链校验、DHCP 到 IPAM 的持久事实复制，以及最小权限控制。生产能力边界如下：
 
-上一版 `v0.8.1` 已建立同一能力声明基线；本版本新增 LeaseStore/WAL 分阶段实现契约，但默认 DHCP 数据路径仍保持 SQLite。
+- **已实现**：权威与递归 DNS、DHCP 处理、IPAM、配置版本、备份恢复、监控指标、Web 控制台，以及 DoT/DoH/DoQ 监听器配置。真实 DoT/DoH/DoQ 客户端握手仍需部署环境验证。
+- **实验性/不完整**：DHCP HA 尚未通过 GA 认证；DNSSEC 密钥与 DS 管理尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
+- **预留 API（`501 Not Implemented`）**：SSO、通用多节点集群协调、应用扩展运行时，以及管理面 DHCP HA 扩展。
+- **需要部署环境验收（`external-validation-required`）**：真实 secondary 的 IXFR 互操作、多主机 fencing 与网络分区、控制数据库长时间故障恢复、密钥和掉电恢复、Prometheus 告警投递，以及目标硬件容量/稳定性。未完成测量前不承诺 RPO、RTO 或容量指标。
 
-- **当前版本已实现**：权威与递归 DNS、DHCP 数据面处理、DHCP 租约 HA 基础能力（复制、围栏、接管与重入）、IPAM、配置版本/发布 outbox、备份恢复，以及 DoT/DoH/DoQ 监听器配置。
-- **实验性/不完整**：DNSSEC 已提供密钥与 DS 管理入口，但当前版本尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
-- **预留 API（`501 Not Implemented`）**：SSO、通用多节点集群协调、应用扩展运行时，以及管理面 DHCP HA 扩展。DHCP 数据面 HA 不得与预留的管理面扩展混同。
-- **必须外部验收（`external-validation-required`）**：真实 relay/Option 82 互操作、跨主机 HA 与网络分区、真实掉电恢复、企业 CA 生命周期、真实 DoT/DoH/DoQ 客户端握手、Prometheus 告警触发，以及目标硬件容量/长稳测试。
-
-内置管理面 TLS 监听器可用但默认关闭；生产环境应显式启用，或将 GoDDI 置于 HTTPS 反向代理及可信私有网络之后。
+内置管理面 TLS 监听器可用但默认关闭；在共享网络上传输凭据前，应启用 TLS 或使用 HTTPS 反向代理。
 
 ## 快速开始
 
@@ -43,7 +41,7 @@ GoDDI v0.8.2 是一套基于 SQLite/WAL 的自托管单节点 DDI 平台，当�
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.8.3/goddi-v0.8.3-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.24.0/goddi-v0.24.0-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

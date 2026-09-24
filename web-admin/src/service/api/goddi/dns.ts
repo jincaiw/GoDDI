@@ -1,4 +1,5 @@
-import client, { get, getList, post, put, del } from './client'
+import { deleteRaw, get, getList, getRaw, post, postRaw, put, del } from './client'
+import type { ApiResponse } from './client'
 
 // --- DNS Zones ---
 
@@ -94,11 +95,11 @@ export interface ZoneImportPreview {
 }
 
 export function importZoneFile(id: string, content: string, format: 'bind' | 'csv', dryRun = false) {
-  return client.post(`/dns/zones/${id}/import`, { content, format, dry_run: dryRun })
+  return postRaw<ApiResponse<ZoneImportPreview>>(`/dns/zones/${id}/import`, { content, format, dry_run: dryRun })
 }
 
 export function exportZoneFile(id: string) {
-  return client.get(`/dns/zones/${id}/export`, { responseType: 'blob' })
+  return getRaw(`/dns/zones/${id}/export`, { responseType: 'blob' })
 }
 
 export function syncSecondaryZone(id: string) {
@@ -272,7 +273,7 @@ export function batchCreateRecords(records: CreateDNSRecordRequest[]) {
 }
 
 export function batchDeleteRecords(ids: string[]) {
-  return client.delete('/dns/records/batch', { data: { ids } })
+  return deleteRaw('/dns/records/batch', { data: { ids } })
 }
 
 // --- DNS Forwarders ---
@@ -520,11 +521,11 @@ export function flushAllowRules() {
 }
 
 export function exportAllowRules() {
-  return client.get('/dns/security/allowlists/export', { responseType: 'blob' })
+  return getRaw('/dns/security/allowlists/export', { responseType: 'blob' })
 }
 
 export function importAllowRules(text: string, overwrite = false) {
-  return client.post<{ imported: number; skipped: number }>(
+  return postRaw<{ imported: number; skipped: number }>(
     `/dns/security/allowlists/import${overwrite ? '?overwrite=true' : ''}`,
     text,
     { headers: { 'Content-Type': 'text/plain' } },
@@ -572,7 +573,7 @@ export function listDNSQueryLogs(params?: Record<string, unknown>) {
 }
 
 export function exportDNSQueryLogs(params?: Record<string, unknown>) {
-  return client.get('/logs/dns/export', { responseType: 'blob', params })
+  return getRaw('/logs/dns/export', { responseType: 'blob', params })
 }
 
 // --- Time-series Stats (Technitium parity A2) ---

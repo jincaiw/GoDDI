@@ -1,8 +1,3 @@
-<template>
-  <v-chart v-if="hours.length" :option="option" style="height: 300px;" autoresize />
-  <div v-else style="height: 300px; display: grid; place-items: center;"><n-empty :description="t('common.noData')" /></div>
-</template>
-
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useThemeStore } from '@/store/modules/theme'
@@ -42,3 +37,8 @@ const option = computed(() => ({
   ],
 }))
 </script>
+
+<template>
+  <VChart v-if="hours.length" :option="option" style="height: 300px;" autoresize />
+  <div v-else style="height: 300px; display: grid; place-items: center;"><NEmpty :description="t('common.noData')" /></div>
+</template>

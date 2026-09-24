@@ -1,50 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('admin.tokens.title')">
-      <n-button v-if="perm.canWrite('token')" type="primary" @click="openCreate">{{ t('admin.tokens.createToken') }}</n-button>
-    </page-header>
-
-    <n-data-table
-      :columns="columns"
-      :data="tokens"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: APIToken) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <!-- Create Token Modal -->
-    <n-modal v-if="showCreateModal" v-model:show="showCreateModal" :title="t('admin.tokens.createToken')" preset="card" style="width: 450px;">
-      <n-form :model="createForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('admin.tokens.tokenName')"><n-input v-model:value="createForm.name" :disabled="!perm.canWrite('token')" /></n-form-item>
-        <n-form-item :label="t('common.descriptions')"><n-input v-model:value="createForm.description" type="textarea" :disabled="!perm.canWrite('token')" /></n-form-item>
-        <n-form-item :label="t('admin.tokens.expiresAt')"><n-date-picker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" :disabled="!perm.canWrite('token')" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showCreateModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="creating" :disabled="!perm.canWrite('token')" @click="handleCreate">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Token Created Modal -->
-    <n-modal v-if="showTokenModal" v-model:show="showTokenModal" :title="t('admin.tokens.tokenCreated')" preset="card" style="width: 500px;" :mask-closable="false">
-      <n-alert type="warning" style="margin-bottom: 16px;">{{ t('admin.tokens.tokenWarning') }}</n-alert>
-      <n-input :value="createdToken" type="textarea" :rows="3" readonly />
-      <template #footer>
-        <n-space justify="end">
-          <n-button type="primary" @click="copyToken">{{ t('admin.tokens.copyToken') }}</n-button>
-          <n-button @click="showTokenModal = false">{{ t('common.confirm') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <confirm-dialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -126,3 +79,50 @@ function copyToken() {
 
 onMounted(loadData)
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('admin.tokens.title')">
+      <NButton v-if="perm.canWrite('token')" type="primary" @click="openCreate">{{ t('admin.tokens.createToken') }}</NButton>
+    </PageHeader>
+
+    <NDataTable
+      :columns="columns"
+      :data="tokens"
+      :loading="loading"
+      remote :pagination="pagination"
+      :row-key="(row: APIToken) => row.id"
+      @update:page="handlePageChange"
+      @update:page-size="handlePageSizeChange"
+    />
+
+    <!-- Create Token Modal -->
+    <NModal v-if="showCreateModal" v-model:show="showCreateModal" :title="t('admin.tokens.createToken')" preset="card" style="width: 450px;">
+      <NForm :model="createForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('admin.tokens.tokenName')"><NInput v-model:value="createForm.name" :disabled="!perm.canWrite('token')" /></NFormItem>
+        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="createForm.description" type="textarea" :disabled="!perm.canWrite('token')" /></NFormItem>
+        <NFormItem :label="t('admin.tokens.expiresAt')"><NDatePicker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" :disabled="!perm.canWrite('token')" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCreateModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="creating" :disabled="!perm.canWrite('token')" @click="handleCreate">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Token Created Modal -->
+    <NModal v-if="showTokenModal" v-model:show="showTokenModal" :title="t('admin.tokens.tokenCreated')" preset="card" style="width: 500px;" :mask-closable="false">
+      <NAlert type="warning" style="margin-bottom: 16px;">{{ t('admin.tokens.tokenWarning') }}</NAlert>
+      <NInput :value="createdToken" type="textarea" :rows="3" readonly />
+      <template #footer>
+        <NSpace justify="end">
+          <NButton type="primary" @click="copyToken">{{ t('admin.tokens.copyToken') }}</NButton>
+          <NButton @click="showTokenModal = false">{{ t('common.confirm') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+  </div>
+</template>

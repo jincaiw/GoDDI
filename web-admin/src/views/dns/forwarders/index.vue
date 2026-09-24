@@ -1,56 +1,3 @@
-<template>
-  <div>
-    <page-header :title="t('dns.forwarders.title')">
-      <n-button v-if="perm.canWrite('dns')" type="primary" @click="openCreateForwarder">{{ t('dns.forwarders.createForwarder') }}</n-button>
-    </page-header>
-
-    <n-tabs type="card">
-      <n-tab-pane name="forwarders" :tab="t('dns.forwarders.title')">
-        <n-data-table :columns="forwarderColumns" :data="forwarders" :loading="loading" :row-key="(row: DNSForwarder) => row.id" />
-      </n-tab-pane>
-      <n-tab-pane name="conditional" :tab="t('dns.forwarders.conditionalForwarders')">
-        <n-space style="margin-bottom: 12px;">
-          <n-button v-if="perm.canWrite('dns')" type="primary" @click="showCondModal = true">{{ t('dns.forwarders.createConditional') }}</n-button>
-        </n-space>
-        <n-data-table :columns="condColumns" :data="conditionals" :loading="condLoading" :row-key="(row: ConditionalForwarder) => row.id" />
-      </n-tab-pane>
-    </n-tabs>
-
-    <!-- Forwarder Modal -->
-    <n-modal v-if="showFwdModal" v-model:show="showFwdModal" preset="card" :title="editingFwd ? t('common.edit') : t('dns.forwarders.createForwarder')" style="width: 450px;">
-      <n-form :model="fwdForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('common.name')"><n-input v-model:value="fwdForm.name" /></n-form-item>
-        <n-form-item :label="t('dns.forwarders.protocol')">
-          <n-select v-model:value="fwdForm.protocol" :options="protocolOptions" />
-        </n-form-item>
-        <n-form-item :label="t('dns.forwarders.address')"><n-input v-model:value="fwdForm.address" :placeholder="addressPlaceholder" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="fwdForm.enabled" /></n-form-item>
-        <n-form-item :label="t('common.priority')"><n-input-number v-model:value="fwdForm.priority" :min="0" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showFwdModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleFwdSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <!-- Conditional Forwarder Modal -->
-    <n-modal v-if="showCondModal" v-model:show="showCondModal" preset="card" :title="t('dns.forwarders.createConditional')" style="width: 450px;">
-      <n-form :model="condForm" label-placement="left" label-width="80px">
-        <n-form-item :label="t('dns.forwarders.domain')"><n-input v-model:value="condForm.domain" placeholder="example.com" /></n-form-item>
-        <n-form-item :label="t('common.enabled')"><n-switch v-model:value="condForm.enabled" /></n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showCondModal = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="condSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCondSubmit">{{ t('common.save') }}</n-button>
-        </n-space>
-      </template>
-    </n-modal>
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref, reactive, computed, h, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -215,3 +162,56 @@ onMounted(() => {
   loadConditionals()
 })
 </script>
+
+<template>
+  <div>
+    <PageHeader :title="t('dns.forwarders.title')">
+      <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateForwarder">{{ t('dns.forwarders.createForwarder') }}</NButton>
+    </PageHeader>
+
+    <NTabs type="card">
+      <NTabPane name="forwarders" :tab="t('dns.forwarders.title')">
+        <NDataTable :columns="forwarderColumns" :data="forwarders" :loading="loading" :row-key="(row: DNSForwarder) => row.id" />
+      </NTabPane>
+      <NTabPane name="conditional" :tab="t('dns.forwarders.conditionalForwarders')">
+        <NSpace style="margin-bottom: 12px;">
+          <NButton v-if="perm.canWrite('dns')" type="primary" @click="showCondModal = true">{{ t('dns.forwarders.createConditional') }}</NButton>
+        </NSpace>
+        <NDataTable :columns="condColumns" :data="conditionals" :loading="condLoading" :row-key="(row: ConditionalForwarder) => row.id" />
+      </NTabPane>
+    </NTabs>
+
+    <!-- Forwarder Modal -->
+    <NModal v-if="showFwdModal" v-model:show="showFwdModal" preset="card" :title="editingFwd ? t('common.edit') : t('dns.forwarders.createForwarder')" style="width: 450px;">
+      <NForm :model="fwdForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('common.name')"><NInput v-model:value="fwdForm.name" /></NFormItem>
+        <NFormItem :label="t('dns.forwarders.protocol')">
+          <NSelect v-model:value="fwdForm.protocol" :options="protocolOptions" />
+        </NFormItem>
+        <NFormItem :label="t('dns.forwarders.address')"><NInput v-model:value="fwdForm.address" :placeholder="addressPlaceholder" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="fwdForm.enabled" /></NFormItem>
+        <NFormItem :label="t('common.priority')"><NInputNumber v-model:value="fwdForm.priority" :min="0" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showFwdModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleFwdSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- Conditional Forwarder Modal -->
+    <NModal v-if="showCondModal" v-model:show="showCondModal" preset="card" :title="t('dns.forwarders.createConditional')" style="width: 450px;">
+      <NForm :model="condForm" label-placement="left" label-width="80px">
+        <NFormItem :label="t('dns.forwarders.domain')"><NInput v-model:value="condForm.domain" placeholder="example.com" /></NFormItem>
+        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="condForm.enabled" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showCondModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="condSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCondSubmit">{{ t('common.save') }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+  </div>
+</template>
