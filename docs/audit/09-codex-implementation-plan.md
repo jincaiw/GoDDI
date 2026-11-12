@@ -3,11 +3,34 @@
 > 目标：以最低风险把 PARTIAL/FAIL 收敛到可生产的企业级 S1/H2。**先决策后编码**；破坏性改动分批、可回滚。每项含验收。
 
 ## 阶段 0（决策，无代码）
-- **T0-1 修订决策登记**（D-04/D-16）：把 DEC-001~019 与 ADR-0001~0009 对齐；对"复制中断默认行为"二选一并写 ADR（暂停 vs 自动 degraded 继续）。产出：ADR 变更稿。验收：单一权威决策文本，无冲突。
+- **T0-1 修订决策登记（已完成 2026-11-12）**：**ADR-0010 已批准**（默认 paused；自动 degraded 仅 epoch+quorum+mTLS 后）；ADR-0003 标注被修订；建立 `docs/decisions/`（DEC-006/007 正式条目）。详见下方"决策落地任务"。
+
+### 决策落地任务（ADR-0010 已批准 2026-11-12）
+
+**E-1 Owner Epoch 写栅栏（D-02，最高优先）**
+1. 存储：`dataplane_meta` 增 `owner_epoch`（单调递增，持久于租约数据面库，与 `ha_role` 同库）。
+2. 生成：`goddi ha takeover/fence/rejoin` 成功时事务内 `owner_epoch+1` 并写审计；状态展示读回。
+3. 校验：所有权威写（DHCP 绑定/续租/释放/facts 投影）事务内校验 `req.epoch == current_epoch`，落后即拒绝（`ErrStaleEpoch`）+ 审计；旧主启动/重连读到更高 epoch 立即 fenced。
+4. 复制：epoch 随握手交换；低 epoch 节点不得作为 primary 写复制。
+5. 测试：旧 epoch 写拒绝、epoch 回退拒绝、并发 takeover 仅一个成功、旧主回归只读。
+6. 验收：落后 epoch 写 100% 拒绝并审计；分区恢复后旧主 fenced。
+
+**E-2 mTLS 复制通道 + 防重放（D-01）**
+1. `internal/dhcp/ha` 用 `internal/tlsutil.ServerConfig`（`RequireAndVerifyClientCert`）启 mTLS；节点证书 CN=NodeID，根 CA 校验。
+2. 帧头加 nonce + 时间戳 + 单调序号，接收端拒绝过期/重复 nonce。
+3. 证书轮换/吊销流程（短期证书 + 根 CA 轮换 + 吊销名单）。
+4. 测试：无/过期/错误证书拒绝、重放帧拒绝、轮换不断链。
+5. 验收：抓包无明文租约；无有效证书不可连。
+
+**E-3 quorum/witness（自动 degraded 前置，D-05/ADR-0005）**
+1. 引入 leader lease/epoch 与 quorum 或 witness（ADR-0005），明确"2 节点 + witness"共识。
+2. 自动 degraded 继续仅当：epoch 最新 + quorum/witness 证明无更高 epoch 新主。
+3. 测试：分区无双主；quorum 丢失 fail-closed；恢复后自动回 primary 或 blocked。
+4. 验收：仅在满足 DEC-006 (a) 条件时自动继续。
 
 ## 阶段 1（H2 可信身份 + 围栏，最高优先）
-- **T1-1 mTLS 复制通道**（D-01）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
-- **T1-2 Owner Epoch 写栅栏**（D-02）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
+- **T1-1 mTLS 复制通道**（D-01，细化见 E-2）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
+- **T1-2 Owner Epoch 写栅栏**（D-02，细化见 E-1）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
 - **T1-3 facts 哈希链**（D-03）：Envelope 增 epoch/prev_hash/payload_hash/tip_hash；生产者链式、消费者校验、断链阻断（DEC-007）。验收：篡改/断链检测并阻断。依赖：T1-2。
 
 ## 阶段 2（H2 一致性/恢复）
@@ -16,7 +39,7 @@
 - **T2-3 镜像回执/覆盖证明**：以 ACK 序号集合 + 哈希链证明备覆盖全部已承诺租约；增加对账工具。验收：可证明无缺口。
 
 ## 阶段 3（多节点配置发布）
-- **T3-1 实现 ADR-0005 发布协调**（D-05）：leader epoch/fencing/quorum 或 witness；两阶段 Prepare/CommitDecision/Apply；暴露三态（已持久化/节点已应用/集群全部应用）。验收：中断不产生两个已提交版本；三态可查。依赖：T1-1/T1-2。
+- **T3-1 实现 ADR-0005 发布协调**（D-05，细化见 E-3）：leader epoch/fencing/quorum 或 witness；两阶段 Prepare/CommitDecision/Apply；暴露三态（已持久化/节点已应用/集群全部应用）。验收：中断不产生两个已提交版本；三态可查。依赖：T1-1/T1-2。
 - **T3-2 DNS LKG/原子快照**（D-14）：显式 LKG 版本戳 + 回滚；`replaceWhole` 多表同事务。验收：中断回滚到 LKG。
 
 ## 阶段 4（IPAM/DDNS 与持久化加固）

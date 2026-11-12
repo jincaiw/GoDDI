@@ -44,6 +44,8 @@
 7. 依赖：需用户/架构裁决（本轮不擅改）。
 8. 验收：DEC 与 ADR 文本一致，行为有测试钉住。
 
+> **状态更新（2026-11-12，已批准）**：用户批准 **ADR-0010**。D-04 关闭（决策已定）：**默认 `paused`（不承诺新/延长租约）；自动 degraded 继续仅当 Owner Epoch 最新 + quorum/witness + mTLS 齐备**。DEC-006/007 已建立（`docs/decisions/`）；实施任务见 `09` 的 E-1/E-2/E-3。
+
 ### D-05 多节点配置发布协调未实现 + "集群全部应用"状态缺失
 1. 问题/触发：`cluster` 为 `ErrNotImplemented`（`internal/cluster/cluster.go:14`）；`/cluster` 501（`extension.go:114-124`）；无集群 `applied` 视图。
 2. 源码：`docs/adr/0005...`、`internal/configver/service.go`（单节点 revision/outbox）、`dataplane/sync.go`（每节点复制）。
