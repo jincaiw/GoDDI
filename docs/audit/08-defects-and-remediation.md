@@ -81,7 +81,7 @@
 - **D-11 DHCP 报文重放/去重**：无显式事务号去重（依赖 IP/MAC 语义）；**已补租约层幂等/重复/并发测试并修复一处真实缺陷（2026-11-12）**：并发抢同一地址时落败方原返回裸 `UNIQUE constraint` 错误，现映射为 `ErrAddressTaken`（`internal/dhcp/lease/lease.go` `createLeaseWithStatus`），使调用方可按语义重试；测试 `internal/dhcp/lease/idempotency_test.go`（DISCOVER 重传同 ID/单行、异 MAC 拒绝、重复 Activate/Release 幂等、并发同址仅一胜者）全 PASS。
 - **D-12 备份/升级恢复演练缺失**：`internal/backup/*` 存在但无恢复演练；systemd 单实例约束需文档化（`deployments/systemd/goddi.service`）。
 - **D-13 遗留存储路径复杂度**：`lease_store_shadow.go`/`lease_store_indexed.go` 与 WAL store 并存；建议按灰度收敛计划清理。
-- **D-14 DNS LKG/原子性**：本地副本无显式 LKG 版本戳/回滚；`replaceWhole` 多表原子性未验证（`dataplane/sync.go`）。
+- **D-14 DNS LKG/原子性**：**部分已实现（2026-11-12）**：dataplane `apply` 在同一事务内写 LKG 戳（`dataplane_meta` `lkg_revision:<domain>` / `lkg_applied_at:<domain>`，`writeLKG`），新增读取器 `dataplane.LKG(db,domain)`；测试 `lkg_test.go`（同步后 LKG=控制 revision、时间非零、无变更同步不改变戳）。**原子性**：`apply` 已是单事务（Begin→各表→sync_state→LKG→Commit），故配置行与 LKG 同事务持久化。**仍缺**：显式"回滚到指定 LKG revision"能力；三态（已持久化/节点已应用/集群全部应用）中的"集群全部应用"仍 NOT_IMPLEMENTED（见 D-05）。
 
 ## P2
 - **D-16 文档冲突/缺失**：任务书引用 DEC-001~019 不存在；以 ADR 0001–0009 为准，需补齐决策登记并统一编号。

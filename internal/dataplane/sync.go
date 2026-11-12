@@ -400,6 +400,15 @@ func (r *Replicator) apply(d Domain, tables []table, rows map[string][][]interfa
 		return false, nil, 0, nil, fmt.Errorf("dataplane: recording the %s revision: %w", d, err)
 	}
 
+	// LKG stamp (D-14): the last-known-good revision and the instant it was
+	// made durable, written in the SAME transaction as the configuration rows.
+	// This is what lets a node prove the local copy it serves when the control
+	// plane is unreachable is a complete, committed revision rather than a
+	// half-applied one.
+	if err := writeLKG(tx, d, revision); err != nil {
+		return false, nil, 0, nil, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return false, nil, 0, nil, fmt.Errorf("dataplane: commit %s sync: %w", d, err)
 	}

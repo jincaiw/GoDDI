@@ -39,6 +39,7 @@
 |---|---|
 | 单节点配置 revision/outbox/应用 | PASS |
 | DNS 读路径本地副本（控制面宕机可服务） | PASS |
+| LKG 版本戳（可证明服务的是完整已提交 revision） | **基础已实现（D-14, 2026-11-12）**：`dataplane.apply` 同事务写 `lkg_revision/lkg_applied_at`，`dataplane.LKG` 读取；显式回滚待做 |
 | AXFR/IXFR/NOTIFY/TSIG（本轮修复+演练） | PASS |
 | 多节点 Prepare/Commit/Apply 协调 | NOT_IMPLEMENTED |
 | "集群全部应用"状态 | NOT_IMPLEMENTED / FAIL |

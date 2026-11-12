@@ -43,7 +43,7 @@
 
 ## 阶段 3（多节点配置发布）
 - **T3-1 实现 ADR-0005 发布协调**（D-05，细化见 E-3）：leader epoch/fencing/quorum 或 witness；两阶段 Prepare/CommitDecision/Apply；暴露三态（已持久化/节点已应用/集群全部应用）。验收：中断不产生两个已提交版本；三态可查。依赖：T1-1/T1-2。
-- **T3-2 DNS LKG/原子快照**（D-14）：显式 LKG 版本戳 + 回滚；`replaceWhole` 多表同事务。验收：中断回滚到 LKG。
+- **T3-2 DNS LKG/原子快照**（D-14，**基础已完成 2026-11-12**）：LKG 版本戳同事务写入（`dataplane.LKG`）+ `apply` 单事务原子；测试 `lkg_test.go`。剩余：显式回滚到指定 LKG revision；"集群全部应用"三态仍 NOT_IMPLEMENTED（D-05）。
 
 ## 阶段 4（IPAM/DDNS 与持久化加固）
 - **T4-1 IPAM freshness 栅栏**（D-09，**基础已完成 2026-11-12**）：投影缺口检测 `ipam.ProjectionGaps` + 可选严格栅栏 `ipam.NewProjectionGuard`（`dhcp.require_ipam_projection`，Server `SetScopeProjectionGuard`，测试 `projection_test.go`）。剩余：跨面水位（E-3/ADR-0005）实现"相对控制面滞后"硬判据。

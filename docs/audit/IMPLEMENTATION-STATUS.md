@@ -1878,3 +1878,11 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - `internal/dhcp/lease/lease.go` `createLeaseWithStatus`：非 UNIQUE 写错误经 `ClassifyError` 包装；写失败返回错误 → handler 不构建 ACK。
 - 测试 `internal/sqlitepolicy/errors_test.go`（8 类 + nil/透传）通过；`go test ./internal/sqlitepolicy ./internal/dhcp/lease ./internal/dhcp/server` 全绿。
 - 边界：真实填盘 ENOSPC / fsync 失败注入与 WAL Sync 错误路径仍 NOT_VERIFIED（需隔离盘/故障注入）。
+
+## 1bf. D-14 dataplane LKG 版本戳 + 原子快照（round 366）
+
+- `internal/dataplane/sync.go` `apply`：在配置行与 `dataplane_sync_state` 同一事务内调用 `writeLKG`，写 `dataplane_meta` 键 `lkg_revision:<domain>`、`lkg_applied_at:<domain>`。
+- `internal/dataplane/lkg.go`：`writeLKG(tx,domain,revision)`、`LKG(db,domain)`（读取 revision/时间/是否已应用）。
+- 测试 `internal/dataplane/lkg_test.go`：同步后 LKG revision == 控制 `dataplane_revision`、时间非零；无变更同步不改变戳。
+- 原子性：`apply` 单事务覆盖各表 + sync_state + LKG + Commit。
+- 边界：显式"回滚到指定 LKG revision"未实现；"集群全部应用"三态仍 NOT_IMPLEMENTED（D-05）。`go test ./internal/dataplane` 全绿。
