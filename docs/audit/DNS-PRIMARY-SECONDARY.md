@@ -43,3 +43,6 @@
 - 写单点（primary）；secondary 只读；切换在 DNS 解析层（多 NS/LB），**无自动选主/quorum**；`/cluster` 恒 501。
 - secondary 客户端同步当前用 AXFR（`axfrFromPrimary`）；IXFR 服务端能力在 `HandleIXFR`（有 journal），但客户端侧未走 IXFR 增量。
 - 需现场正确配置 NS/TSIG/ACL/notify；容器/主机双实例的端口与网络由部署决定。
+
+## 6. 一键演练脚本
+`scripts/dns_primary_secondary_drill.sh`：脚本化运行上面的 loopback 演练（`TestPrimarySecondary*`），输出 `PASS | ...` 各行与最终 `DRILL: OK`。覆盖：初始 AXFR、变更再同步、NOTIFY 刷新、无 TSIG/错密钥 fail-closed、**停掉 primary 后 secondary 仍应答（读容灾）**。

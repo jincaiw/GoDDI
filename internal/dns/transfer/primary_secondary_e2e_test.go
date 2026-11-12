@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,11 @@ func seedPrimary(t *testing.T, db *sql.DB, serial int, www string) {
 	}
 }
 
-type primaryHandler struct{ h *AXFRHandler }
+type primaryHandler struct {
+	h    *AXFRHandler
+	db   *sql.DB
+	zone string
+}
 
 func (p *primaryHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
@@ -78,6 +83,10 @@ func (p *primaryHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	tsigName := ""
 	if t := r.IsTsig(); t != nil {
 		tsigName = t.Hdr.Name
+	}
+	if q.Qtype == dns.TypeA {
+		answerA(p.db, p.zone, w, r)
+		return
 	}
 	if q.Qtype != dns.TypeAXFR {
 		m := new(dns.Msg)
@@ -117,25 +126,100 @@ func (p *primaryHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 // startPrimary serves a real AXFR-over-TCP primary and returns its address.
-func startPrimary(t *testing.T, db *sql.DB) string {
+func startPrimary(t *testing.T, db *sql.DB) (string, func()) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("listen udp: %v", err)
 	}
-	srv := &dns.Server{Listener: ln, Handler: &primaryHandler{h: NewAXFRHandler(db)},
-		TsigSecret: map[string]string{xfrKey: xfrSecretB64()}}
-	go func() { _ = srv.ActivateAndServe() }()
-	t.Cleanup(func() { _ = srv.Shutdown() })
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
-			c.Close()
-			break
+	addr := pc.LocalAddr().String()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	handler := &primaryHandler{h: NewAXFRHandler(db), db: db, zone: xfrZone}
+	tsig := map[string]string{xfrKey: xfrSecretB64()}
+	udp := &dns.Server{PacketConn: pc, Handler: handler, TsigSecret: tsig}
+	tcp := &dns.Server{Listener: ln, Handler: handler, TsigSecret: tsig}
+	go func() { _ = udp.ActivateAndServe() }()
+	go func() { _ = tcp.ActivateAndServe() }()
+	stop := func() { _ = udp.Shutdown(); _ = tcp.Shutdown() }
+	t.Cleanup(stop)
+	return addr, stop
+}
+
+// answerA answers a single A query from dns_records for a minimal authoritative
+// server used by the drill (the product serves from the in-memory zone store;
+// reading the same replicated rows is equivalent for a read-failover check).
+func answerA(db *sql.DB, zone string, w dns.ResponseWriter, r *dns.Msg) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+	if len(r.Question) == 1 && r.Question[0].Qtype == dns.TypeA {
+		qn := strings.ToLower(dns.Fqdn(r.Question[0].Name))
+		rows, err := db.Query(`SELECT name, value, ttl FROM dns_records WHERE type='A' AND enabled=1`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name, value string
+				var ttl int
+				if rows.Scan(&name, &value, &ttl) != nil {
+					continue
+				}
+				fqdn := strings.ToLower(dns.Fqdn(name))
+				if !strings.HasSuffix(fqdn, strings.ToLower(dns.Fqdn(zone))) {
+					fqdn = strings.ToLower(dns.Fqdn(name + "." + zone))
+				}
+				if fqdn == qn {
+					m.Answer = append(m.Answer, &dns.A{
+						Hdr: dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: uint32(ttl)},
+						A:   net.ParseIP(value),
+					})
+					break
+				}
+			}
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	return ln.Addr().String()
+	_ = w.WriteMsg(m)
+}
+
+// startQueryServer serves minimal authoritative A queries from db over UDP+TCP.
+func startQueryServer(t *testing.T, db *sql.DB) (string, *dns.Server, *dns.Server) {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	ln, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	h := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) { answerA(db, xfrZone, w, r) })
+	udp := &dns.Server{PacketConn: pc, Handler: h}
+	tcp := &dns.Server{Listener: ln, Handler: h}
+	go func() { _ = udp.ActivateAndServe() }()
+	go func() { _ = tcp.ActivateAndServe() }()
+	t.Cleanup(func() { _ = udp.Shutdown(); _ = tcp.Shutdown() })
+	return pc.LocalAddr().String(), udp, tcp
+}
+
+// queryA resolves an A record over UDP, returning "" on any failure/timeout.
+func queryA(t *testing.T, addr, name string) string {
+	t.Helper()
+	c := new(dns.Client)
+	c.Timeout = 500 * time.Millisecond
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	resp, _, err := c.Exchange(m, addr)
+	if err != nil || resp == nil {
+		return ""
+	}
+	for _, rr := range resp.Answer {
+		if a, ok := rr.(*dns.A); ok {
+			return a.A.String()
+		}
+	}
+	return ""
 }
 
 func seedSecondary(t *testing.T, db *sql.DB, policy string) {
@@ -162,7 +246,7 @@ func secondaryRecord(t *testing.T, db *sql.DB) string {
 func TestPrimarySecondaryAXFREndToEnd(t *testing.T) {
 	pdb := newXferDB(t)
 	seedPrimary(t, pdb, 10, "192.0.2.10")
-	addr := startPrimary(t, pdb)
+	addr, _ := startPrimary(t, pdb)
 
 	sdb := newXferDB(t)
 	seedSecondary(t, sdb, fmt.Sprintf("%s|%s|%s|hmac-sha256", addr, xfrKey, xfrSecretB64()))
@@ -204,7 +288,7 @@ func TestPrimarySecondaryAXFREndToEnd(t *testing.T) {
 func TestPrimarySecondaryRejectsMissingOrWrongTSIG(t *testing.T) {
 	pdb := newXferDB(t)
 	seedPrimary(t, pdb, 1, "192.0.2.10")
-	addr := startPrimary(t, pdb)
+	addr, _ := startPrimary(t, pdb)
 
 	// Policy without TSIG fields → rejected before any transfer.
 	sdb := newXferDB(t)
@@ -220,4 +304,48 @@ func TestPrimarySecondaryRejectsMissingOrWrongTSIG(t *testing.T) {
 	if err := NewSecondarySync(sdb2).SyncFromPrimary("s1"); err == nil {
 		t.Fatal("sync with wrong TSIG secret was allowed; must fail")
 	}
+}
+
+// TestPrimarySecondaryReadFailover is the runnable两实例演练: a real primary
+// and a real secondary serve DNS over loopback; the secondary pulls the zone,
+// serves the latest data after a change, and keeps answering after the primary
+// is stopped (read failover). Invoked by scripts/dns_primary_secondary_drill.sh.
+func TestPrimarySecondaryReadFailover(t *testing.T) {
+	pdb := newXferDB(t)
+	seedPrimary(t, pdb, 20, "192.0.2.20")
+	paddr, pstop := startPrimary(t, pdb)
+
+	sdb := newXferDB(t)
+	seedSecondary(t, sdb, fmt.Sprintf("%s|%s|%s|hmac-sha256", paddr, xfrKey, xfrSecretB64()))
+	sync := NewSecondarySync(sdb)
+	if err := sync.SyncFromPrimary("s1"); err != nil {
+		t.Fatalf("initial AXFR: %v", err)
+	}
+	// Change on primary, re-sync, then start the secondary's serving socket.
+	seedPrimary(t, pdb, 21, "192.0.2.21")
+	if err := sync.SyncFromPrimary("s1"); err != nil {
+		t.Fatalf("re-sync: %v", err)
+	}
+	saddr, _, _ := startQueryServer(t, sdb)
+
+	name := "www." + xfrZone
+	if got := queryA(t, paddr, name); got != "192.0.2.21" {
+		t.Fatalf("primary answer = %q, want 192.0.2.21", got)
+	}
+	t.Logf("PASS | primary serves latest A %s = 192.0.2.21", name)
+	if got := queryA(t, saddr, name); got != "192.0.2.21" {
+		t.Fatalf("secondary answer before failover = %q, want 192.0.2.21", got)
+	}
+	t.Logf("PASS | secondary mirrors A %s = 192.0.2.21", name)
+
+	// Take the primary down; the secondary must keep answering from its local copy.
+	pstop()
+	if got := queryA(t, paddr, name); got != "" {
+		t.Fatalf("primary still answering after shutdown: %q", got)
+	}
+	t.Logf("PASS | primary down: primary no longer answers")
+	if got := queryA(t, saddr, name); got != "192.0.2.21" {
+		t.Fatalf("secondary stopped answering after primary down: %q", got)
+	}
+	t.Logf("PASS | secondary still answers after primary down (read failover)")
 }
