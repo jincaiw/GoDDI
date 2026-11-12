@@ -30,6 +30,9 @@ make h2-down              # 停止并清理（含卷）
 每个检查输出 PASS / FAIL / NOT_VERIFIED；**真实故障失败不得重试成 PASS**。强制项：无多 Owner、无重复 IP、无已确认租约丢失、无未验证镜像恢复、无未批准自动接管、无不可解释 Revision 冲突、无 Outbox 权威事件丢失、无把未持久化复制误报成功。
 
 ## 状态（滚动）
+- Round 3（DHCP 一致性 + 缺陷修复）：真实 udhcpc DORA 拿到租约；node-b 镜像可见同一租约；重复租约行=0；**复制双向隔离（blackhole，验证无旁路）**后默认 fail-closed 不 ACK、操作员 `ha degrade` 后本地继续服务、node-b 始终 standby、租约序号推进 → `DHCP PASS=11 FAIL=0 NOT_VERIFIED=2`。
+  - **修复的真实缺陷**：通过管理 API 新建/修改的 scope 已写入 lease.db，但 WAL 内存索引不热加载，DHCP 报 `scope ... not found in memory index`，必须重启节点才生效。现由 `dataplane` 的 `OnApplied(DomainDHCP)` 回调 `WALLeaseStore.ReloadFromDB` 重新发布池快照。
+  - **Docker 旁路发现**：仅 `docker network disconnect repl-net` 不能隔离（宿主在桥间转发），必须双向 blackhole + 连通性验证，脚本已按此实现并输出 PASS/NOT_VERIFIED。
 - Round 2（DNS 验收核心）：`dns-acceptance.sh` 真实 dig：node-a 建区/记录→应答 PASS；node-b 各自控制面应答 PASS；node-a 停机后 node-b DNS 继续应答 PASS；删除撤记录 PASS；**跨节点配置传播 NOT_VERIFIED（ADR-0005 多节点发布未实现）**；AXFR/IXFR/NOTIFY 待补。
 - Round 1（已验证）：环境脚手架落地；`make h2-up` 起 6 服务、双节点 healthy；`make h2-test` = **PASS=9 FAIL=0 NOT_VERIFIED=4**（含 mTLS、唯一 Owner、健康）；`make h2-down` 清理干净、可重复。具体 20 个故障场景与 DNS/DHCP/IPAM 验收套件在后续轮次执行。
 - macOS OrbStack：tc/netem 与磁盘限制类仅在 Linux CI 执行，macOS 记 NOT_VERIFIED。

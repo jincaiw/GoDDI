@@ -22,8 +22,10 @@ services:
       - node-a-data:/var/lib/goddi
       - ./config/node-a.yaml:/etc/goddi/config.yaml:ro
       - ./certs:/etc/goddi/certs:ro
+      - ./scripts/entrypoint.sh:/h2-entry.sh:ro
     environment:
       <<: *env
+    entrypoint: ["/bin/sh", "/h2-entry.sh"]
     cap_add: [NET_RAW, NET_ADMIN]
     ports:
       - "18181:6080"
@@ -47,8 +49,10 @@ services:
       - node-b-data:/var/lib/goddi
       - ./config/node-b.yaml:/etc/goddi/config.yaml:ro
       - ./certs:/etc/goddi/certs:ro
+      - ./scripts/entrypoint.sh:/h2-entry.sh:ro
     environment:
       <<: *env
+    entrypoint: ["/bin/sh", "/h2-entry.sh"]
     cap_add: [NET_RAW, NET_ADMIN]
     ports:
       - "18182:6080"

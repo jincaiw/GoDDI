@@ -17,7 +17,7 @@ dns:
     tcp: {enabled: true, address: ":53"}
 dhcp:
   enabled: true
-  interfaces: ["eth1"]
+  interfaces: []
   lease_store: wal
   trusted_relay_cidrs: ["10.77.3.0/24"]
   renew_out_of_pool_policy: "allow"

@@ -379,6 +379,10 @@ func rejectEnterprise(cfg *config.Config) error {
 
 // runServer initializes and starts the GoDDI server.
 func runServer(configPath string) error {
+	// reloadDHCPIndex republishes the WAL lease index after the DHCP replica
+	// changes (see the OnApplied hook below). It is assigned once the WAL store
+	// exists.
+	reloadDHCPIndex := func() {}
 	cfg, err := loadRuntimeConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -771,6 +775,9 @@ func runServer(configPath string) error {
 		if !servesDHCP {
 			dnsDomains = append(dnsDomains, dataplane.DomainFacts)
 		}
+		// The DHCP lease store may be opened later in this function than the
+		// runner, so the hook is registered as a variable instead of a direct
+		// reference.
 		runner := dataplane.NewRunner(
 			dataplane.NewReplicator(db.DB, dnsStore),
 			dataplane.RunnerConfig{
@@ -785,6 +792,14 @@ func runServer(configPath string) error {
 				PushRecords: true,
 				Quota:       dataPlaneQuota(cfg),
 				OnApplied: func(d dataplane.Domain, changedPrimaryZones []string) {
+					if d == dataplane.DomainDHCP {
+						// A scope added, edited or removed through the console
+						// reaches this plane through the sync loop, not the WAL.
+						// Without republishing the pool snapshot the store keeps
+						// answering "scope not found in memory index" until a
+						// restart, which looks like a broken console.
+						reloadDHCPIndex()
+					}
 					if d == dataplane.DomainDNS {
 						zoneStore.ReloadNow()
 						if len(changedPrimaryZones) > 0 {
@@ -1087,6 +1102,11 @@ func runServer(configPath string) error {
 				return fmt.Errorf("opening WAL lease store: %w", serr)
 			}
 			walLeaseStore = store
+			reloadDHCPIndex = func() {
+				if err := store.ReloadFromDB(context.Background()); err != nil {
+					slog.Warn("dataplane: could not republish the lease index after a DHCP change", "error", err)
+				}
+			}
 			dhcpSrv = dhcpserver.NewWithLeaseStore(store, dhcpStore.DB, cfg.DHCP.Interfaces, dhcpEventLogger)
 			slog.Info("DHCP lease store: event-sourced WAL", "wal", walPath)
 		} else {
