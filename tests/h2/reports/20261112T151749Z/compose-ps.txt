@@ -1,0 +1,7 @@
+NAME             IMAGE         COMMAND                  SERVICE          CREATED          STATUS                   PORTS
+client           alpine:3.24   "sh -c 'sleep infini…"   client           10 seconds ago   Up 8 seconds             
+fault-injector   alpine:3.24   "sh -c 'sleep infini…"   fault-injector   10 seconds ago   Up 8 seconds             
+node-a           goddi:h2      "goddi serve --confi…"   node-a           10 seconds ago   Up 8 seconds (healthy)   53/tcp, 9953/tcp, 0.0.0.0:15454->53/udp, [::]:15454->53/udp, 0.0.0.0:18181->6080/tcp, [::]:18181->6080/tcp
+node-b           goddi:h2      "goddi serve --confi…"   node-b           10 seconds ago   Up 8 seconds (healthy)   53/tcp, 9953/tcp, 0.0.0.0:15455->53/udp, [::]:15455->53/udp, 0.0.0.0:18182->6080/tcp, [::]:18182->6080/tcp
+observer         alpine:3.24   "sh -c 'sleep infini…"   observer         10 seconds ago   Up 8 seconds             
+relay            alpine:3.24   "sh -c 'sleep infini…"   relay            10 seconds ago   Up 8 seconds             

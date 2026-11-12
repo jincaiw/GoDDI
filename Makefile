@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container
+.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container h2-up h2-down h2-test h2-fault-test h2-consistency-check h2-report h2-build h2-certs
 
 all: lint test build
 
@@ -108,6 +108,34 @@ verify-dns-drill-container:
 ## bench: run Go benchmarks (performance baseline)
 bench:
 	@bash scripts/bench.sh
+
+
+## H2 Docker acceptance environment (real HEAD build, 3 networks, mTLS)
+h2-certs:
+	@bash tests/h2/scripts/gen-certs.sh
+
+h2-build:
+	GOOS=linux GOARCH=$(shell go env GOARCH) CGO_ENABLED=0 $(GO) build -mod=readonly -o .ha-goddi-bin ./cmd/goddi
+	rm -rf .ha-web-dist && cp -r web/dist .ha-web-dist
+	docker build -f tests/h2/Dockerfile -t goddi:h2 .
+
+h2-up: h2-certs h2-build
+	docker compose -f tests/h2/docker-compose.yml up -d
+
+h2-down:
+	docker compose -f tests/h2/docker-compose.yml down -v --remove-orphans
+
+h2-consistency-check:
+	@bash tests/h2/scripts/verify-consistency.sh
+
+h2-test:
+	@bash tests/h2/scripts/run-all.sh
+
+h2-fault-test:
+	@bash tests/h2/scripts/run-all.sh
+
+h2-report:
+	@bash tests/h2/scripts/collect-evidence.sh
 
 ## clean: Remove build artifacts
 clean:

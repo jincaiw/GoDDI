@@ -1,0 +1,40 @@
+env: development
+server:
+  name: "GoDDI"
+  http_addr: ":6080"
+  public_url: "http://127.0.0.1:6080"
+  data_dir: /var/lib/goddi
+  role: all
+database:
+  driver: "sqlite"
+  dsn: /var/lib/goddi/goddi.db
+dataplane:
+  sync_interval_seconds: 1
+dns:
+  enabled: true
+  listeners:
+    udp: {enabled: true, address: ":53"}
+    tcp: {enabled: true, address: ":53"}
+dhcp:
+  enabled: true
+  interfaces: ["eth1"]
+  lease_store: wal
+  trusted_relay_cidrs: ["10.77.3.0/24"]
+  renew_out_of_pool_policy: "allow"
+security:
+  totp_enabled: false
+  login_rate_limit: 5
+dhcp_ha:
+  enabled: true
+  node_id: "h2-node-b"
+  role: "standby"
+  listen_addr: "10.77.2.12:9953"
+  peer_address: "10.77.2.11:9953"
+  peer_token: "h2-peer-token-0123456789"
+  confirm_timeout: 1s
+  heartbeat_interval: 2s
+  peer_stale_after: 5s
+  tls_cert_file: /etc/goddi/certs/h2-node-b.crt
+  tls_key_file: /etc/goddi/certs/h2-node-b.key
+  tls_ca_file: /etc/goddi/certs/ca.crt
+  tls_server_name: "10.77.2.11"

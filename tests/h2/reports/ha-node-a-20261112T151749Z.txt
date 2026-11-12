@@ -1,0 +1,10 @@
+DHCP HA status for h2-node-a
+  configured role:  primary
+  role in force:    primary
+  state:            primary
+  redundant:        unknown from this store
+  sequence:         0 handed out, 0 confirmed by the mirror
+
+  Whether this node has a second copy right now is decided by its peer link, and
+  only the running service observes that. It reports the answer in its log and
+  on /ready; this report covers what the store can establish on its own.

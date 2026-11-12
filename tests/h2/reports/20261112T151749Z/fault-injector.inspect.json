@@ -1,0 +1,278 @@
+[
+    {
+        "Id": "c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8",
+        "Created": "2026-11-12T15:17:40.344245302Z",
+        "Path": "sh",
+        "Args": [
+            "-c",
+            "sleep infinity"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 1658185,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-11-12T15:17:42.133262671Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf",
+        "ResolvConfPath": "/var/lib/docker/containers/c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8/hostname",
+        "HostsPath": "/var/lib/docker/containers/c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8/hosts",
+        "LogPath": "/var/lib/docker/containers/c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8/c9f263bf72e8aac3db49b904bdca1313342e7730e27bd1c3afa05b83646385a8-json.log",
+        "Name": "/fault-injector",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": null,
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {
+                    "max-file": "5",
+                    "max-size": "20m"
+                }
+            },
+            "NetworkMode": "goddi-h2_client-net",
+            "PortBindings": {},
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": [
+                "CAP_NET_ADMIN",
+                "CAP_NET_RAW",
+                "CAP_SYS_ADMIN"
+            ],
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": null,
+            "DnsSearch": null,
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 4195352576,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [],
+        "Config": {
+            "Hostname": "h2-fault-injector",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Cmd": [
+                "sh",
+                "-c",
+                "sleep infinity"
+            ],
+            "Image": "alpine:3.24",
+            "Volumes": null,
+            "WorkingDir": "/",
+            "Entrypoint": null,
+            "Labels": {
+                "com.docker.compose.config-hash": "0b975602fd41b6147913e723a3d4b4b381b2d1ef63bb98f060100a850889ef49",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:1829893486be257df5049ab3b7fc95afbd0fc09d89803cbc580bda1ba5386b29",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "goddi-h2",
+                "com.docker.compose.project.config_files": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/docker-compose.yml",
+                "com.docker.compose.project.working_dir": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2",
+                "com.docker.compose.service": "fault-injector",
+                "com.docker.compose.version": "5.5.0"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "3cb3a4aab6c1a1219178b71accbefee353057359e6bab98b4abbe4beaede3b60",
+            "SandboxKey": "/var/run/docker/netns/3cb3a4aab6c1",
+            "Ports": {},
+            "Networks": {
+                "goddi-h2_client-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "fault-injector",
+                        "fault-injector"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "b8650d29eab6f16bae167b59eb9f1f8c5cf20826474a19cecbfcfcd10ae4f211",
+                    "EndpointID": "ba1cca67eb20b6b5a11fea4887f681049f133079f85a8210cdb1cd0d3c94457b",
+                    "Gateway": "10.77.3.1",
+                    "IPAddress": "10.77.3.6",
+                    "MacAddress": "d2:72:a1:27:71:01",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "fault-injector",
+                        "c9f263bf72e8",
+                        "h2-fault-injector"
+                    ]
+                },
+                "goddi-h2_mgmt-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "fault-injector",
+                        "fault-injector"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "89b0bb0f1f167a3b866122cc212267e9902a9d5f5d0e03ced30c60f8cdfe875b",
+                    "EndpointID": "c81815e3c12ccedb81c42dce1affd51cff2c7d9262a71904a0139e91c7d38608",
+                    "Gateway": "10.77.1.1",
+                    "IPAddress": "10.77.1.4",
+                    "MacAddress": "76:af:a0:17:50:e4",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "fault-injector",
+                        "c9f263bf72e8",
+                        "h2-fault-injector"
+                    ]
+                },
+                "goddi-h2_repl-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "fault-injector",
+                        "fault-injector"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "deaa2bcc3a9f0de3ba3cf12cd4d946091fde5957623a3e9f7954ce9b268b3f68",
+                    "EndpointID": "7ecefee223d3a8a33c6bdbe245c576f54559e95171dcd82f0a158b95a5846360",
+                    "Gateway": "10.77.2.1",
+                    "IPAddress": "10.77.2.2",
+                    "MacAddress": "96:6e:f0:d0:af:a5",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "fault-injector",
+                        "c9f263bf72e8",
+                        "h2-fault-injector"
+                    ]
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:1829893486be257df5049ab3b7fc95afbd0fc09d89803cbc580bda1ba5386b29",
+            "size": 1025,
+            "annotations": {
+                "com.docker.official-images.bashbrew.arch": "arm64v8",
+                "org.opencontainers.image.base.name": "scratch",
+                "org.opencontainers.image.created": "2026-11-05T18:00:09Z",
+                "org.opencontainers.image.revision": "0c9af76133a2dd9a31dedf3600e423087b29a879",
+                "org.opencontainers.image.source": "https://github.com/alpinelinux/docker-alpine.git#0c9af76133a2dd9a31dedf3600e423087b29a879:aarch64",
+                "org.opencontainers.image.url": "https://hub.docker.com/_/alpine",
+                "org.opencontainers.image.version": "3.24.4"
+            },
+            "platform": {
+                "architecture": "arm64",
+                "os": "linux",
+                "variant": "v8"
+            }
+        }
+    }
+]

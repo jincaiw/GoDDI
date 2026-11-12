@@ -1,0 +1,15 @@
+DHCP HA status for h2-node-b
+  configured role:  standby
+  role in force:    standby
+  state:            standby
+  redundant:        unknown from this store
+  applied sequence: 0
+  primary sequence: 0 (heard 614ms ago)
+  shortfall:        0
+  facts applied:    0
+  primary facts:    0
+  facts shortfall:  0
+
+  Whether this node has a second copy right now is decided by its peer link, and
+  only the running service observes that. It reports the answer in its log and
+  on /ready; this report covers what the store can establish on its own.

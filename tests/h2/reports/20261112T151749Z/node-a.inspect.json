@@ -1,0 +1,370 @@
+[
+    {
+        "Id": "0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33",
+        "Created": "2026-11-12T15:17:40.340250558Z",
+        "Path": "goddi",
+        "Args": [
+            "serve",
+            "--config",
+            "/etc/goddi/config.yaml"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 1658157,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-11-12T15:17:42.125287142Z",
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "Health": {
+                "Status": "healthy",
+                "FailingStreak": 0,
+                "Log": [
+                    {
+                        "Start": "2026-11-12T23:17:47.94330804+08:00",
+                        "End": "2026-11-12T23:17:47.969591404+08:00",
+                        "ExitCode": 0,
+                        "Output": ""
+                    }
+                ]
+            }
+        },
+        "Image": "sha256:d1001f7b8cf8ccf087bd85660b04f97f1407941814534d6fcea201898d543e75",
+        "ResolvConfPath": "/var/lib/docker/containers/0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33/hostname",
+        "HostsPath": "/var/lib/docker/containers/0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33/hosts",
+        "LogPath": "/var/lib/docker/containers/0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33/0c15b42ce2864b975c7c382d77471a2428ba9e4d8e7ae70d281da0b690affd33-json.log",
+        "Name": "/node-a",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "goddi-h2_node-a-data:/var/lib/goddi:rw",
+                "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/config/node-a.yaml:/etc/goddi/config.yaml:ro",
+                "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/certs:/etc/goddi/certs:ro"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {
+                    "max-file": "5",
+                    "max-size": "20m"
+                }
+            },
+            "NetworkMode": "goddi-h2_client-net",
+            "PortBindings": {
+                "53/udp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "15454"
+                    }
+                ],
+                "6080/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "18181"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": [
+                "CAP_NET_ADMIN",
+                "CAP_NET_RAW"
+            ],
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": null,
+            "DnsSearch": null,
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 4195352576,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/certs",
+                "Destination": "/etc/goddi/certs",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/config/node-a.yaml",
+                "Destination": "/etc/goddi/config.yaml",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "volume",
+                "Name": "goddi-h2_node-a-data",
+                "Source": "/var/lib/docker/volumes/goddi-h2_node-a-data/_data",
+                "Destination": "/var/lib/goddi",
+                "Driver": "local",
+                "Mode": "rw",
+                "RW": true,
+                "Propagation": ""
+            }
+        ],
+        "Config": {
+            "Hostname": "h2-node-a",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "ExposedPorts": {
+                "53/tcp": {},
+                "53/udp": {},
+                "6080/tcp": {},
+                "9953/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "GODDI_ADMIN_USERNAME=admin",
+                "GODDI_ADMIN_PASSWORD=AdminPass-0123456789",
+                "GODDI_LOG_LEVEL=info",
+                "GODDI_SECURITY_JWT_SECRET=h2-exercise-jwt-secret-not-for-production",
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Cmd": [
+                "serve",
+                "--config",
+                "/etc/goddi/config.yaml"
+            ],
+            "Healthcheck": {
+                "Test": [
+                    "CMD-SHELL",
+                    "wget --spider -q http://localhost:6080/health || exit 1"
+                ],
+                "Interval": 5000000000,
+                "Timeout": 3000000000,
+                "Retries": 5
+            },
+            "Image": "goddi:h2",
+            "Volumes": null,
+            "WorkingDir": "/app",
+            "Entrypoint": [
+                "goddi"
+            ],
+            "Labels": {
+                "com.docker.compose.config-hash": "828a021500924c638807a084b520386087f795b70c73f9589b8389312c9789cd",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:b1f0ddf90308093facc03b3d5add79b3a7811941f0ed8fa5af83e4bc00a1a986",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "goddi-h2",
+                "com.docker.compose.project.config_files": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/docker-compose.yml",
+                "com.docker.compose.project.working_dir": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2",
+                "com.docker.compose.service": "node-a",
+                "com.docker.compose.version": "5.5.0"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "fc83d4e616e2b44c9985f6f78924ac01ed43f2bf7ee9fb20fe039b9bbadead79",
+            "SandboxKey": "/var/run/docker/netns/fc83d4e616e2",
+            "Ports": {
+                "53/tcp": null,
+                "53/udp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "15454"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "15454"
+                    }
+                ],
+                "6080/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "18181"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "18181"
+                    }
+                ],
+                "9953/tcp": null
+            },
+            "Networks": {
+                "goddi-h2_client-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "node-a",
+                        "node-a"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "b8650d29eab6f16bae167b59eb9f1f8c5cf20826474a19cecbfcfcd10ae4f211",
+                    "EndpointID": "fec01d61390db02a2e6614c455777a2c33ca480981e3ac7947d983d9ae5489ad",
+                    "Gateway": "10.77.3.1",
+                    "IPAddress": "10.77.3.5",
+                    "MacAddress": "d2:82:5a:1f:b4:1a",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "node-a",
+                        "0c15b42ce286",
+                        "h2-node-a"
+                    ]
+                },
+                "goddi-h2_mgmt-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "node-a",
+                        "node-a"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "89b0bb0f1f167a3b866122cc212267e9902a9d5f5d0e03ced30c60f8cdfe875b",
+                    "EndpointID": "5306c2d6e25e25b9586d590ce5dec62c4e596312eeadfc1dc04929e335f0cf09",
+                    "Gateway": "10.77.1.1",
+                    "IPAddress": "10.77.1.6",
+                    "MacAddress": "fe:64:46:0a:9b:e7",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "node-a",
+                        "0c15b42ce286",
+                        "h2-node-a"
+                    ]
+                },
+                "goddi-h2_repl-net": {
+                    "IPAMConfig": {
+                        "IPv4Address": "10.77.2.11"
+                    },
+                    "Links": null,
+                    "Aliases": [
+                        "node-a",
+                        "node-a"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "deaa2bcc3a9f0de3ba3cf12cd4d946091fde5957623a3e9f7954ce9b268b3f68",
+                    "EndpointID": "9373ef87ba68fa3fe0a2fdf38234d362266becd7d4178cfc3e15cfeaadb202da",
+                    "Gateway": "10.77.2.1",
+                    "IPAddress": "10.77.2.11",
+                    "MacAddress": "06:46:d8:98:ce:8a",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "node-a",
+                        "0c15b42ce286",
+                        "h2-node-a"
+                    ]
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:b1f0ddf90308093facc03b3d5add79b3a7811941f0ed8fa5af83e4bc00a1a986",
+            "size": 1245,
+            "platform": {
+                "architecture": "arm64",
+                "os": "linux"
+            }
+        }
+    }
+]

@@ -1,0 +1,226 @@
+[
+    {
+        "Id": "1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf",
+        "Created": "2026-11-12T15:17:40.322446718Z",
+        "Path": "sh",
+        "Args": [
+            "-c",
+            "sleep infinity"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 1658062,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-11-12T15:17:41.975439875Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf",
+        "ResolvConfPath": "/var/lib/docker/containers/1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf/hostname",
+        "HostsPath": "/var/lib/docker/containers/1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf/hosts",
+        "LogPath": "/var/lib/docker/containers/1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf/1b59c827f924f03341d8d9dac9f5233401c04d876dc16e68c12d41b19c1857bf-json.log",
+        "Name": "/observer",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": null,
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {
+                    "max-file": "5",
+                    "max-size": "20m"
+                }
+            },
+            "NetworkMode": "goddi-h2_mgmt-net",
+            "PortBindings": {},
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": null,
+            "DnsSearch": null,
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 4195352576,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [],
+        "Config": {
+            "Hostname": "h2-observer",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Cmd": [
+                "sh",
+                "-c",
+                "sleep infinity"
+            ],
+            "Image": "alpine:3.24",
+            "Volumes": null,
+            "WorkingDir": "/",
+            "Entrypoint": null,
+            "Labels": {
+                "com.docker.compose.config-hash": "41b2b6c04f7afd2fdc9af6b242dfc94af387208b7a170b53dc143f9a39bb88e6",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:1829893486be257df5049ab3b7fc95afbd0fc09d89803cbc580bda1ba5386b29",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "goddi-h2",
+                "com.docker.compose.project.config_files": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2/docker-compose.yml",
+                "com.docker.compose.project.working_dir": "/Volumes/My-Data/jason.wa/codebase/GoDDI/.agents/worktrees/enterprise-p0-sqlite/tests/h2",
+                "com.docker.compose.service": "observer",
+                "com.docker.compose.version": "5.5.0"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "8f966e7df026b7d5031cff001a45fc3d2cb235411084934124b505b06a687651",
+            "SandboxKey": "/var/run/docker/netns/8f966e7df026",
+            "Ports": {},
+            "Networks": {
+                "goddi-h2_mgmt-net": {
+                    "IPAMConfig": {},
+                    "Links": null,
+                    "Aliases": [
+                        "observer",
+                        "observer"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "89b0bb0f1f167a3b866122cc212267e9902a9d5f5d0e03ced30c60f8cdfe875b",
+                    "EndpointID": "9f18dae546b272b44c0417fc8b30bc16f644b3f222c79bd151c952f708f996ad",
+                    "Gateway": "10.77.1.1",
+                    "IPAddress": "10.77.1.2",
+                    "MacAddress": "f2:80:42:b6:f9:d1",
+                    "IPPrefixLen": 24,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "observer",
+                        "1b59c827f924",
+                        "h2-observer"
+                    ]
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:1829893486be257df5049ab3b7fc95afbd0fc09d89803cbc580bda1ba5386b29",
+            "size": 1025,
+            "annotations": {
+                "com.docker.official-images.bashbrew.arch": "arm64v8",
+                "org.opencontainers.image.base.name": "scratch",
+                "org.opencontainers.image.created": "2026-11-05T18:00:09Z",
+                "org.opencontainers.image.revision": "0c9af76133a2dd9a31dedf3600e423087b29a879",
+                "org.opencontainers.image.source": "https://github.com/alpinelinux/docker-alpine.git#0c9af76133a2dd9a31dedf3600e423087b29a879:aarch64",
+                "org.opencontainers.image.url": "https://hub.docker.com/_/alpine",
+                "org.opencontainers.image.version": "3.24.4"
+            },
+            "platform": {
+                "architecture": "arm64",
+                "os": "linux",
+                "variant": "v8"
+            }
+        }
+    }
+]
