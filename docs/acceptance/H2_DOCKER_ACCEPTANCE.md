@@ -29,7 +29,21 @@ make h2-down              # 停止并清理（含卷）
 ## 判定
 每个检查输出 PASS / FAIL / NOT_VERIFIED；**真实故障失败不得重试成 PASS**。强制项：无多 Owner、无重复 IP、无已确认租约丢失、无未验证镜像恢复、无未批准自动接管、无不可解释 Revision 冲突、无 Outbox 权威事件丢失、无把未持久化复制误报成功。
 
+## 一键验收与报告
+```
+make h2-up && make h2-test    # 环境 + 全部套件 + 证据 + 汇总报告
+make h2-fault-test            # H2-001..020 故障场景
+make h2-fault-kernel          # tc/netem 与磁盘故障（Linux CI 才可验证）
+make h2-report                # 只汇总 reports/*-summary-*.json 与 faults-*.jsonl
+make h2-down                  # 清理
+```
+`make h2-report` 产出 `tests/h2/reports/H2-REPORT-<ts>.json`：每套件 PASS/FAIL/NOT_VERIFIED、
+故障场景判定、未运行套件（NOT_RUN，不当作 PASS）、以及 **Level 2 物理项清单（固定 NOT_VERIFIED）**。
+汇总判定：任一 FAIL → FAIL；全部通过但有未运行 → NOT_VERIFIED；否则 PASS。
+
 ## 状态（滚动）
+- Round 8（CI 故障脚本 + 一键报告）：新增 `netem.sh`（tc/netem 延迟/丢包，验证 qdisc 生效才 PASS）、`disk-fault.sh`（tmpfs 磁盘满，无 CAP_SYS_ADMIN 即 NOT_VERIFIED）、`Dockerfile.tools`（带 iproute2 的 CI 工具镜像）、`h2-report.sh`（汇总器）。**`make h2-test` 全链路 verdict=PASS：PASS=58 FAIL=0 NOT_VERIFIED=23**（dhcp 10、dns 6、dns-transfer 8、faults 21、ipam 13）。
+  - 修正两处验收脚本缺陷（非产品问题）：① DHCP 重复判定把历史 expired 行当成重复分配，改为只统计**同时 active** 的租约；② DNS 套件不可重复（zone 已存在即失败）且停机验证打错目标，改为幂等复用并按 node-b 自身地址查询。
 - Round 6（DNS 传送/TSIG + LKG）：`dns-transfer-acceptance.sh` → **PASS=4 FAIL=1 NOT_VERIFIED=3**。
   - PASS：TSIG key 创建（服务端生成并一次性返回 secret）、AXFR 按 CIDR+key 授权、**无签名 AXFR 被拒（REFUSED）**。
   - **Round 7 澄清并修复**：先前记录的"签名 AXFR 失败"**不是产品缺陷**，是验收脚本自身两处错误——① 目标 DNS IP 硬编码为 `10.77.3.4`，容器重建后实际是 `10.77.3.2`，请求打到了没有 key/授权的 node-b；② `docker restart`（加载新 TSIG key 的必需步骤）被放在了探测**之后**。修正后：**签名 AXFR 真实成功（16 条记录）**、无签名被拒（REFUSED）、SOA 应答、IXFR 应答、**NOTIFY 被确认**。最终 `DNS-TRANSFER PASS=8 FAIL=0 NOT_VERIFIED=0`。

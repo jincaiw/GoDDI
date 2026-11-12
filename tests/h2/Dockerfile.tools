@@ -1,0 +1,8 @@
+# Tool image for kernel-level fault injection (H2-004/005/012/013).
+# The product image stays minimal on purpose; this one carries iproute2 (tc),
+# iptables and iputils so `make h2-fault-kernel` can run on Linux CI where the
+# container really owns the qdisc. On Docker Desktop the qdisc applies inside
+# the VM, so the scenario reports NOT_VERIFIED unless it can be verified.
+FROM alpine:3.24
+RUN apk add --no-cache iproute2 iptables iputils curl jq bash tcpdump
+ENTRYPOINT ["sh"]

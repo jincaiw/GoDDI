@@ -13,5 +13,7 @@ bash scripts/verify-consistency.sh; rc=$?
 if [ -x scripts/dns-acceptance.sh ]; then bash scripts/dns-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 if [ -x scripts/dhcp-acceptance.sh ]; then bash scripts/dhcp-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 if [ -x scripts/ipam-acceptance.sh ]; then bash scripts/ipam-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
+if [ -x scripts/dns-transfer-acceptance.sh ]; then bash scripts/dns-transfer-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 bash scripts/collect-evidence.sh
+bash scripts/h2-report.sh
 exit $rc

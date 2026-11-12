@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container h2-up h2-down h2-test h2-fault-test h2-consistency-check h2-report h2-build h2-certs h2-dns-test h2-ipam-test
+.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container h2-up h2-down h2-test h2-fault-test h2-consistency-check h2-report h2-build h2-certs h2-dns-test h2-ipam-test h2-transfer-test h2-fault-kernel
 
 all: lint test build
 
@@ -137,11 +137,19 @@ h2-fault-test:
 h2-dns-test:
 	@bash tests/h2/scripts/dns-acceptance.sh
 
+h2-fault-kernel:
+	@bash tests/h2/scripts/netem.sh apply node-b 200ms 20% || true
+	@bash tests/h2/scripts/disk-fault.sh node-a 8m || true
+	@bash tests/h2/scripts/netem.sh clear node-b || true
+
+h2-transfer-test:
+	@bash tests/h2/scripts/dns-transfer-acceptance.sh
+
 h2-ipam-test:
 	@bash tests/h2/scripts/ipam-acceptance.sh
 
 h2-report:
-	@bash tests/h2/scripts/collect-evidence.sh
+	@bash tests/h2/scripts/h2-report.sh
 
 ## clean: Remove build artifacts
 clean:

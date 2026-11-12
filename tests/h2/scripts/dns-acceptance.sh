@@ -24,8 +24,14 @@ mkzone(){ curl -s -X POST http://127.0.0.1:$1/api/v1/dns/zones "${@:2}" -d "{\"n
 # Create zone+record on node-a
 ZR=$(curl -s -X POST http://127.0.0.1:18181/api/v1/dns/zones "${HA[@]}" -d '{"name":"h2.test.","type":"primary"}')
 ZA=$(printf '%s' "$ZR" | jget "d['data']['id']")
-[ -n "${ZA:-}" ] && ok "zone created on node-a" || bad "zone create node-a ($(printf '%s' "$ZR" | head -c 120))"
-curl -s -X POST "http://127.0.0.1:18181/api/v1/dns/zones/$ZA/records" "${HA[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.10"}' -o /dev/null -w '' 
+if [ -n "${ZA:-}" ]; then ok "zone created on node-a"
+else
+  # Reuse an existing zone so the suite is repeatable.
+  ZA=$(curl -s http://127.0.0.1:18181/api/v1/dns/zones -H "Authorization: Bearer $TOK_A" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(next((x['id'] for x in d if x['name']=='h2.test.'),''))")
+  [ -n "${ZA:-}" ] && ok "zone h2.test. reused on node-a" || bad "zone create node-a ($(printf '%s' "$ZR" | head -c 120))"
+fi
+curl -s -X POST "http://127.0.0.1:18181/api/v1/dns/zones/$ZA/records" "${HA[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.10"}' -o /dev/null
 sleep 3
 a=$(digq node-a www.h2.test.)
 [ "$a" = "192.0.2.10" ] && ok "node-a answers www.h2.test. A via real dig ($a)" || bad "node-a dig answer='$a'"
@@ -35,8 +41,15 @@ if [ "$b" = "192.0.2.10" ]; then nv "node-b already served node-a config (unexpe
 # Each node serves its own control-plane config: create same zone on node-b
 ZRB=$(curl -s -X POST http://127.0.0.1:18182/api/v1/dns/zones "${HB[@]}" -d '{"name":"h2.test.","type":"primary"}')
 ZB=$(printf '%s' "$ZRB" | jget "d['data']['id']")
+if [ -z "${ZB:-}" ]; then
+  ZB=$(curl -s http://127.0.0.1:18182/api/v1/dns/zones -H "Authorization: Bearer $TOK_B" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(next((x['id'] for x in d if x['name']=='h2.test.'),''))")
+fi
 if [ -n "${ZB:-}" ]; then
-  curl -s -X POST "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" "${HB[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.11"}' -o /dev/null
+  EXIST=$(curl -s "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" -H "Authorization: Bearer $TOK_B" | jget "d['meta']['total']")
+  if [ "${EXIST:-0}" -eq 0 ]; then
+    curl -s -X POST "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" "${HB[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.11"}' -o /dev/null
+  fi
   sleep 3
   b2=$(digq node-b www.h2.test.)
   [ "$b2" = "192.0.2.11" ] && ok "node-b answers its own config www.h2.test.=$b2" || bad "node-b dig answer='$b2'"
@@ -47,11 +60,19 @@ printf '%s\n%s\n' "$ra" "$rb" > "$OUT/dns-lkg-$TS.txt"
 if [ -n "$ra" ] && [ -n "$rb" ]; then
   [ "$ra" = "$rb" ] && ok "both nodes report same LKG revision" || nv "LKG revisions differ between independent control planes (no cluster-wide publish): a=[$ra] b=[$rb]"
 else nv "LKG revision metric not yet present on one/both nodes"; fi
-# Control-plane/primary down: node-b DNS must keep answering from its local copy
+# Control-plane/primary down: node-b DNS must keep answering from its local copy.
+# The query must target node-b's own client-network address, not a name that may
+# resolve to node-a.
 docker stop node-a >/dev/null 2>&1; sleep 1
-b3=$(digq node-b www.h2.test.)
+BIP=$(docker exec node-b sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+b3=""
+for _ in $(seq 1 5); do
+  b3=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null" | tr -d '\r' | head -1)
+  [ -n "$b3" ] && break; sleep 2
+done
 [ "$b3" = "192.0.2.11" ] && ok "node-b DNS keeps answering while node-a (control+primary) is down" || bad "node-b stopped answering with node-a down ($b3)"
 docker start node-a >/dev/null 2>&1
+for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' node-a 2>/dev/null)" = healthy ] && break; sleep 2; done
 # Delete record on node-b and confirm withdrawal
 if [ -n "${ZB:-}" ]; then
   RID=$(curl -s "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" -H "Authorization: Bearer $TOK_B" | jget "d['data'][0]['id']")

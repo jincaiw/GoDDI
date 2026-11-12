@@ -39,7 +39,12 @@ if [ -n "${IP1:-}" ]; then
   # Retransmit/idempotency: same MAC again -> same address, no duplicate row
   U2=$(udhcpc); IP2=$(ipof "$U2")
   if [ "$IP2" = "$IP1" ]; then ok "retransmit/renew keeps same address $IP1"; else nv "same-MAC re-DISCOVER allocated new address '$IP2' (no MAC-affinity reuse across lease lifetime)"; fi
-  ca2=$(leasecount 18181 "$IP1" "$TOK_A"); [ "${ca2:-0}" -eq 1 ] && ok "no duplicate lease rows for $IP1" || bad "duplicate/ambiguous lease rows for $IP1 (count=$ca2)"
+  # A single address can legitimately have historical rows (an expired lease
+  # from an earlier client plus the current one). What must never happen is two
+  # leases holding the same address at the same time, so the check counts only
+  # leases that are currently held.
+  act=$(curl -s "http://127.0.0.1:18181/api/v1/dhcp/leases?ip=$IP1&status=active" "${HA[@]}" | jget "d['meta']['total']")
+  if [ "${act:-0}" -le 1 ]; then ok "at most one active lease for $IP1 (no double allocation)"; else bad "double allocation: $act active leases for $IP1"; fi
 fi
 
 # Phase 2: replication partition -> default paused (no new ACK), then explicit degrade serves
