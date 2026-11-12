@@ -34,6 +34,7 @@ make h2-down              # 停止并清理（含卷）
 make h2-up && make h2-test    # 环境 + 全部套件 + 证据 + 汇总报告
 make h2-fault-test            # H2-001..020 故障场景
 make h2-fault-kernel          # tc/netem 与磁盘故障（Linux CI 才可验证）
+make h2-web-test              # 控制台全页面回归 + 人操作 CRUD 走查
 make h2-report                # 只汇总 reports/*-summary-*.json 与 faults-*.jsonl
 make h2-down                  # 清理
 ```
@@ -42,6 +43,10 @@ make h2-down                  # 清理
 汇总判定：任一 FAIL → FAIL；全部通过但有未运行 → NOT_VERIFIED；否则 PASS。
 
 ## 状态（滚动）
+- Round 9（Web 控制台全功能验收）：启动**最新构建**（HEAD 编译，隔离数据目录/端口），用真实 Chromium 执行 18 套 Playwright 回归 + 人操作 CRUD 走查 → **WEB PASS=113 FAIL=0 PAGE_ERRORS=0**。
+  - 人操作路径实测：表单登录 → 仪表盘渲染 → 建区 → **列表 UI 可见** → 加 A 记录 → **区域详情页可见** → 删除 → 无页面错误。
+  - 澄清一处"疑似缺陷"：区域详情页正确路由是 `/dns/zone-detail/:id`（列表页链接也指向它），`/dns/zones/:id` 返回 404 属预期；验收脚本已按真实路由修正。
+  - 汇总：`make h2-report` → **verdict=PASS，PASS=171 FAIL=0 NOT_VERIFIED=23**（dhcp 10 / dns 6 / dns-transfer 8 / faults 21 / ipam 13 / web 113）。
 - Round 8（CI 故障脚本 + 一键报告）：新增 `netem.sh`（tc/netem 延迟/丢包，验证 qdisc 生效才 PASS）、`disk-fault.sh`（tmpfs 磁盘满，无 CAP_SYS_ADMIN 即 NOT_VERIFIED）、`Dockerfile.tools`（带 iproute2 的 CI 工具镜像）、`h2-report.sh`（汇总器）。**`make h2-test` 全链路 verdict=PASS：PASS=58 FAIL=0 NOT_VERIFIED=23**（dhcp 10、dns 6、dns-transfer 8、faults 21、ipam 13）。
   - 修正两处验收脚本缺陷（非产品问题）：① DHCP 重复判定把历史 expired 行当成重复分配，改为只统计**同时 active** 的租约；② DNS 套件不可重复（zone 已存在即失败）且停机验证打错目标，改为幂等复用并按 node-b 自身地址查询。
 - Round 6（DNS 传送/TSIG + LKG）：`dns-transfer-acceptance.sh` → **PASS=4 FAIL=1 NOT_VERIFIED=3**。
