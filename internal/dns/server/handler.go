@@ -563,9 +563,23 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		msg.SetReply(req)
 		msg.Authoritative = true
 		msg.Answer = rrs[start:end]
+		// A TSIG-signed request must get a TSIG-signed reply. miekg only signs a
+		// message that already carries a TSIG RR, so attach the placeholder
+		// here; after the first message the remaining AXFR/IXFR messages are
+		// signed over the timers only, chained from the previous MAC (RFC 8945
+		// §5.3.1). Without this a strict secondary rejects the transfer with
+		// "no signature found".
+		if tsig := req.IsTsig(); tsig != nil {
+			msg.SetTsig(tsig.Hdr.Name, tsig.Algorithm, 300, time.Now().Unix())
+		}
 		if err := h.writeResponse(w, req, msg); err != nil {
 			slog.Debug("dns_handler: transfer write failed", "error", err)
 			return
+		}
+		if tsig := req.IsTsig(); tsig != nil {
+			if tw, ok := w.(interface{ TsigTimersOnly(bool) }); ok {
+				tw.TsigTimersOnly(true)
+			}
 		}
 	}
 }

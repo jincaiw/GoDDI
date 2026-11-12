@@ -635,6 +635,13 @@ func (s *SecondarySync) axfrFromPrimary(zoneName string, cfg *transferTSIGConfig
 	t := new(dns.Transfer)
 	m := new(dns.Msg)
 	m.SetAxfr(zoneName)
+	// Attach the TSIG RR to the request. miekg's Transfer.WriteMsg only signs a
+	// message that already carries a TSIG RR (it checks m.IsTsig()); the key
+	// material below is what Generate/Verify use, but without this line the
+	// AXFR request goes out unsigned and the primary refuses it. The name is
+	// canonicalised so the primary's TSIG secret lookup and the zone-transfer
+	// ACL (dns_zone_transfer.tsig_key_name) match.
+	m.SetTsig(dns.Fqdn(cfg.tsigName), defaultAlgoMap(cfg.tsigAlgo), 300, time.Now().Unix())
 
 	if cfg.useTLS {
 		t.TLS = &tls.Config{

@@ -1779,3 +1779,17 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 
 ### 1at.4 验证
 `go test ./...` 0；`make verify-tidy` OK；`docs`/`contracts`/`i18n`/`prodgates` PASS；`git diff --check` 干净。
+
+## 1au. DNS 双机（方案 A：标准主从）实现与详细测试（round 351）
+
+### 1au.1 修复的真实缺陷（使主从真正可用）
+- `internal/dns/transfer/secondary.go` `axfrFromPrimary`：AXFR 请求未加 TSIG RR → miekg 不签名 → 实际未认证。修复：`m.SetTsig(dns.Fqdn(cfg.tsigName), algo, 300, now)`。
+- `internal/dns/server/handler.go` `serveZoneTransfer`：AXFR/IXFR 响应未加 TSIG RR → miekg 不签名 → 严格 secondary 报 `dns: no signature found`。修复：每条响应 `SetTsig(req 的 key/algo)`，首条后 `TsigTimersOnly(true)`。
+
+### 1au.2 测试
+- `internal/dns/transfer/primary_secondary_e2e_test.go`：真实 loopback TCP + TSIG 的 primary（`AXFRHandler`+`dns.Server`）+ 真实 `SecondarySync`，覆盖初始 AXFR、变更再同步、NOTIFY 刷新、无 TSIG/错密钥 fail-closed。
+- `internal/dns/server/handler_axfr_tsig_test.go`：产品 `serveZoneTransfer` 每条响应带 TSIG、首条后 timers-only。
+- `go test ./internal/dns/...` 全绿。
+
+### 1au.3 文档/边界
+`docs/audit/DNS-PRIMARY-SECONDARY.md`（配置步骤/transfer_policy 格式/修复/测试/边界）。仍为方案 A：写单点、无自动选主、`/cluster` 501、secondary 客户端同步走 AXFR。

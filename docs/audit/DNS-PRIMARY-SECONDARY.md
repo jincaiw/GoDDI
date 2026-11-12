@@ -1,0 +1,45 @@
+# DNS 双机：标准 DNS 主从（方案 A）
+
+> 用标准 DNS 机制（AXFR/IXFR + NOTIFY + TSIG + XFR-over-TLS）把两个 GoDDI DNS 实例组成主/从：primary 是唯一写者，secondary 通过区传送拉取只读副本并本地应答。**不是**自动选主的 DNS 集群（`/cluster` 仍 501）。
+
+## 1. 组件与代码
+- primary 对外传送：`internal/dns/transfer/transfer.go`（`AXFRHandler.HandleAXFR/HandleIXFR`），`main.go` `dnsSrv.SetAXFRHandler(...)`；仅在 TCP 上、需 TSIG 授权（`dns_zone_transfer.tsig_key_name`）。
+- secondary 拉取：`internal/dns/transfer/secondary.go`（`SecondarySync.SyncFromPrimary` → `axfrFromPrimary`，`StartPeriodicSync` 周期刷新），过期按 SOA EXPIRE 停止权威应答。
+- 变更通知：`internal/dns/transfer/notify.go`（primary `SendNotifyForZone`，目标取自 zone `acl.notify`；secondary 入站 NOTIFY 触发刷新）。
+- 协议交互由 `miemg/dns` 实现；TSIG 为强制（无 TSIG 的 AXFR 被判 fail-closed 拒绝）。
+
+## 2. 配置（在控制台/库中）
+**Primary 节点**：
+1. 建 `type=primary` 的 zone（SOA/NS/A 等记录）。
+2. zone ACL：`allow-transfer` 允许 secondary 的源地址；`notify` 填 secondary 的 IP:port（变更时发 NOTIFY）。
+3. 建 TSIG key（`dns_tsig_keys`，名称+密钥），并建立 `dns_zone_transfer(zone_id, tsig_key_name, allowed_cidr)` 绑定——AXFR 的授权就是这条绑定。
+
+**Secondary 节点**：
+1. 建同名 `type=secondary` 的 zone。
+2. `transfer_policy` 填：
+   ```
+   <primary-host>[:port][|tsig-key名|base64密钥[|hmac-sha256]]
+   例：192.0.2.10:53|xfra.key|BASE64SECRET|hmac-sha256
+   例(TLS/XFR-over-TLS)：tls://192.0.2.10:853|xfra.key|BASE64SECRET
+   ```
+   无 TSIG 字段 → 同步 fail-closed 拒绝。
+3. `SecondarySync` 周期/收到 NOTIFY 时 AXFR 拉取、校验、落库并 reload；SOA EXPIRE 到期 → 停止权威应答。
+
+**客户端/解析器**：把 primary、secondary 都作为 NS 或上游（多 NS / LB / anycast）实现读容灾。写仍只在 primary。
+
+## 3. 本轮修复的真实缺陷（使方案 A 真正可用）
+1. **secondary 的 AXFR 请求未携带 TSIG**：`axfrFromPrimary` 只 `m.SetAxfr()`，而 miekg `Transfer.WriteMsg` 仅在 `m.IsTsig()!=nil` 时签名 → 请求实际未签名，primary 必然拒绝。修复：请求加 `m.SetTsig(canonical key, algo, 300, now)`。
+2. **primary 的 AXFR 响应未携带 TSIG**：`serveZoneTransfer` 直接 `WriteMsg(msg)`，而 miekg 服务器只在响应自带 TSIG RR 时签名 → 严格 secondary 报 `dns: no signature found`。修复：每条传送响应 `msg.SetTsig(req 的 key/algo)`，首条之后 `TsigTimersOnly(true)`（RFC 8945 §5.3.1 多消息链）。
+
+## 4. 详细测试（仓内、可复现）
+- `internal/dns/transfer/primary_secondary_e2e_test.go`：起一个**真实 TSIG 保护的 primary**（`AXFRHandler` + 真实 `dns.Server`/TCP），用真实 `SecondarySync` 走 TCP 拉取：
+  - 初次 AXFR 复制（记录 + serial）；
+  - primary 变更后再同步（新记录/新 serial）；
+  - NOTIFY 触发刷新；
+  - **无 TSIG / 错误密钥 → fail-closed 拒绝**。
+- `internal/dns/server/handler_axfr_tsig_test.go`：直接验证产品 `serveZoneTransfer` 对每条传送响应附加 TSIG 且首条后切 timers-only。
+
+## 5. 边界（诚实）
+- 写单点（primary）；secondary 只读；切换在 DNS 解析层（多 NS/LB），**无自动选主/quorum**；`/cluster` 恒 501。
+- secondary 客户端同步当前用 AXFR（`axfrFromPrimary`）；IXFR 服务端能力在 `HandleIXFR`（有 journal），但客户端侧未走 IXFR 增量。
+- 需现场正确配置 NS/TSIG/ACL/notify；容器/主机双实例的端口与网络由部署决定。

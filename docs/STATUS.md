@@ -6,7 +6,7 @@
 
 ## 一句话结论
 
-**单机全部功能已完成并反复复跑；双机以 2 容器双节点演练形成新证据层（round 246–282，25+ 场景：HA 生命周期、SIGKILL 恢复、告警时间线、统一事实链跨节点/跨重启、作用域耗尽、锁压力，非 B8.5 验收）；统一事实链默认装配（data-plane relay + DNS/IPAM 双 consumer + DomainFacts split 复制）与 schema=2 租约表集已落地并经线上 DNS 应答实证（round 258–280）。**round 338–348 已完成 D2：默认 DHCP 热路径切换到 WAL 事件溯源存储**（`config.yaml` 默认 `dhcp.lease_store: wal`；参考 HA 部署默认 primary=WAL/standby=sqlite），含平价/事实同源/灰度/崩溃重放/回滚全矩阵证据（§1ao–§1as）。剩余均为需工作树之外输入或有意保留的边界**：B8.5 物理真机验收、501 预留扩展契约（6 个，有意保留）、候选未冻结项（兼容矩阵/快照迁移/UPSERT 写路径）、独立专家签字、HA standby 常驻 WAL（不必要，被提升节点靠重启加载）。round 286–287 已按用户「不需要按历史数据兼容」的指令把 legacy 代码、兼容层、数据库表与迁移全部清理，统一事实链成为唯一 DNS 生产者；未宣称外部验收通过、未触碰生产。
+**单机全部功能已完成并反复复跑；双机以 2 容器双节点演练形成新证据层（round 246–282，25+ 场景：HA 生命周期、SIGKILL 恢复、告警时间线、统一事实链跨节点/跨重启、作用域耗尽、锁压力，非 B8.5 验收）；统一事实链默认装配（data-plane relay + DNS/IPAM 双 consumer + DomainFacts split 复制）与 schema=2 租约表集已落地并经线上 DNS 应答实证（round 258–280）。**round 351 已完成 DNS 双机（方案 A 标准主从：AXFR/IXFR+NOTIFY+TSIG/XFR-over-TLS）并修复主从 TSIG 未签名缺陷（§1au）。** round 338–348 已完成 D2：默认 DHCP 热路径切换到 WAL 事件溯源存储**（`config.yaml` 默认 `dhcp.lease_store: wal`；参考 HA 部署默认 primary=WAL/standby=sqlite），含平价/事实同源/灰度/崩溃重放/回滚全矩阵证据（§1ao–§1as）。剩余均为需工作树之外输入或有意保留的边界**：B8.5 物理真机验收、501 预留扩展契约（6 个，有意保留）、候选未冻结项（兼容矩阵/快照迁移/UPSERT 写路径）、独立专家签字、HA standby 常驻 WAL（不必要，被提升节点靠重启加载）。round 286–287 已按用户「不需要按历史数据兼容」的指令把 legacy 代码、兼容层、数据库表与迁移全部清理，统一事实链成为唯一 DNS 生产者；未宣称外部验收通过、未触碰生产。
 
 ## 1. 已完成（有仓内证据）
 
