@@ -46,3 +46,20 @@
 
 ## 6. 一键演练脚本
 `scripts/dns_primary_secondary_drill.sh`：脚本化运行上面的 loopback 演练（`TestPrimarySecondary*`），输出 `PASS | ...` 各行与最终 `DRILL: OK`。覆盖：初始 AXFR、变更再同步、NOTIFY 刷新、无 TSIG/错密钥 fail-closed、**停掉 primary 后 secondary 仍应答（读容灾）**。
+
+## 7. 两容器 + dig 现场版
+`scripts/dns_primary_secondary_container_drill.sh`：构建 `goddi:dnsdrill` 轻量镜像，起 **primary、secondary 两个真实 DNS 容器**（复用产品 `transfer.AXFRHandler` / `transfer.SecondarySync`）加一个 `dig` 客户端容器，实测：
+```
+PASS | primary (dig) answers www.drill.test. A = 192.0.2.10
+PASS | secondary (dig) mirrors www.drill.test. A = 192.0.2.10 (TSIG AXFR)
+PASS | primary refuses unsigned AXFR (TSIG fail-closed)
+PASS | primary down: primary no longer answers
+PASS | secondary still answers after primary down (read failover)
+PASS=5 FAIL=0
+DRILL: OK
+```
+运行：`bash scripts/dns_primary_secondary_container_drill.sh`（需要 Docker）。
+CI 侧的轻量版本：`make verify-dns-drill`（loopback，无需 Docker/外部 dig）。
+
+### 已知产品缺口（诚实）
+代码里**没有任何应用路径写入 `dns_zone_transfer`**（AXFR 的 TSIG 授权绑定表）。也就是说只靠管理台/API 建不出"zone ↔ TSIG key"的传送授权，`HandleAXFR` 的 `JOIN dns_zone_transfer ... tsig_key_name` 会一直不匹配。因此本容器演练用 harness 直接写入该绑定（真实产品行为仍受此限）。建议后续补一个 `dns_zone_transfer` 的管理 API/UI（允许按 zone 绑定 TSIG key + 允许来源），否则方案 A 在纯 UI 部署下不可用。完整 `goddi serve` 双容器版还受控制→DNS 复制、TSIG 密封等编排影响，本演练用 harness 规避这些以便稳定复现。

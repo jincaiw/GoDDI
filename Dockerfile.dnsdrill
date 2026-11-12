@@ -1,0 +1,5 @@
+FROM alpine:3.24
+RUN mkdir -p /data && apk add --no-cache ca-certificates
+COPY .dnsdrill-bin /usr/local/bin/dnsdrill
+RUN chmod +x /usr/local/bin/dnsdrill
+ENTRYPOINT ["/usr/local/bin/dnsdrill"]

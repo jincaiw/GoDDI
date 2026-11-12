@@ -1793,3 +1793,9 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 
 ### 1au.3 文档/边界
 `docs/audit/DNS-PRIMARY-SECONDARY.md`（配置步骤/transfer_policy 格式/修复/测试/边界）。仍为方案 A：写单点、无自动选主、`/cluster` 501、secondary 客户端同步走 AXFR。
+
+## 1av. DNS 方案A：CI 演练目标 + 两容器 dig 现场版（round 355）
+
+- `make verify-dns-drill`：跑 loopback 演练（`TestPrimarySecondary*`），无需 Docker/外部 dig。
+- `scripts/dns_primary_secondary_container_drill.sh`：两真实 DNS 容器（复用产品 `AXFRHandler`/`SecondarySync`）+ `dig` 客户端容器，实测 TSIG AXFR 复制、无签名 AXFR fail-closed、停 primary 后 secondary 仍应答；`PASS=5 FAIL=0 DRILL: OK`。
+- 已知缺口：应用代码无写入 `dns_zone_transfer` 的路径（AXFR TSIG 授权绑定），纯 UI 部署无法授权 AXFR；建议后续补管理 API/UI。演练 harness 直接写入该绑定。

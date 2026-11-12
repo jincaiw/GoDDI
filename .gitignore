@@ -80,3 +80,6 @@ bin/
 # Container build staging (Dockerfile.ha)
 /.ha-goddi-bin
 /.ha-web-dist/
+
+# DNS drill build staging (Dockerfile.dnsdrill)
+/.dnsdrill-bin

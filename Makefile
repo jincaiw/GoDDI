@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy
+.PHONY: all build test lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill
 
 all: lint test build
 
@@ -96,6 +96,10 @@ verify-e2e:
 verify-browser:
 	@test -n "$(GODDI_ADMIN_PASS)" || { echo "GODDI_ADMIN_PASS is required; see test/browser/README.md" >&2; exit 2; }
 	./test/browser/run.sh
+
+## verify-dns-drill: DNS 方案A 主从 loopback 演练（真实 DNS 服务器 + SecondarySync + DNS 查询）
+verify-dns-drill:
+	@bash scripts/dns_primary_secondary_drill.sh
 
 ## clean: Remove build artifacts
 clean:
