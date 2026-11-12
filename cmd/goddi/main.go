@@ -1112,13 +1112,17 @@ func runServer(configPath string) error {
 		// D-09 non-blocking signal: scopes whose subnet has no local IPAM
 		// projection. Allocation is unchanged unless require_ipam_projection
 		// (the guard above) is set; this only makes the gap visible.
-		if gaps, gerr := ipam.ProjectionGaps(context.Background(), dhcpStore.DB); gerr == nil && len(gaps) > 0 {
-			slog.Warn("DHCP: scopes missing local IPAM projection", "count", len(gaps))
+		if gaps, gerr := ipam.ProjectionGaps(context.Background(), dhcpStore.DB); gerr == nil {
+			metrics.DHCPIPAMProjectionGaps.Set(float64(len(gaps)))
+			if len(gaps) > 0 {
+				slog.Warn("DHCP: scopes missing local IPAM projection", "count", len(gaps))
+			}
 		}
 		// D-14: expose the last-known-good data-plane revision this node has
 		// durably applied, so operators can see what config it will serve if
 		// the control plane is unreachable.
 		if rev, at, ok, lerr := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); lerr == nil && ok {
+			metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDHCP)).Set(float64(rev))
 			slog.Info("DHCP data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
 		}
 		slog.Info("DHCP server initialized",

@@ -803,6 +803,23 @@ func boolGauge(v bool) float64 {
 	return 0
 }
 
+// D-20 observability gauges.
+var (
+	// DataPlaneLKGRevision is the last-known-good revision a node has durably
+	// applied per domain (D-14).
+	DataPlaneLKGRevision = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_lkg_revision",
+		Help: "Last-known-good data-plane revision durably applied, by domain.",
+	}, []string{"domain"})
+
+	// DHCPIPAMProjectionGaps is the number of enabled DHCP scopes whose subnet
+	// has no local IPAM projection (D-09).
+	DHCPIPAMProjectionGaps = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ipam_projection_gaps",
+		Help: "Number of enabled DHCP scopes missing a local IPAM subnet projection.",
+	})
+)
+
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
 func InitMetrics() {
 	once.Do(func() {
@@ -894,6 +911,8 @@ func InitMetrics() {
 			DHCPRequestTimeoutsTotal,
 			DHCPSQLBusyTotal,
 			DHCPRequestDurationSeconds,
+			DataPlaneLKGRevision,
+			DHCPIPAMProjectionGaps,
 		)
 
 		// Start background goroutine to update uptime gauge. The goroutine

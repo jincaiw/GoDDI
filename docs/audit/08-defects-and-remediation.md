@@ -86,6 +86,6 @@
 ## P2
 - **D-16 文档冲突/缺失**：任务书引用 DEC-001~019 不存在；以 ADR 0001–0009 为准，需补齐决策登记并统一编号。
 - **D-17 Appliance Agent/apps 运行时**：`internal/apps/{runtime,sdk}` 未做运行/故障验证。
-- **D-18 性能/长跑**：`synchronous=FULL` + 每绑定一次对端确认 → 吞吐/延迟未基准（需压测/soak）。
+- **D-18 性能/长跑**：**基础工具已加（2026-11-12）**：`scripts/bench.sh` + `make bench`（`go test -bench . -benchmem ./internal/...`，输出版本+时间戳报告）；已烟测 `internal/dns/zone` benchmark 可运行。**仍缺**：并发 DORA/高频续租/72h soak 的真实压测数据（NOT_VERIFIED）。
 - **D-19 集群身份**：无 ClusterID / 节点唯一性仲裁（依赖部署约定）。
-- **D-20 可观测性**：合成种子下 `/ready` 可能因控制库 FK 显示 degraded（种子产物），需区分真实缺陷与种子噪声。
+- **D-20 可观测性**：**部分已实现（2026-11-12）**：新增 Prometheus gauge `goddi_dataplane_lkg_revision{domain}`（D-14）与 `goddi_dhcp_ipam_projection_gaps`（D-09），启动时置值（`internal/metrics/metrics.go`、`cmd/goddi/main.go`）。**仍缺**：周期刷新/实时采集、更多就绪子项；合成种子 `/ready` degraded 噪声仍需区分（种子产物）。

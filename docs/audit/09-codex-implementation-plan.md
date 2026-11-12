@@ -52,7 +52,7 @@
 - **T4-4 备份/升级恢复演练**（D-12）：自动化 restore drill + 版本升级回滚。验收：可恢复。
 
 ## 阶段 5（运维/性能/清理）
-- **T5-1 性能基准/soak**（D-18）：并发 DORA、高频续租、72h 长跑。
+- **T5-1 性能基准/soak**（D-18，**基准工具已加 2026-11-12**：`scripts/bench.sh`/`make bench`）：并发 DORA、高频续租、72h 长跑仍待执行（NOT_VERIFIED）。
 - **T5-2 遗留路径收敛**（D-13）：shadow/indexed lease store 按灰度计划清理。
 - **T5-3 TSIG 热加载 + 授权 UI**（D-06 后续）：动态 `TsigProvider` + Vue 授权页。
 - **T5-4 文档/编号统一**（D-16）：DEC/ADR 登记表。

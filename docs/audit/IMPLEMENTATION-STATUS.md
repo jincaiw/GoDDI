@@ -1886,3 +1886,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 测试 `internal/dataplane/lkg_test.go`：同步后 LKG revision == 控制 `dataplane_revision`、时间非零；无变更同步不改变戳。
 - 原子性：`apply` 单事务覆盖各表 + sync_state + LKG + Commit。
 - 边界：显式"回滚到指定 LKG revision"未实现；"集群全部应用"三态仍 NOT_IMPLEMENTED（D-05）。`go test ./internal/dataplane` 全绿。
+
+## 1bg. D-20 指标暴露 + D-18 基准脚本（round 367）
+
+- D-20：`internal/metrics/metrics.go` 增 `DataPlaneLKGRevision{domain}`、`DHCPIPAMProjectionGaps` gauge 并注册；`cmd/goddi/main.go` 启动时按 `dataplane.LKG` 与 `ipam.ProjectionGaps` 置值（缺口即使为 0 也设置）。
+- D-18：`scripts/bench.sh`（`go test -run '^$' -bench . -benchmem ./internal/...` 输出时间戳报告）+ `make bench`；已烟测 `internal/dns/zone` benchmark 可运行（`BenchmarkStoreLookup_*`）。
+- 回归：`go build ./...` OK；`go test ./internal/metrics ./internal/dataplane ./internal/dhcp/server` 全绿；docs 守卫 PASS。
+- 边界：指标为启动快照（非周期/实时）；soak/并发压测未执行（NOT_VERIFIED）。

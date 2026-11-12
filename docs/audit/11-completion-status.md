@@ -20,9 +20,9 @@
 | D-14 | dataplane LKG 版本戳 + 原子快照 | PASS（同事务戳+读取+测试）；显式回滚到 LKG NOT implemented | `dataplane/lkg.go`、`lkg_test.go`、启动日志 |
 | D-16 | 文档/决策编号 | PARTIAL：ADR-0010 + DEC-002/006/007/008 正式化；DEC-001/003/004/005/009~019 未建档（未批准） | `docs/adr/0010`、`docs/decisions/*` |
 | D-17 | Appliance agent 运行验证 | NOT_VERIFIED | `internal/apps/{runtime,sdk}` |
-| D-18 | 性能/长跑基准 | NOT implemented（可加 `scripts/bench_*`） | — |
+| D-18 | 性能/长跑基准 | PARTIAL：`scripts/bench.sh`+`make bench`（烟测通过）；soak/并发压测 NOT_VERIFIED | `scripts/bench.sh` |
 | D-19 | ClusterID/节点唯一仲裁 | NOT_IMPLEMENTED（501） | — |
-| D-20 | 可观测性（LKG/投影缺口指标） | PARTIAL：启动日志已加；无 Prometheus 指标暴露 | `main.go` 启动日志 |
+| D-20 | 可观测性（LKG/投影缺口指标） | PARTIAL：新增 Prometheus gauge `goddi_dataplane_lkg_revision{domain}`、`goddi_dhcp_ipam_projection_gaps`（启动置值）；周期刷新/更多就绪子项待做 | `metrics/metrics.go`、`main.go` |
 
 ## B. 外部阻断（BLOCKED，沙箱不可完成）
 - B8.5 物理真机验收（真实主机/断电/网络隔离/fencing/真实 relay/真实监控时间线）。
