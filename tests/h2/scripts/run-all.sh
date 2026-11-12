@@ -9,5 +9,8 @@ for n in node-a node-b; do
   done
 done
 bash scripts/verify-consistency.sh; rc=$?
+# Protocol-level acceptance suites (run when present).
+if [ -x scripts/dns-acceptance.sh ]; then bash scripts/dns-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
+if [ -x scripts/dhcp-acceptance.sh ]; then bash scripts/dhcp-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 bash scripts/collect-evidence.sh
 exit $rc

@@ -30,5 +30,6 @@ make h2-down              # 停止并清理（含卷）
 每个检查输出 PASS / FAIL / NOT_VERIFIED；**真实故障失败不得重试成 PASS**。强制项：无多 Owner、无重复 IP、无已确认租约丢失、无未验证镜像恢复、无未批准自动接管、无不可解释 Revision 冲突、无 Outbox 权威事件丢失、无把未持久化复制误报成功。
 
 ## 状态（滚动）
+- Round 2（DNS 验收核心）：`dns-acceptance.sh` 真实 dig：node-a 建区/记录→应答 PASS；node-b 各自控制面应答 PASS；node-a 停机后 node-b DNS 继续应答 PASS；删除撤记录 PASS；**跨节点配置传播 NOT_VERIFIED（ADR-0005 多节点发布未实现）**；AXFR/IXFR/NOTIFY 待补。
 - Round 1（已验证）：环境脚手架落地；`make h2-up` 起 6 服务、双节点 healthy；`make h2-test` = **PASS=9 FAIL=0 NOT_VERIFIED=4**（含 mTLS、唯一 Owner、健康）；`make h2-down` 清理干净、可重复。具体 20 个故障场景与 DNS/DHCP/IPAM 验收套件在后续轮次执行。
 - macOS OrbStack：tc/netem 与磁盘限制类仅在 Linux CI 执行，macOS 记 NOT_VERIFIED。

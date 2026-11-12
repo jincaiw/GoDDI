@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container h2-up h2-down h2-test h2-fault-test h2-consistency-check h2-report h2-build h2-certs
+.PHONY: all build test bench lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container h2-up h2-down h2-test h2-fault-test h2-consistency-check h2-report h2-build h2-certs h2-dns-test
 
 all: lint test build
 
@@ -133,6 +133,9 @@ h2-test:
 
 h2-fault-test:
 	@bash tests/h2/scripts/run-all.sh
+
+h2-dns-test:
+	@bash tests/h2/scripts/dns-acceptance.sh
 
 h2-report:
 	@bash tests/h2/scripts/collect-evidence.sh
