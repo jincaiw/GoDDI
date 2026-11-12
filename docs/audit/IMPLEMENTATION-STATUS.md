@@ -1864,3 +1864,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 配置：`dhcp.require_ipam_projection`（默认 false）+ `GODDI_DHCP_REQUIRE_IPAM_PROJECTION`；CONFIG-REFERENCE 已加。main：启用时注入 guard；始终启动打印缺口计数告警（非阻塞）。
 - 测试：`internal/ipam/projection_test.go`（缺口检测仅列未投影且启用 scope；guard 拒绝未投影、放行已投影）。`go test ./internal/ipam ./internal/dhcp/server ./internal/config` 全绿。
 - 边界：跨面"相对控制面滞后"需 E-3/ADR-0005 水位，本地面不能证明；严格拦截默认关闭以免误伤独立 scope。
+
+## 1bd. D-10 relay 故障注入/幂等（round 364）
+
+- 新增 `internal/facts/relay_test.go`：relay 按序投递、重 tick 幂等、重启从水位续传不重复、inbox 不可用时 tick 失败但源不丢/水位不动、恢复后恰好一次；并断言 relay 不修改 source 行状态。
+- 既有 outbox/replica/consumer 测试覆盖 enqueue 幂等/冲突、快照原子、gap、失败留箱。
+- `go test ./internal/facts ./internal/ipam` 全绿；`go build ./...` OK。
+- 仍缺：显式 DLQ（失败留 inbox 重放）；consumer apply 与 MarkDone 间崩溃的端到端演练（同库同事务，风险低）。

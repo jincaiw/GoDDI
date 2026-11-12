@@ -47,7 +47,7 @@
 
 ## 阶段 4（IPAM/DDNS 与持久化加固）
 - **T4-1 IPAM freshness 栅栏**（D-09，**基础已完成 2026-11-12**）：投影缺口检测 `ipam.ProjectionGaps` + 可选严格栅栏 `ipam.NewProjectionGuard`（`dhcp.require_ipam_projection`，Server `SetScopeProjectionGuard`，测试 `projection_test.go`）。剩余：跨面水位（E-3/ADR-0005）实现"相对控制面滞后"硬判据。
-- **T4-2 Outbox 故障注入 + DLQ**（D-10/D-11）：relay 中断、repeat、consumer crash 测试；可选 DLQ。验收：无丢无重、可重放。
+- **T4-2 Outbox 故障注入 + DLQ**（D-10/D-11，**基础已完成 2026-11-12**）：relay 中断/重启续传/重复投递幂等由 `relay_test.go` 覆盖；D-11 幂等由 `idempotency_test.go` 覆盖。剩余：显式 DLQ；consumer apply/MarkDone 间崩溃演练。
 - **T4-3 SQLite 磁盘满/fsync 错误处理**（D-08）：错误注入；写失败不 ACK。验收：ENOSPC/fsync 错误被正确传播且不半提交。
 - **T4-4 备份/升级恢复演练**（D-12）：自动化 restore drill + 版本升级回滚。验收：可恢复。
 

@@ -77,7 +77,7 @@
 ## P1
 - **D-08 SQLite 磁盘满/fsync 错误未验证**：`sqlitepolicy` 只设 PRAGMA；需 ENOSPC/fsync 失败注入，要求绑定失败且不 ACK（`handler.go` 路径）。测试：填盘/错误注入。
 - **D-09 IPAM 陈旧导致错分配**：**部分已实现（2026-11-12）**：新增 `internal/ipam/projection.go` 的 `ProjectionGaps`（非阻塞缺口检测，启动时告警 scopes 子网无本地 `ipam_subnets` 投影）与 `NewProjectionGuard`（**可选** fail-closed：`dhcp.require_ipam_projection=true` 时分配前拒绝无投影 scope，静默不 ACK）；Server `SetScopeProjectionGuard`，main 接线，配置/env/CONFIG-REFERENCE 已加；测试 `projection_test.go` 通过。**剩余**：真正的"相对控制面滞后"需跨面发布水位（E-3/ADR-0005），本地面无法证明；严格拦截默认关闭以免误伤独立 scope。
-- **D-10 Outbox/consumer 故障注入缺失**：relay 中断/重复投递/消费者崩溃未测；无 DLQ（`facts/relay.go`、`ipam/facts_consumer.go`）。补故障注入 + 可选 DLQ。
+- **D-10 Outbox/consumer 故障注入缺失**：**部分已实现（2026-11-12）**：新增 `internal/facts/relay_test.go` 覆盖 ① relay 按序投递、② 重 tick 幂等（不重复）、③ 重启从水位续传不重复、④ inbox 不可用（表被改名模拟）时 tick 失败但**源事件不丢、水位不前进**、恢复后**恰好一次**投递；并断言 relay 从不标记 source 行（copier 非 authority）。既有 `outbox_test`（enqueue 幂等/冲突）、`replica_stage_test`（快照原子/校验失败/断点）、`facts_consumer_test`（gap/失败留箱）覆盖消费端。**仍缺**：显式 DLQ（当前失败留 inbox 重放，无死信队列）；消费者"apply 与 MarkDone 之间崩溃"的端到端故障注入未单独演练（设计上同库同事务，风险低）。
 - **D-11 DHCP 报文重放/去重**：无显式事务号去重（依赖 IP/MAC 语义）；**已补租约层幂等/重复/并发测试并修复一处真实缺陷（2026-11-12）**：并发抢同一地址时落败方原返回裸 `UNIQUE constraint` 错误，现映射为 `ErrAddressTaken`（`internal/dhcp/lease/lease.go` `createLeaseWithStatus`），使调用方可按语义重试；测试 `internal/dhcp/lease/idempotency_test.go`（DISCOVER 重传同 ID/单行、异 MAC 拒绝、重复 Activate/Release 幂等、并发同址仅一胜者）全 PASS。
 - **D-12 备份/升级恢复演练缺失**：`internal/backup/*` 存在但无恢复演练；systemd 单实例约束需文档化（`deployments/systemd/goddi.service`）。
 - **D-13 遗留存储路径复杂度**：`lease_store_shadow.go`/`lease_store_indexed.go` 与 WAL store 并存；建议按灰度收敛计划清理。
