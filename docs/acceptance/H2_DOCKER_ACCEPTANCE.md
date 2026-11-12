@@ -30,6 +30,10 @@ make h2-down              # 停止并清理（含卷）
 每个检查输出 PASS / FAIL / NOT_VERIFIED；**真实故障失败不得重试成 PASS**。强制项：无多 Owner、无重复 IP、无已确认租约丢失、无未验证镜像恢复、无未批准自动接管、无不可解释 Revision 冲突、无 Outbox 权威事件丢失、无把未持久化复制误报成功。
 
 ## 状态（滚动）
+- Round 4（故障注入 + 第二个真实缺陷修复）：`fault-scenarios.sh` 真实执行 H2-001/002/003/008/014/015/017/018/019 → **PASS=21 FAIL=0 NOT_VERIFIED=15**（tc/netem、磁盘满、license 等记 NOT_VERIFIED）。证据：`tests/h2/reports/faults-*.jsonl` + `collect-evidence.sh`。
+  - **修复的真实缺陷（防脑裂）**：旧主宕机、备被 `ha takeover` 提升（epoch+1）后，旧主重启仍以 primary 服务 —— 两侧都是 primary，各自 listen、无人 dial，epoch 比对永不发生，形成双写窗口。修复：① 新增 `FrameStaleEpoch`（已升主节点在握手时告知对端其写入权已失效）；② `Replicator.fenceForStaleEpoch` 持久化降级；③ **启动自检** `ha.ProbePeerEpoch` + `ha.RecordSuperseded`：配置为 primary 但探测到 peer epoch 更高则持久化为 standby 并不服务。实测：旧主回归 `role in force: standby`（日志 `local_epoch:0 peer_epoch:1`），新主保持 primary。
+  - `ha takeover` 契约实测正确：primary 水位新鲜时**拒绝**提升，静默 15s 后才接受（需 `--confirm --old-primary-cannot-write --accept-gap`）。
+  - 并发：4 个**独立客户端容器**同时 DORA → 4 个不同地址、**0 重复**。
 - Round 3（DHCP 一致性 + 缺陷修复）：真实 udhcpc DORA 拿到租约；node-b 镜像可见同一租约；重复租约行=0；**复制双向隔离（blackhole，验证无旁路）**后默认 fail-closed 不 ACK、操作员 `ha degrade` 后本地继续服务、node-b 始终 standby、租约序号推进 → `DHCP PASS=11 FAIL=0 NOT_VERIFIED=2`。
   - **修复的真实缺陷**：通过管理 API 新建/修改的 scope 已写入 lease.db，但 WAL 内存索引不热加载，DHCP 报 `scope ... not found in memory index`，必须重启节点才生效。现由 `dataplane` 的 `OnApplied(DomainDHCP)` 回调 `WALLeaseStore.ReloadFromDB` 重新发布池快照。
   - **Docker 旁路发现**：仅 `docker network disconnect repl-net` 不能隔离（宿主在桥间转发），必须双向 blackhole + 连通性验证，脚本已按此实现并输出 PASS/NOT_VERIFIED。

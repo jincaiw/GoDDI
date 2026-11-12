@@ -2,10 +2,12 @@ package ha
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -841,4 +843,71 @@ func osUser() string {
 		return u
 	}
 	return "unknown"
+}
+
+// ProbePeerEpoch dials the configured peer once and reports the Owner Epoch it
+// advertises. It exists for the one window the running protocol cannot close on
+// its own: a node that was primary, went down, and comes back after an operator
+// promoted its peer. Both nodes would come up as primary and both would listen,
+// so neither would ever dial -- the epoch comparison would never happen and two
+// writers would serve. The startup probe is what breaks that symmetry.
+//
+// A peer that cannot be reached is not an error: an isolated node must still
+// start (it then runs paused, because it has no second copy). Only a peer that
+// answers with a higher epoch changes the outcome.
+func ProbePeerEpoch(cfg Config, localEpoch int64) (peerEpoch int64, reached bool, err error) {
+	if strings.TrimSpace(cfg.PeerAddress) == "" {
+		return 0, false, nil
+	}
+	d := net.Dialer{Timeout: cfg.PeerStaleAfter}
+	var conn net.Conn
+	if ct := cfg.clientTLS(); ct != nil {
+		td := tls.Dialer{NetDialer: &d, Config: ct}
+		conn, err = td.DialContext(context.Background(), "tcp", cfg.PeerAddress)
+	} else {
+		conn, err = d.DialContext(context.Background(), "tcp", cfg.PeerAddress)
+	}
+	if err != nil {
+		return 0, false, nil
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(cfg.PeerStaleAfter))
+
+	// The peer, if it is primary, expects a standby hello and answers with its
+	// own. If it is also an old primary it is listening, not dialling, so this
+	// probe is the only frame it will see.
+	nonce, sentAt := "", int64(0)
+	if cfg.TLS != nil {
+		nonce, sentAt = newHelloNonce()
+	}
+	if err := writeFrame(conn, Frame{
+		Type: FrameHello, Protocol: Protocol, Token: cfg.PeerToken,
+		Nonce: nonce, SentAt: sentAt,
+		Watermarks: &Watermarks{
+			NodeID: cfg.NodeID, Role: "standby", Epoch: localEpoch,
+		},
+	}); err != nil {
+		return 0, false, nil
+	}
+	frame, err := readFrame(conn, maxFrameBytes)
+	if err != nil || frame.Watermarks == nil {
+		return 0, false, nil
+	}
+	return frame.Watermarks.Epoch, true, nil
+}
+
+// RecordSuperseded persists that a peer owns a newer Owner Epoch, so a restart
+// cannot come back as a primary. It is the durable half of the startup probe:
+// the in-memory role only governs this process.
+func RecordSuperseded(store *dataplane.Store, peerEpoch int64) error {
+	if store == nil || store.DB == nil {
+		return errors.New("ha: no store to record the superseded epoch in")
+	}
+	if err := setMetaText(store.DB, metaOwnerEpoch, fmt.Sprintf("%d", peerEpoch)); err != nil {
+		return fmt.Errorf("ha: persisting the newer owner epoch: %w", err)
+	}
+	if err := setMetaText(store.DB, metaRole, config.HARoleStandby); err != nil {
+		return fmt.Errorf("ha: recording the superseded role: %w", err)
+	}
+	return nil
 }

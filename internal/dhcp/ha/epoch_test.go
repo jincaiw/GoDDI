@@ -100,3 +100,55 @@ func TestMirrorEpochRules(t *testing.T) {
 		t.Fatalf("persisted epoch = %d, want 8", got)
 	}
 }
+
+// TestStaleEpochFramePersistsFence proves the frame an old primary receives
+// from a promoted peer leaves a durable mark: the recorded role becomes
+// standby and the newer epoch is persisted, so a restart cannot come back as a
+// primary. This is the only channel through which an old primary -- which
+// cannot observe the promotion -- learns its write authority is gone.
+func TestStaleEpochFramePersistsFence(t *testing.T) {
+	store := openStore(t, "stale-frame")
+	r, err := NewReplicator(testConfig(t, config.HARolePrimary), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.fenceForStaleEpoch(7); err != nil {
+		t.Fatalf("fenceForStaleEpoch: %v", err)
+	}
+	if st := r.State(); st != StateFenced {
+		t.Fatalf("state = %s, want fenced", st)
+	}
+	if r.MayBind() {
+		t.Fatal("superseded primary still MayBind")
+	}
+	if got, err := OwnerEpoch(store); err != nil || got != 7 {
+		t.Fatalf("persisted epoch = %d err=%v, want 7", got, err)
+	}
+	role, err := EffectiveRole(testConfig(t, config.HARolePrimary), store)
+	if err != nil {
+		t.Fatalf("EffectiveRole: %v", err)
+	}
+	if role != config.HARoleStandby {
+		t.Fatalf("effective role after supersede = %q, want standby", role)
+	}
+}
+
+// TestRecordSupersededIsDurable proves the startup probe's decision survives a
+// restart: the newer epoch and the standby role are both written to the store,
+// so a node that was superseded cannot come back as a primary.
+func TestRecordSupersededIsDurable(t *testing.T) {
+	store := openStore(t, "record-superseded")
+	if err := RecordSuperseded(store, 5); err != nil {
+		t.Fatalf("RecordSuperseded: %v", err)
+	}
+	if got, err := OwnerEpoch(store); err != nil || got != 5 {
+		t.Fatalf("persisted epoch = %d err=%v, want 5", got, err)
+	}
+	role, err := EffectiveRole(testConfig(t, config.HARolePrimary), store)
+	if err != nil {
+		t.Fatalf("EffectiveRole: %v", err)
+	}
+	if role != config.HARoleStandby {
+		t.Fatalf("effective role = %q, want standby (config says primary)", role)
+	}
+}

@@ -968,6 +968,30 @@ func runServer(configPath string) error {
 			if haRole, err = ha.EffectiveRole(haCfg, store); err != nil {
 				return fmt.Errorf("resolving the DHCP HA role: %w", err)
 			}
+			// A node that was primary, went down, and comes back after its peer
+			// was promoted would otherwise come up as a second writer: both
+			// sides listen, neither dials, and no epoch comparison ever runs.
+			// Probing the peer once at startup closes that window. An
+			// unreachable peer changes nothing -- the node starts and then runs
+			// paused, because it has no second copy.
+			if haRole == config.HARolePrimary {
+				localEpoch, eerr := ha.OwnerEpoch(store)
+				if eerr != nil {
+					return fmt.Errorf("reading the owner epoch: %w", eerr)
+				}
+				peerEpoch, reached, perr := ha.ProbePeerEpoch(haCfg, localEpoch)
+				if perr != nil {
+					slog.Warn("DHCP HA: could not probe the peer at startup", "error", perr)
+				}
+				if reached && peerEpoch > localEpoch {
+					if derr := ha.RecordSuperseded(store, peerEpoch); derr != nil {
+						return fmt.Errorf("recording that this node was superseded: %w", derr)
+					}
+					slog.Error("DHCP HA: a peer owns a newer owner epoch; this node will not serve as primary",
+						"local_epoch", localEpoch, "peer_epoch", peerEpoch)
+					haRole = config.HARoleStandby
+				}
+			}
 			standsAside = haRole != config.HARolePrimary
 			slog.Info("DHCP HA enabled", "settings", haCfg.Describe(), "role_in_force", haRole)
 		}

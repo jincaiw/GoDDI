@@ -59,6 +59,11 @@ const (
 	// FrameApplied is the standby's confirmation: everything up to Seq is
 	// durably in its store.
 	FrameApplied FrameType = "applied"
+	// FrameStaleEpoch tells a peer that this node owns a newer Owner Epoch, so
+	// the peer is a stale writer. It is the only way a node that was promoted
+	// can tell an old primary (which cannot observe the promotion) that its
+	// write authority is gone. Receiving it must fence, not retry.
+	FrameStaleEpoch FrameType = "stale_epoch"
 	// FramePing is the primary asking its peer to confirm. The reply is a
 	// FrameApplied rather than a bare acknowledgement, so that a quiet pair
 	// still refreshes the primary's view of how far along the mirror is.
@@ -115,6 +120,9 @@ type Frame struct {
 	// legacy plaintext path for backwards compatibility.
 	Nonce  string `json:"nonce,omitempty"`
 	SentAt int64  `json:"sent_at,omitempty"`
+	// Epoch is set on FrameStaleEpoch: the sender's Owner Epoch, which is
+	// newer than the receiver's. It is informational; the receiver fences.
+	Epoch int64 `json:"epoch,omitempty"`
 }
 
 // maxHandshakeSkew bounds how far a hello's timestamp may be from local time.

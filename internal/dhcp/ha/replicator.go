@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dataplane"
 	"github.com/jasonwa/goddi/internal/facts"
 )
@@ -233,6 +234,26 @@ func (r *Replicator) observeStandbyEpoch(peerEpoch int64) error {
 		r.superseded = true
 		return fmt.Errorf("%w: peer epoch %d > local %d", ErrStaleEpoch, peerEpoch, r.epoch)
 	}
+	return nil
+}
+
+// fenceForStaleEpoch records that a peer owns a newer Owner Epoch, so this node
+// must not serve as a primary even after a restart. The recorded role and the
+// persisted epoch are what startup reads; the in-memory flag only makes the
+// current process stop binding immediately.
+func (r *Replicator) fenceForStaleEpoch(peerEpoch int64) error {
+	r.mu.Lock()
+	r.superseded = true
+	r.peerEpoch = peerEpoch
+	r.mu.Unlock()
+	if err := setMetaText(r.store.DB, metaOwnerEpoch, fmt.Sprintf("%d", peerEpoch)); err != nil {
+		return fmt.Errorf("ha: persisting the newer owner epoch: %w", err)
+	}
+	if err := setMetaText(r.store.DB, metaRole, config.HARoleStandby); err != nil {
+		return fmt.Errorf("ha: recording that this node is superseded: %w", err)
+	}
+	slog.Error("HA: this node was superseded by a newer owner epoch; it will not serve again until an operator acts",
+		"node_id", r.cfg.NodeID, "peer_epoch", peerEpoch)
 	return nil
 }
 
@@ -522,6 +543,15 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 	if err != nil {
 		return Watermarks{}, fmt.Errorf("reading the mirror's handshake: %w", err)
 	}
+	if frame.Type == FrameStaleEpoch {
+		// The peer owns a newer Owner Epoch: this node was superseded while it
+		// was down. Persist the fence so a restart cannot come back as a
+		// primary, then refuse the session.
+		if err := r.fenceForStaleEpoch(frame.Epoch); err != nil {
+			return Watermarks{}, err
+		}
+		return Watermarks{}, fmt.Errorf("%w: peer epoch %d", ErrStaleEpoch, frame.Epoch)
+	}
 	if frame.Type != FrameHello || frame.Watermarks == nil {
 		return Watermarks{}, fmt.Errorf("ha: expected a handshake, got a %q frame", frame.Type)
 	}
@@ -550,6 +580,9 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 	if frame.Watermarks.AppliedSeq < 0 || frame.Watermarks.FactsAppliedSeq < 0 {
 		return Watermarks{}, errors.New("ha: peer reported a negative applied watermark")
 	}
+	// The peer may have been promoted at a newer epoch. It reports that on the
+	// channel (FrameStaleEpoch) as well as in its watermarks; either is enough
+	// to stop this node binding.
 	if err := r.observeStandbyEpoch(frame.Watermarks.Epoch); err != nil {
 		return Watermarks{}, err
 	}

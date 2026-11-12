@@ -465,6 +465,16 @@ func (m *Mirror) handshake(conn net.Conn) error {
 			return err
 		}
 	}
+	// A node that was promoted owns a newer epoch than the primary that just
+	// greeted it: that primary is the stale writer. Tell it so before failing
+	// the handshake -- this frame is the only channel through which an old
+	// primary, which cannot observe the promotion, learns its authority is
+	// gone. Best effort on a short deadline; the local fence below is what
+	// this node relies on.
+	if m.epochValue() > frame.Watermarks.Epoch {
+		_ = conn.SetWriteDeadline(time.Now().Add(m.cfg.PeerStaleAfter))
+		_ = writeFrame(conn, Frame{Type: FrameStaleEpoch, Protocol: Protocol, Epoch: m.epochValue()})
+	}
 	if err := m.observePrimaryEpoch(frame.Watermarks.Epoch); err != nil {
 		return err
 	}
