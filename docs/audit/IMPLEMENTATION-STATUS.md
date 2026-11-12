@@ -1893,3 +1893,9 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - D-18：`scripts/bench.sh`（`go test -run '^$' -bench . -benchmem ./internal/...` 输出时间戳报告）+ `make bench`；已烟测 `internal/dns/zone` benchmark 可运行（`BenchmarkStoreLookup_*`）。
 - 回归：`go build ./...` OK；`go test ./internal/metrics ./internal/dataplane ./internal/dhcp/server` 全绿；docs 守卫 PASS。
 - 边界：指标为启动快照（非周期/实时）；soak/并发压测未执行（NOT_VERIFIED）。
+
+## 1bh. D-12 全量恢复演练 + D-20 周期刷新（round 368）
+
+- D-12：`internal/backup/restore_full_test.go`——full 备份→删除 DNS/DHCP/IPAM 行→`RestoreBackup`→断言六表恢复（dns_zones/dns_records/dhcp_scopes/dhcp_reservations/ipam_spaces/ipam_subnets）。既有 dns/security 恢复测试。升级路径/大库/停机演练仍 NOT_VERIFIED。
+- D-20：`cmd/goddi/main.go` 在 `backgroundCtx` 下每 30s 刷新 `goddi_dataplane_lkg_revision` 与 `goddi_dhcp_ipam_projection_gaps`（启动亦置值）。
+- 回归：`go build ./...` OK；`go test ./internal/backup ./internal/metrics` 全绿；docs 守卫 PASS。

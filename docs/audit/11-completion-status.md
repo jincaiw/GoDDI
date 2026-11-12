@@ -15,14 +15,14 @@
 | D-09 | IPAM 投影缺口 + 可选严格栅栏 | PASS（检测+可选 guard+测试）；跨面滞后判据 BLOCKED（需 E-3 水位） | `ipam/projection.go`、`projection_test.go`、`dhcp.require_ipam_projection` |
 | D-10 | outbox/relay 故障注入 | PASS（relay 中断/重启/重复幂等）；DLQ NOT implemented；consumer apply/MarkDone 崩溃同事务未单独注入 | `facts/relay_test.go`、既有 outbox/replica/consumer 测试 |
 | D-11 | DHCP 租约幂等/并发 | PASS（测试 + 真实修复 UNIQUE→ErrAddressTaken） | `lease/idempotency_test.go`、`lease.go` |
-| D-12 | 备份/升级恢复演练 | NOT_VERIFIED（`internal/backup` 存在，无恢复演练） | — |
+| D-12 | 备份/升级恢复演练 | PARTIAL：full 备份删后恢复 DNS/DHCP/IPAM 集成测试通过；**升级路径回滚、大库/停机演练 NOT_VERIFIED** | `internal/backup/restore_full_test.go` |
 | D-13 | 遗留 shadow/indexed lease store 清理 | NOT done（高风险，延后） | `server/lease_store_shadow.go`、`lease_store_indexed.go` |
 | D-14 | dataplane LKG 版本戳 + 原子快照 | PASS（同事务戳+读取+测试）；显式回滚到 LKG NOT implemented | `dataplane/lkg.go`、`lkg_test.go`、启动日志 |
 | D-16 | 文档/决策编号 | PARTIAL：ADR-0010 + DEC-002/006/007/008 正式化；DEC-001/003/004/005/009~019 未建档（未批准） | `docs/adr/0010`、`docs/decisions/*` |
 | D-17 | Appliance agent 运行验证 | NOT_VERIFIED | `internal/apps/{runtime,sdk}` |
 | D-18 | 性能/长跑基准 | PARTIAL：`scripts/bench.sh`+`make bench`（烟测通过）；soak/并发压测 NOT_VERIFIED | `scripts/bench.sh` |
 | D-19 | ClusterID/节点唯一仲裁 | NOT_IMPLEMENTED（501） | — |
-| D-20 | 可观测性（LKG/投影缺口指标） | PARTIAL：新增 Prometheus gauge `goddi_dataplane_lkg_revision{domain}`、`goddi_dhcp_ipam_projection_gaps`（启动置值）；周期刷新/更多就绪子项待做 | `metrics/metrics.go`、`main.go` |
+| D-20 | 可观测性（LKG/投影缺口指标） | PARTIAL：新增 Prometheus gauge `goddi_dataplane_lkg_revision{domain}`、`goddi_dhcp_ipam_projection_gaps`（启动置值 + **30s 周期刷新**）；抓取即时采集/更多就绪子项待做 | `metrics/metrics.go`、`main.go` |
 
 ## B. 外部阻断（BLOCKED，沙箱不可完成）
 - B8.5 物理真机验收（真实主机/断电/网络隔离/fencing/真实 relay/真实监控时间线）。

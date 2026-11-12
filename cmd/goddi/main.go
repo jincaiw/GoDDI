@@ -1473,6 +1473,27 @@ func runServer(configPath string) error {
 	// --- Background maintenance loops ---
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	defer backgroundCancel()
+	// D-20: refresh the LKG/projection gauges periodically (they are also set
+	// once at startup); the ticker is bounded by the background context.
+	if dhcpStore != nil {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-backgroundCtx.Done():
+					return
+				case <-ticker.C:
+					if gaps, err := ipam.ProjectionGaps(backgroundCtx, dhcpStore.DB); err == nil {
+						metrics.DHCPIPAMProjectionGaps.Set(float64(len(gaps)))
+					}
+					if rev, _, ok, err := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); err == nil && ok {
+						metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDHCP)).Set(float64(rev))
+					}
+				}
+			}
+		}()
+	}
 	if ipamFactsPipeline != nil {
 		if err := ipamFactsPipeline.Start(backgroundCtx); err != nil {
 			return fmt.Errorf("starting IPAM facts consumer: %w", err)
