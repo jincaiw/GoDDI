@@ -675,6 +675,12 @@ func runServer(configPath string) error {
 	zoneStore := zone.NewStore(dnsDataDB)
 	defer zoneStore.Close()
 	slog.Info("DNS zone store initialized", "zones", len(zoneStore.ZoneNames()))
+	// D-14: the DNS plane's last-known-good revision, so an operator can see
+	// what this node will keep serving while the control plane is unreachable.
+	if rev, at, ok, lerr := dataplane.LKG(dnsDataDB, dataplane.DomainDNS); lerr == nil && ok {
+		metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDNS)).Set(float64(rev))
+		slog.Info("DNS data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
+	}
 
 	// Zone / record managers (dynamic updates + record aging + IXFR history).
 	// These write where the DNS plane serves from, so a dynamic update and an
@@ -881,7 +887,11 @@ func runServer(configPath string) error {
 			}
 			if len(secrets) > 0 {
 				dnsSrv.SetTSIGSecretMap(secrets)
-				slog.Info("TSIG keys loaded", "count", len(secrets))
+				names := make([]string, 0, len(secrets))
+				for n := range secrets {
+					names = append(names, n)
+				}
+				slog.Info("TSIG keys loaded", "count", len(secrets), "names", names)
 			}
 		}
 	}
@@ -1539,6 +1549,9 @@ func runServer(configPath string) error {
 					}
 					if rev, _, ok, err := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); err == nil && ok {
 						metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDHCP)).Set(float64(rev))
+					}
+					if rev, _, ok, err := dataplane.LKG(dnsDataDB, dataplane.DomainDNS); err == nil && ok {
+						metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDNS)).Set(float64(rev))
 					}
 				}
 			}

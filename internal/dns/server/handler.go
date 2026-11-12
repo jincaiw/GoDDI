@@ -379,6 +379,14 @@ func (h *DNSHandler) writeResponse(w dns.ResponseWriter, req, resp *dns.Msg) err
 	return w.WriteMsg(resp)
 }
 
+// qnameOf returns the first question name for logging, or "" when absent.
+func qnameOf(m *dns.Msg) string {
+	if m == nil || len(m.Question) == 0 {
+		return ""
+	}
+	return m.Question[0].Name
+}
+
 // responseBlockReason runs the response-only policy checks shared by cache
 // hits, upstream responses, and cache prefetches. Query blocking remains in
 // the handler before cache lookup.
@@ -472,6 +480,9 @@ func mustAtoi(s string) int {
 // served over TCP (RFC 5936 §4.2), require the transfer ACL to match the
 // client address, and use TSIG when the request carries a signed query.
 func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr bool, clientIP string) {
+	slog.Debug("dns_handler: zone transfer request", "zone", qnameOf(req), "ixfr", ixfr,
+		"client", clientIP, "network", w.RemoteAddr().Network(),
+		"tsig", req.IsTsig() != nil, "tsig_status", w.TsigStatus())
 	if proto := w.RemoteAddr().Network(); proto != "tcp" {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)
@@ -563,6 +574,19 @@ func (h *DNSHandler) serveZoneTransfer(w dns.ResponseWriter, req *dns.Msg, ixfr 
 		msg.SetReply(req)
 		msg.Authoritative = true
 		msg.Answer = rrs[start:end]
+		// SetReply copies the request's OPT/TSIG extras. A response that
+		// carries the request's TSIG RR verbatim would be signed over the
+		// wrong MAC chain, so the request's TSIG is dropped and a fresh
+		// placeholder is attached below (RFC 8945 §5.3.1).
+		if req.IsTsig() != nil {
+			extra := msg.Extra[:0]
+			for _, rr := range msg.Extra {
+				if _, isTSIG := rr.(*dns.TSIG); !isTSIG {
+					extra = append(extra, rr)
+				}
+			}
+			msg.Extra = extra
+		}
 		// A TSIG-signed request must get a TSIG-signed reply. miekg only signs a
 		// message that already carries a TSIG RR, so attach the placeholder
 		// here; after the first message the remaining AXFR/IXFR messages are

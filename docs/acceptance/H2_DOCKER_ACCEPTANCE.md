@@ -30,6 +30,10 @@ make h2-down              # 停止并清理（含卷）
 每个检查输出 PASS / FAIL / NOT_VERIFIED；**真实故障失败不得重试成 PASS**。强制项：无多 Owner、无重复 IP、无已确认租约丢失、无未验证镜像恢复、无未批准自动接管、无不可解释 Revision 冲突、无 Outbox 权威事件丢失、无把未持久化复制误报成功。
 
 ## 状态（滚动）
+- Round 6（DNS 传送/TSIG + LKG）：`dns-transfer-acceptance.sh` → **PASS=4 FAIL=1 NOT_VERIFIED=3**。
+  - PASS：TSIG key 创建（服务端生成并一次性返回 secret）、AXFR 按 CIDR+key 授权、**无签名 AXFR 被拒（REFUSED）**。
+  - **FAIL（真实缺陷，未修）**：带签名的 AXFR 在容器内被客户端拒绝（`dns: no signature found`）。同一代码路径的**真实线缆单测 `TestAXFRTSIGOverRealWire` 通过**（151 条记录、多消息签名链），说明缺陷与环境装配相关（疑为 `dns.Server.TsigSecret` 快照与 `serveZoneTransfer` 的签名路径在容器内未生效）。已按"失败不得重试成 PASS"如实记录，待修。
+  - 新增：`tests/h2/tools/axfrprobe`（真实 DNS 传送客户端，镜像无 dig）；DNS 域 LKG 指标 `goddi_dataplane_lkg_revision{domain="dns"}` 已接入启动与 30s 刷新。
 - Round 5（IPAM/DDNS 验收）：`ipam-acceptance.sh` → **PASS=13 FAIL=0 NOT_VERIFIED=2**。space/subnet(VLAN 130) 建/复用；真实 DORA 后 **facts 端到端**（producer outbox `done` → control inbox → IPAM `observed_state=in_use`）；outbox 无 failed、序号推进、无重复行（幂等）；**DDNS 真实发布并核验**：`<host>.h2ddns.test A` 与 `x.3.77.10.in-addr.arpa PTR` 经真实 DNS 查询确认。
   - 观察到的环境约束（非产品缺陷）：DORA 后 udhcpc 会改写客户端自身地址/路由，脚本需恢复 fixture 网络；容器内无 `dig`（alpine 源受限），改用 `nslookup`。
   - 未验证：`goddi_dhcp_ipam_projection_gaps` 指标未在此节点暴露；跨节点 IPAM 配置一致性属 ADR-0005（未实现），如实 NOT_VERIFIED。

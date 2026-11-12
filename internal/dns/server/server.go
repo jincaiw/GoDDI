@@ -136,7 +136,13 @@ func msgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 		}
 		return dns.MsgAccept
 	}
-	return dns.DefaultMsgAcceptFunc(dh)
+	act := dns.DefaultMsgAcceptFunc(dh)
+	if act != dns.MsgAccept {
+		slog.Debug("dns_server: message rejected at accept stage",
+			"action", int(act), "opcode", opcode, "qd", dh.Qdcount, "an", dh.Ancount,
+			"ns", dh.Nscount, "ar", dh.Arcount, "bits", dh.Bits)
+	}
+	return act
 }
 
 // ErrInflightLimitReached is returned when a distinct cache-miss query cannot

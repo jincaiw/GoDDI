@@ -22,6 +22,9 @@ dhcp:
   trusted_relay_cidrs: ["10.77.3.0/24"]
   renew_out_of_pool_policy: "allow"
 security:
+  # TSIG secrets are sealed with this key; without it a TSIG key cannot be
+  # created at all (the store refuses to keep a secret in the clear).
+  encryption_key: "h2-acceptance-encryption-key-0123456789"
   totp_enabled: false
   login_rate_limit: 5
 dhcp_ha:
@@ -38,3 +41,6 @@ dhcp_ha:
   tls_key_file: /etc/goddi/certs/h2-node-b.key
   tls_ca_file: /etc/goddi/certs/ca.crt
   tls_server_name: "10.77.2.11"
+
+log:
+  level: debug
