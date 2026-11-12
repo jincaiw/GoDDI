@@ -42,6 +42,8 @@ type FactsConsumer struct {
 	linkage   *Linkage
 	outbox    *facts.ObservationOutbox
 	watermark *facts.WatermarkStore
+	chain     *facts.ChainTipStore
+	chainDom  string
 
 	lifecycleOnce sync.Once
 	lifecycleMu   sync.Mutex
@@ -76,7 +78,11 @@ func NewFactsConsumerWithOptions(linkage *Linkage, outbox *facts.ObservationOutb
 	if err != nil {
 		return nil, err
 	}
-	return &FactsConsumer{linkage: linkage, outbox: outbox, watermark: wm, options: options}, nil
+	chain := facts.NewChainTipStore(linkage.db)
+	if err := chain.Ensure(context.Background()); err != nil {
+		return nil, err
+	}
+	return &FactsConsumer{linkage: linkage, outbox: outbox, watermark: wm, chain: chain, chainDom: IPAMFactsConsumerDomain + ":hash_chain", options: options}, nil
 }
 
 // ProcessOne applies the oldest due event in one transaction. Projection,
@@ -107,6 +113,22 @@ func (c *FactsConsumer) ProcessOne(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("ipam facts consumer: begin %s: %w", event.EventID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// D-03 consumer-side hash-chain verification: when the producer stamped the
+	// event, it must extend this consumer's chain. A gap/tamper/fork returns an
+	// error, leaving the event pending (watermark not advanced) — the durable
+	// equivalent of a blocked consumer; it does not auto-retry past the break.
+	var chainPrev, chainNext facts.ChainTip
+	chainOn := event.HasChain()
+	if chainOn {
+		chainPrev, err = c.chain.LoadTx(ctx, tx, c.chainDom)
+		if err != nil {
+			return false, err
+		}
+		chainNext, err = facts.VerifyEnvelope(chainPrev, event)
+		if err != nil {
+			return false, fmt.Errorf("ipam facts consumer: hash chain verification failed for %s: %w", event.EventID, err)
+		}
+	}
 	advanced, err := c.watermark.AdvanceTx(ctx, tx, IPAMFactsConsumerDomain, event.Sequence)
 	if err != nil {
 		return false, err
@@ -125,6 +147,11 @@ func (c *FactsConsumer) ProcessOne(ctx context.Context) (bool, error) {
 	}
 	if err := c.outbox.MarkDoneTx(ctx, tx, event.EventID); err != nil {
 		return false, err
+	}
+	if chainOn {
+		if err := c.chain.AdvanceTx(ctx, tx, c.chainDom, chainPrev.Tip, chainNext); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("ipam facts consumer: commit %s: %w", event.EventID, err)

@@ -1916,3 +1916,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 测试 `internal/facts/outbox_stamped_test.go`：打戳链可通过 `VerifyChain`、重复投递幂等。
 - 默认关闭→行为不变；`go test ./internal/facts ./internal/dhcp/lease ./internal/config ./internal/dhcp/server` 全绿；`go build ./...` OK。
 - 待做（第 3 步）：IPAM/DNS 消费者在 `HasChain()` 时 `VerifyEnvelope` + 断链 `blocked` + 端到端故障测试。
+
+## 1bk. D-03 阶段二第 3 步：消费者校验 + blocked（round 371）
+
+- `internal/ipam/facts_consumer.go`：构造时 `facts.NewChainTipStore(linkage.db).Ensure`，`chainDom=ipam:hash_chain`。`ProcessOne` 在 `event.HasChain()` 时事务内 `LoadTx`→`VerifyEnvelope`；失败返回错误、不推进水位/不 MarkDone（事件留 pending = blocked）；成功后 `AdvanceTx` 与投影/水位/MarkDone 同事务提交。
+- 测试 `internal/ipam/facts_consumer_chain_test.go`：被打戳的干净链可投影（Replay=1）；篡改 payload 后 `ProcessOne` 失败且事件保持 pending（blocked）。
+- 端到端：`dhcp.facts_hash_chain_enabled=true` 时 producer 打戳→relay 透传→IPAM 消费者校验；默认关闭行为不变。
+- 仍待：DNS facts consumer 同款校验接线（同一 inbox，小项）。
