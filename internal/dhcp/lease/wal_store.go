@@ -47,6 +47,8 @@ type WALLeaseStoreConfig struct {
 	// is empty the store only maintains the lease projection.
 	Source         string
 	ResolveSpaceID func(scopeID, ip string) (string, error)
+	// HashChain, when true, stamps emitted facts with the D-03 hash chain.
+	HashChain bool
 }
 
 // OpenWALLeaseStore opens the WAL, recovers the SQLite projection, loads the
@@ -77,7 +79,12 @@ func OpenWALLeaseStore(ctx context.Context, cfg WALLeaseStoreConfig) (*WALLeaseS
 		if err != nil {
 			return nil, fmt.Errorf("lease wal store: sequence allocator: %w", err)
 		}
-		outbox, err := facts.NewObservationOutbox(cfg.DB)
+		var outbox *facts.ObservationOutbox
+		if cfg.HashChain {
+			outbox, err = facts.NewObservationOutboxStamped(cfg.DB, "dhcp_lease_facts")
+		} else {
+			outbox, err = facts.NewObservationOutbox(cfg.DB)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("lease wal store: observation outbox: %w", err)
 		}

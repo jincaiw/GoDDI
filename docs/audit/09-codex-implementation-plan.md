@@ -34,7 +34,7 @@
 ## 阶段 1（H2 可信身份 + 围栏，最高优先）
 - **T1-1 mTLS 复制通道**（D-01，细化见 E-2，**已完成基础实现 2026-11-12**）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
 - **T1-2 Owner Epoch 写栅栏**（D-02，细化见 E-1，**已完成基础实现 2026-11-12**）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
-- **T1-3 facts 哈希链**（D-03，**阶段一完成；阶段二第 1 步完成（双库增列+outbox/replica 透传，默认空）2026-11-12**；第 2/3 步：生产者 stamping + 消费者校验待做）：Envelope 增 epoch/prev_hash/payload_hash/tip_hash；生产者链式、消费者校验、断链阻断（DEC-007）。验收：篡改/断链检测并阻断。依赖：T1-2。
+- **T1-3 facts 哈希链**（D-03，**阶段一完成；阶段二第 1 步完成（双库增列+outbox/replica 透传，默认空）2026-11-12**；第 2 步完成（2026-11-12：`facts_hash_chain_enabled` 开关 + 生产 outbox StampTx 打戳，默认关闭）；第 3 步消费者校验待做）：Envelope 增 epoch/prev_hash/payload_hash/tip_hash；生产者链式、消费者校验、断链阻断（DEC-007）。验收：篡改/断链检测并阻断。依赖：T1-2。
 
 ## 阶段 2（H2 一致性/恢复）
 - **T2-1 阻断状态机**（DEC-007）：新增 `blocked/inconsistent` 状态，任何链/水位/身份不一致进入阻断，需人工按 T2-2 清理。验收：不一致不自动恢复。

@@ -21,6 +21,7 @@
 | `dhcp.lease_store` | `sqlite`/`wal`，默认 **`wal`** | `GODDI_DHCP_LEASE_STORE` | DHCP 租约热路径存储：`wal`（默认）用事件溯源 `WALLeaseStore`（WAL 持久 + 异步 SQLite 投影 + facts 由 WAL 派生）；设 `sqlite` 回退同步 `*lease.Manager`。HA 下应保持 primary=wal、standby 随 `standsAside` 不装配 |
 | `dhcp.lease_wal_path` | string / 空（=`<server.data_dir>/leases.wal`） | `GODDI_DHCP_LEASE_WAL_PATH` | `lease_store=wal` 时的 WAL 文件路径 |
 | `dhcp.require_ipam_projection` | bool / `false` | `GODDI_DHCP_REQUIRE_IPAM_PROJECTION` | D-09：为 true 时 DHCP 分配前要求 scope 子网在本地 `ipam_subnets` 投影中存在，否则拒绝（fail-closed）；默认 false 仅以缺口检测/就绪信号提示 |
+| `dhcp.facts_hash_chain_enabled` | bool / `false` | `GODDI_DHCP_FACTS_HASH_CHAIN_ENABLED` | D-03：为 true 时 DHCP 事实 outbox 在生产侧打哈希链戳（epoch/prev/payload/tip）；默认 false（写入不带链字段，行为不变） |
 | `server.expose_openapi` | bool / `false` | `GODDI_SERVER_EXPOSE_OPENAPI` | 是否公开 `/api/v1/openapi.json` |
 | `metrics.enabled` / `metrics.path` | bool / string | — | Prometheus 端点开关与路径 |
 | `env` | string / 空（=development） | — | 仅精确值 `production` 会收紧行为（CORS loopback 放宽、从 JWT 派生加密键等变为启动错误） |

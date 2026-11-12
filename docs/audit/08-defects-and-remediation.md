@@ -40,7 +40,7 @@
 
 > **状态更新（2026-11-12，阶段一）**：已实现链**密码学内核与校验器**（`internal/facts/chain.go`：`PayloadDigest/ComputeTip/ChainBuilder.Stamp/VerifyEnvelope/VerifyChain`、`ChainTipStore`（CAS 防分叉）+ `StampTx` 事务内集成点；`Envelope` 增 `Epoch/PrevHash/PayloadHash/TipHash`，向后兼容）。测试 `chain_test.go`（篡改/乱序/丢事件/epoch 回退/tip 竞争/`StampTx` 链）通过。**待接**：把 `StampTx` 接入 lease 生产 outbox、把 `VerifyEnvelope` 接入 IPAM/DNS 消费者并持久化 tip（需 outbox 表增列 + 双库迁移滚动）——属阶段二，未完成前链路不宣称端到端生效。
 
-> **阶段二第 1 步（2026-11-12 已完成）**：双库迁移新增列 `dhcp_ipam_observation_events.{epoch,prev_hash,payload_hash,tip_hash}`（dataplane `019`、control `035`，默认空）；`ObservationOutbox` 的 Enqueue/duplicate/`Pending`/`After` 与 `replica` 读写并透传这些列。默认空值→**行为不变**；生产者 stamping 与消费者校验为第 2/3 步（待做）。
+> **阶段二第 1 步（2026-11-12 已完成）**：双库迁移新增列 `dhcp_ipam_observation_events.{epoch,prev_hash,payload_hash,tip_hash}`（dataplane `019`、control `035`，默认空）；`ObservationOutbox` 的 Enqueue/duplicate/`Pending`/`After` 与 `replica` 读写并透传这些列。默认空值→**行为不变**；**第 2 步（2026-11-12 已完成）**：`dhcp.facts_hash_chain_enabled`（默认 false）+ `facts.NewObservationOutboxStamped(db,domain)`——开启时生产 outbox 在**同一事务**内 `StampTx` 打戳（epoch/prev/payload/tip）；重复投递幂等（同 payload 不推进链/不报冲突）；WAL 与同步 facts writer 均按开关选择；测试 `outbox_stamped_test.go`。默认关闭→行为不变。消费者校验（第 3 步）仍待做。
 
 ### D-04 DEC-006 与 ADR-0003/实现冲突（复制失败是否继续服务）
 1. 问题/触发：任务书 DEC-006 要求复制中断时原 Owner 继续服务；实现默认 `paused`→不 ACK（`state.go`、`handler.go:491`），ADR-0003 明确"暂停新租约"。

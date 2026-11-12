@@ -1078,6 +1078,7 @@ func runServer(configPath string) error {
 			}
 			store, serr := lease.OpenWALLeaseStore(context.Background(), lease.WALLeaseStoreConfig{
 				Path: walPath, DB: dhcpStore.DB, Capacity: 1024, Source: walSource,
+				HashChain: cfg.DHCP.FactsHashChain,
 				ResolveSpaceID: func(scopeID, ip string) (string, error) {
 					return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
 				},
@@ -1231,7 +1232,12 @@ func runServer(configPath string) error {
 			if err != nil {
 				return fmt.Errorf("initializing DHCP fact sequence allocator: %w", err)
 			}
-			outbox, err := facts.NewObservationOutbox(dhcpStore.DB)
+			var outbox *facts.ObservationOutbox
+			if cfg.DHCP.FactsHashChain {
+				outbox, err = facts.NewObservationOutboxStamped(dhcpStore.DB, "dhcp_lease_facts")
+			} else {
+				outbox, err = facts.NewObservationOutbox(dhcpStore.DB)
+			}
 			if err != nil {
 				return fmt.Errorf("initializing DHCP fact outbox: %w", err)
 			}

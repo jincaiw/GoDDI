@@ -1907,3 +1907,12 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 测试 schema（`outbox_test.go` newFactsOutboxDB）同步增列。
 - 默认空值→现有行为不变；`go test ./internal/facts ./internal/dataplane ./internal/database` 全绿；`go build ./...` OK。
 - 待做（第 2/3 步）：`facts.hash_chain_enabled` 开关 + 生产 outbox `StampTx` 打戳；IPAM/DNS 消费者 `VerifyEnvelope` + 断链 `blocked`。
+
+## 1bj. D-03 阶段二第 2 步：hash chain 开关 + 生产者打戳（round 370）
+
+- 配置：`dhcp.facts_hash_chain_enabled`（默认 false）+ `GODDI_DHCP_FACTS_HASH_CHAIN_ENABLED`；CONFIG-REFERENCE 已加。
+- `internal/facts/outbox.go`：`NewObservationOutboxStamped(db,domain)`（Ensure tip 表）；EnqueueTx 在**同一事务**内 `StampTx` 打戳；已存在同 payload 事件→幂等返回（不推进链），不同 payload→ErrDuplicateEvent。
+- `internal/dhcp/lease/wal_store.go` `WALLeaseStoreConfig.HashChain`；main 传入 `cfg.DHCP.FactsHashChain`；同步 facts writer 的 outbox 亦按开关选择 stamped。
+- 测试 `internal/facts/outbox_stamped_test.go`：打戳链可通过 `VerifyChain`、重复投递幂等。
+- 默认关闭→行为不变；`go test ./internal/facts ./internal/dhcp/lease ./internal/config ./internal/dhcp/server` 全绿；`go build ./...` OK。
+- 待做（第 3 步）：IPAM/DNS 消费者在 `HasChain()` 时 `VerifyEnvelope` + 断链 `blocked` + 端到端故障测试。

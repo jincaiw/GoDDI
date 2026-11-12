@@ -20,6 +20,10 @@ var (
 // can adopt the common envelope without changing the compatibility consumer.
 type ObservationOutbox struct {
 	db *sql.DB
+	// When tipStore is set, EnqueueTx stamps each event onto the domain's hash
+	// chain in the same transaction (D-03, opt-in producer).
+	tipStore    *ChainTipStore
+	stampDomain string
 }
 
 // ObservationOutboxStatus is a durable, point-in-time backlog snapshot. A
@@ -38,6 +42,27 @@ func NewObservationOutbox(db *sql.DB) (*ObservationOutbox, error) {
 		return nil, ErrOutboxClosed
 	}
 	return &ObservationOutbox{db: db}, nil
+}
+
+// NewObservationOutboxStamped returns an outbox that stamps every enqueued
+// event onto the hash chain for domain, in the same transaction as the insert.
+// This is the opt-in producer path for D-03; the default NewObservationOutbox
+// remains unstamped.
+func NewObservationOutboxStamped(db *sql.DB, domain string) (*ObservationOutbox, error) {
+	o, err := NewObservationOutbox(db)
+	if err != nil {
+		return nil, err
+	}
+	if domain == "" {
+		return nil, errors.New("facts outbox: empty hash-chain domain")
+	}
+	ts := NewChainTipStore(db)
+	if err := ts.Ensure(context.Background()); err != nil {
+		return nil, err
+	}
+	o.tipStore = ts
+	o.stampDomain = domain
+	return o, nil
 }
 
 // Database returns the database that owns the durable outbox. Consumers use
@@ -82,6 +107,27 @@ func (o *ObservationOutbox) EnqueueTx(ctx context.Context, tx *sql.Tx, event Env
 	}
 	if err := event.Validate(); err != nil {
 		return err
+	}
+	if o.tipStore != nil {
+		// Idempotent replay: if this event is already stored, do not advance
+		// the chain (a re-stamp would compute a different tip). Same payload
+		// is a no-op; a different payload is a conflict.
+		var existingPayload string
+		qerr := tx.QueryRowContext(ctx, `SELECT payload FROM dhcp_ipam_observation_events WHERE event_id = ?`, event.EventID).Scan(&existingPayload)
+		if qerr == nil {
+			if existingPayload == string(event.Payload) {
+				return nil
+			}
+			return fmt.Errorf("%w: event_id=%s", ErrDuplicateEvent, event.EventID)
+		}
+		if qerr != sql.ErrNoRows {
+			return fmt.Errorf("facts outbox: check existing event %s: %w", event.EventID, qerr)
+		}
+		stamped, serr := o.tipStore.StampTx(ctx, tx, o.stampDomain, event)
+		if serr != nil {
+			return serr
+		}
+		event = stamped
 	}
 	payload, err := json.Marshal(event.Payload)
 	if err != nil {

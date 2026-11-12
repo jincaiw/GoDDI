@@ -256,6 +256,11 @@ type DHCPConfig struct {
 	// projection-gap detector/readiness is the signal and allocation is
 	// unchanged; set true to fail closed.
 	RequireIPAMProjection bool `yaml:"require_ipam_projection"`
+	// FactsHashChain, when true, stamps the unified facts outbox with the hash
+	// chain (epoch/prev/payload/tip) at the producer (D-03). Default false:
+	// existing facts are written without chain fields and behaviour is
+	// unchanged.
+	FactsHashChain bool `yaml:"facts_hash_chain_enabled"`
 }
 
 // IPAMConfig holds IPAM configuration.
@@ -409,6 +414,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvString("GODDI_DHCP_LEASE_STORE", &cfg.DHCP.LeaseStore)
 	setEnvString("GODDI_DHCP_LEASE_WAL_PATH", &cfg.DHCP.LeaseWALPath)
 	setEnvBool("GODDI_DHCP_REQUIRE_IPAM_PROJECTION", &cfg.DHCP.RequireIPAMProjection)
+	setEnvBool("GODDI_DHCP_FACTS_HASH_CHAIN_ENABLED", &cfg.DHCP.FactsHashChain)
 
 	// The HA peer token is a shared secret, so it is read from the environment
 	// as well as from the file. Every other dhcp_ha setting is deployment
