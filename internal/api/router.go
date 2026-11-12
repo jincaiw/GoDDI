@@ -231,6 +231,12 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/permissions", handler.GetZonePermissions)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Put("/permissions", handler.SetZonePermissions)
 					r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/catalog/members", handler.GetCatalogMembers)
+					// Zone transfer authorization (AXFR/IXFR TSIG + CIDR bindings).
+					r.Route("/transfers", func(r chi.Router) {
+						r.With(rbac.RequirePermission(rbacMgr, "dns", "read"), handler.RequireZonePermission("view")).Get("/", handler.ListZoneTransfers)
+						r.With(rbac.RequirePermission(rbacMgr, "dns", "write"), handler.RequireZonePermission("modify")).Post("/", handler.CreateZoneTransfer)
+						r.With(rbac.RequirePermission(rbacMgr, "dns", "delete"), handler.RequireZonePermission("delete")).Delete("/{transferId}", handler.DeleteZoneTransfer)
+					})
 				})
 			})
 

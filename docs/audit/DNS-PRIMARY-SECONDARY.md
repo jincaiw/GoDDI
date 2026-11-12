@@ -63,3 +63,15 @@ CI 侧的轻量版本：`make verify-dns-drill`（loopback，无需 Docker/外�
 
 ### 已知产品缺口（诚实）
 代码里**没有任何应用路径写入 `dns_zone_transfer`**（AXFR 的 TSIG 授权绑定表）。也就是说只靠管理台/API 建不出"zone ↔ TSIG key"的传送授权，`HandleAXFR` 的 `JOIN dns_zone_transfer ... tsig_key_name` 会一直不匹配。因此本容器演练用 harness 直接写入该绑定（真实产品行为仍受此限）。建议后续补一个 `dns_zone_transfer` 的管理 API/UI（允许按 zone 绑定 TSIG key + 允许来源），否则方案 A 在纯 UI 部署下不可用。完整 `goddi serve` 双容器版还受控制→DNS 复制、TSIG 密封等编排影响，本演练用 harness 规避这些以便稳定复现。
+
+## 8. 产品化传送授权 API（dns_zone_transfer）
+补齐了此前"应用代码不写 `dns_zone_transfer`"的缺口，新增管理 API（写控制库，随数据面复制到 DNS 平面）：
+- `GET    /api/v1/dns/zones/{id}/transfers` 列出授权；
+- `POST   /api/v1/dns/zones/{id}/transfers` `{allowed_cidr, tsig_key_name}` 新增（CIDR 校验；裸地址自动补 `/32`|`/128`；`tsig_key_name` 必须存在）；
+- `DELETE /api/v1/dns/zones/{id}/transfers/{transferId}` 删除。
+路由在 `internal/api/router.go`（RBAC dns read/write/delete + 区域权限 view/modify/delete），处理在 `internal/api/handler/dns_zone_transfer.go`，OpenAPI 目录已登记。
+
+**实机验证（18080 真实产品）**：登录 → 建 `prodpath2.test.` 区 → 建 TSIG key（回传 secret）→ `POST /transfers` 绑定 `127.0.0.1/32`+key（201）→ 建 A 记录 `www=192.0.2.77` → 用产品 `SecondarySync` 从 `127.0.0.1:15353` 拉取成功：`PRODUCT_SYNC_OK records=3 sampleA="192.0.2.77"`。
+
+**运维注意（已知限制）**：DNS 的 TSIG 密钥映射在**进程启动时加载一次**（`main.go` 只调一次 `SetTSIGSecretMap`，运行中的 `dns.Server` 持有启动快照）。因此**新增 TSIG key 后需重启 DNS 进程（或重启 goddi）才生效**；本验证即"建 key→重启→AXFR 成功"。同类产品通常也需 reload。后续可选增强：实现运行期安全热加载（需把 `dns.Server` 改为使用动态 `TsigProvider` 并加并发安全的快照刷新）。
+**UI**：本轮交付的是 API（管理台后续可接入该三端点；未新增 Vue 页面）。

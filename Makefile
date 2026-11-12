@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill
+.PHONY: all build test lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy verify-dns-drill verify-dns-drill-container
 
 all: lint test build
 
@@ -100,6 +100,10 @@ verify-browser:
 ## verify-dns-drill: DNS 方案A 主从 loopback 演练（真实 DNS 服务器 + SecondarySync + DNS 查询）
 verify-dns-drill:
 	@bash scripts/dns_primary_secondary_drill.sh
+
+## verify-dns-drill-container: DNS 方案A 主从两容器 + dig 演练（需要 Docker）
+verify-dns-drill-container:
+	@bash scripts/dns_primary_secondary_container_drill.sh
 
 ## clean: Remove build artifacts
 clean:

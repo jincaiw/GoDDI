@@ -1799,3 +1799,11 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 - `make verify-dns-drill`：跑 loopback 演练（`TestPrimarySecondary*`），无需 Docker/外部 dig。
 - `scripts/dns_primary_secondary_container_drill.sh`：两真实 DNS 容器（复用产品 `AXFRHandler`/`SecondarySync`）+ `dig` 客户端容器，实测 TSIG AXFR 复制、无签名 AXFR fail-closed、停 primary 后 secondary 仍应答；`PASS=5 FAIL=0 DRILL: OK`。
 - 已知缺口：应用代码无写入 `dns_zone_transfer` 的路径（AXFR TSIG 授权绑定），纯 UI 部署无法授权 AXFR；建议后续补管理 API/UI。演练 harness 直接写入该绑定。
+
+## 1aw. DNS 方案A：产品化传送授权 API + CI 容器目标（round 357）
+
+- 新增 `dns_zone_transfer` 管理 API：`GET/POST /api/v1/dns/zones/{id}/transfers`、`DELETE .../{transferId}`（`internal/api/handler/dns_zone_transfer.go` + 路由 + OpenAPI）。校验 CIDR（裸地址补 /32|/128）、TSIG key 存在；写控制库并随数据面复制到 DNS 平面。
+- 单测 `dns_zone_transfer_test.go`（建/列/删 + 负例）通过；OpenAPI 路由覆盖测试通过。
+- 实机（18080）：API 建区/TSIG/授权后，产品 `SecondarySync` 从 127.0.0.1:15353 AXFR 成功（records=3, sampleA=192.0.2.77）。
+- 已知限制：TSIG 密钥启动时加载一次，新增 key 需重启 DNS 进程才生效（文档已记）；UI 未加（API 就绪）。
+- `make verify-dns-drill-container`：容器版演练入口（需 Docker）。
