@@ -14,6 +14,9 @@ jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/nul
 login(){ curl -s -X POST "http://127.0.0.1:$1/api/v1/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"AdminPass-0123456789"}'; }
 RA=$(login 18181); TOK=$(printf '%s' "$RA"|jget "d['data']['token']"); CS=$(printf '%s' "$RA"|jget "d['data']['csrf_token']")
 H=(-H "Authorization: Bearer $TOK" -H "X-CSRF-Token: $CS" -H 'Content-Type: application/json')
+# node-a's client-network address (not stable across recreates).
+DNS_IP=$(docker exec node-a sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+[ -n "${DNS_IP:-}" ] || DNS_IP=10.77.3.2
 sqlq(){ docker exec node-a sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1; sqlite3 -noheader /var/lib/goddi/goddi.db \"$1\"" 2>/dev/null | tr -d '\r'; }
 
 # --- IPAM space + subnet ---------------------------------------------------
@@ -90,13 +93,13 @@ if [ -n "${IP:-}" ]; then
   fi
   ptr=""
   for _ in $(seq 1 10); do
-    ptr=$(docker exec client sh -c "nslookup $IP 10.77.3.4 2>/dev/null | awk '/name =/{print \$NF}' | head -1" 2>/dev/null)
+    ptr=$(docker exec client sh -c "nslookup $IP $DNS_IP 2>/dev/null | awk '/name =/{print \$NF}' | head -1" 2>/dev/null)
     [ -n "$ptr" ] && break; sleep 2
   done
   if [ -n "$ptr" ]; then ok "PTR published for $IP ($ptr)"; else nv "no PTR for $IP (reverse zone not configured for this test subnet)"; fi
   fwd=""
   for _ in $(seq 1 10); do
-    fwd=$(docker exec client sh -c "nslookup $HOSTNAME_TAG.h2ddns.test 10.77.3.4 2>/dev/null | awk '/^Address: /{print \$2}' | tail -1" 2>/dev/null)
+    fwd=$(docker exec client sh -c "nslookup $HOSTNAME_TAG.h2ddns.test $DNS_IP 2>/dev/null | awk '/^Address: /{print \$2}' | tail -1" 2>/dev/null)
     [ -n "$fwd" ] && break; sleep 2
   done
   [ -n "$fwd" ] && ok "forward A published for DHCP hostname ($fwd)" || nv "no forward A for the DHCP hostname in h2ddns.test (DDNS update not observed)"

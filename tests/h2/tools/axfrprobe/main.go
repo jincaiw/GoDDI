@@ -16,12 +16,18 @@ import (
 func main() {
 	server := flag.String("server", "10.77.3.4:53", "authoritative server address")
 	zone := flag.String("zone", "h2xfr.test.", "zone to transfer")
+	ixfr := flag.Bool("ixfr", false, "issue an IXFR (with -serial) instead of an AXFR")
+	serial := flag.Uint("serial", 0, "client serial for -ixfr")
 	keyName := flag.String("key", "", "TSIG key name (empty = unsigned)")
 	secret := flag.String("secret", "", "TSIG secret (base64)")
 	flag.Parse()
 
 	m := new(dns.Msg)
-	m.SetAxfr(dns.Fqdn(*zone))
+	if *ixfr {
+		m.SetIxfr(dns.Fqdn(*zone), uint32(*serial), dns.Fqdn(*zone), "ns."+dns.Fqdn(*zone))
+	} else {
+		m.SetAxfr(dns.Fqdn(*zone))
+	}
 	tr := &dns.Transfer{}
 	if *keyName != "" {
 		tr.TsigSecret = map[string]string{dns.Fqdn(*keyName): *secret}

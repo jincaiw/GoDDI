@@ -32,7 +32,7 @@ make h2-down              # 停止并清理（含卷）
 ## 状态（滚动）
 - Round 6（DNS 传送/TSIG + LKG）：`dns-transfer-acceptance.sh` → **PASS=4 FAIL=1 NOT_VERIFIED=3**。
   - PASS：TSIG key 创建（服务端生成并一次性返回 secret）、AXFR 按 CIDR+key 授权、**无签名 AXFR 被拒（REFUSED）**。
-  - **FAIL（真实缺陷，未修）**：带签名的 AXFR 在容器内被客户端拒绝（`dns: no signature found`）。同一代码路径的**真实线缆单测 `TestAXFRTSIGOverRealWire` 通过**（151 条记录、多消息签名链），说明缺陷与环境装配相关（疑为 `dns.Server.TsigSecret` 快照与 `serveZoneTransfer` 的签名路径在容器内未生效）。已按"失败不得重试成 PASS"如实记录，待修。
+  - **Round 7 澄清并修复**：先前记录的"签名 AXFR 失败"**不是产品缺陷**，是验收脚本自身两处错误——① 目标 DNS IP 硬编码为 `10.77.3.4`，容器重建后实际是 `10.77.3.2`，请求打到了没有 key/授权的 node-b；② `docker restart`（加载新 TSIG key 的必需步骤）被放在了探测**之后**。修正后：**签名 AXFR 真实成功（16 条记录）**、无签名被拒（REFUSED）、SOA 应答、IXFR 应答、**NOTIFY 被确认**。最终 `DNS-TRANSFER PASS=8 FAIL=0 NOT_VERIFIED=0`。
   - 新增：`tests/h2/tools/axfrprobe`（真实 DNS 传送客户端，镜像无 dig）；DNS 域 LKG 指标 `goddi_dataplane_lkg_revision{domain="dns"}` 已接入启动与 30s 刷新。
 - Round 5（IPAM/DDNS 验收）：`ipam-acceptance.sh` → **PASS=13 FAIL=0 NOT_VERIFIED=2**。space/subnet(VLAN 130) 建/复用；真实 DORA 后 **facts 端到端**（producer outbox `done` → control inbox → IPAM `observed_state=in_use`）；outbox 无 failed、序号推进、无重复行（幂等）；**DDNS 真实发布并核验**：`<host>.h2ddns.test A` 与 `x.3.77.10.in-addr.arpa PTR` 经真实 DNS 查询确认。
   - 观察到的环境约束（非产品缺陷）：DORA 后 udhcpc 会改写客户端自身地址/路由，脚本需恢复 fixture 网络；容器内无 `dig`（alpine 源受限），改用 `nslookup`。
