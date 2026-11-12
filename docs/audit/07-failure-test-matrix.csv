@@ -1,0 +1,24 @@
+id,category,trigger,expected,actual_code_behaviour,risk,test_method,pass_criteria,evidence_status
+F-01,HA-断电,主节点断电（真实）,ACK 的租约在重启后可恢复,ACK 前写 WAL(fsync)+备确认；WAL replay 恢复;真实断电未测,P0,"物理断电或 kill -9 后重启，核对租约",重启后无丢失/无重复,NOT_VERIFIED(仅 SIGKILL 演练);SIGKILL: PASS
+F-02,HA-断电,备节点断电,主在备恢复前暂停新承诺,主 Confirm 失败→paused→静默不 ACK,P0,"停 standby，发 REQUEST",主不 ACK 新请求，状态 paused,PASS(代码+状态机单测)
+F-03,HA-复制断链,复制链路中断,原 Owner 继续服务(DEC-006) or 暂停(ADR-0003),实现=paused 暂停；需 ha degrade 才继续,P0(实现/DEC-006 冲突),"断 peer 链路后发 REQUEST",按所选 ADR：暂停或继续且可审计,FAIL(与 DEC-006 冲突)
+F-04,HA-分区,网络分区后恢复,无双写脑裂,两 primary 均 paused，需人工 fence/rejoin,P0,"两侧隔离再恢复，观察写入",无双方各自 ACK 同一地址,NOT_VERIFIED(无并发双写注入)
+F-05,HA-旧主回归,旧主重新上线,旧主不得恢复过期写权,旧主重启按存储 ha_role 判定；运行中无 epoch 感知,P0,"fence 旧主后重启/上线",旧主不服务或只读,NOT_VERIFIED
+F-06,SQLite-磁盘满,磁盘写满,写失败明确、不假成功,未显式处理 ENOSPC 上层降级,P1,"填满数据盘后发起绑定",返回错误且不 ACK,PARTIAL(依赖底层错误传播)
+F-07,SQLite-lock,并发写锁超时,写失败可重试且不丢,BUSY 超时 5s（busy_timeout）,P1,"并发压测写",超时返回错误不半提交,PARTIAL(有 timeout，无压测)
+F-08,WAL-损坏,WAL 损坏/截断,检测并拒绝/回退,wal_file validateWALHeader;损坏行为未测,P0,"截断/篡改 WAL 后启动",检测失败并拒绝启动或回退安全,PARTIAL(有 header 校验，无损坏注入)
+F-09,WAL-缺口,日志缺口/乱序,拒绝并阻断,facts.Watermark 拒绝未来 sequence；无哈希分叉检测,P1,"注入跳号事件",consumer 拒绝并告警,PARTIAL
+F-10,WAL-Hash,facts 哈希不匹配/facts 被篡改,检测,Envelope 无 PrevHash/PayloadHash/TipHash,P0,"篡改 envelope payload",检测到并阻断,FAIL(无哈希链)
+F-11,ACK-崩溃,ACK 前后各阶段崩溃,不丢已承诺租约且不产生幽灵租约,提交→确认→durable→ACK;SIGKILL 演练通过;真实断电未测,P0,"各阶段 kill -9",重启一致,PASS(SIGKILL 演练 9/0、17/0);真实断电 NOT_VERIFIED
+F-12,ACK-回执丢失,复制提交成功但回执丢失,不重复、可重试,Confirm 依赖 applied 水位;重发幂等,P1,"丢弃 applied 帧",最终一致且无重复租约,PARTIAL(机制在，无注入)
+F-13,DNS发布,Prepare/Commit/Apply 各阶段失败,不产生两个有效版本,多节点协调未实现;单节点 outbox 重试,P0,"中断数据面应用",单节点回滚到 LKG;多节点一致性无法保证,FAIL(多节点)/PARTIAL(单节点)
+F-14,DNS-AXFR,AXFR/TSIG 错误/未授权,拒绝,需 TSIG + dns_zone_transfer 绑定;无授权拒绝,P0(已修),"dig AXFR 无/错 TSIG",拒绝,PASS(本轮修复+演练)
+F-15,IPAM消费,消费者失败/重复/重放,幂等、不丢,watermark+MarkDoneTx 同事务；失败留 inbox,P1,"注入消费失败后重放",最终一致无重复,PARTIAL(单测)
+F-16,IPAM滞后,IPAM 配置复制滞后,DHCP 不用陈旧配置分配,无 freshness 栅栏,P1,"延迟 ipam_subnets 复制后绑定",拒绝或告警,PARTIAL/风险
+F-17,DDNS,DNS 更新失败/重复,幂等重试、最终一致,dns facts consumer 幂等+inbox 重放,P1,"注入 apply 失败",最终发布无残留,PARTIAL
+F-18,Cluster,Owner Epoch 冲突,拒绝旧 epoch 写,无 Owner Epoch 实现,P0,"构造旧 epoch 写入",拒绝并审计,NOT_IMPLEMENTED
+F-19,TLS,证书失效/握手失败,拒绝连接,数据面 HA 无 TLS；管理面 mTLS 可选,P0,"用错证书/篡改 token 连 HA",拒绝,FAIL(数据面无 TLS)
+F-20,时间,时间回拨,不影响正确性,TSIG fudge/水位 sequence 非时间；未测回拨,P1,"回拨系统时钟",仍正确,PARTIAL
+F-21,License,许可证到期/管理面宕机,按策略限制/继续服务,无 license 执行代码,P1,"到期模拟",按产品规格,PARTIAL(NOT_IMPLEMENTED)
+F-22,并发,多客户端并发/高频续租,无重复分配/无错地址,WAL store + per-IP 查询；无压测,P1,"高并发 DORA/续租",无重复 IP、无错分配,NOT_VERIFIED
+F-23,长期,S1 长期运行,WAL 增长/投影稳定,无长跑验证,P1,"72h soak",稳定,PARTIAL(有压力测试文档未复跑)
