@@ -15,7 +15,7 @@
 5. 测试：旧 epoch 写拒绝、epoch 回退拒绝、并发 takeover 仅一个成功、旧主回归只读。
 6. 验收：落后 epoch 写 100% 拒绝并审计；分区恢复后旧主 fenced。
 
-**E-2 mTLS 复制通道 + 防重放（D-01）**
+**E-2 mTLS 复制通道 + 防重放（D-01）— 状态：已实现基础（2026-11-12，单测通过）**
 1. `internal/dhcp/ha` 用 `internal/tlsutil.ServerConfig`（`RequireAndVerifyClientCert`）启 mTLS；节点证书 CN=NodeID，根 CA 校验。
 2. 帧头加 nonce + 时间戳 + 单调序号，接收端拒绝过期/重复 nonce。
 3. 证书轮换/吊销流程（短期证书 + 根 CA 轮换 + 吊销名单）。
@@ -29,7 +29,7 @@
 4. 验收：仅在满足 DEC-006 (a) 条件时自动继续。
 
 ## 阶段 1（H2 可信身份 + 围栏，最高优先）
-- **T1-1 mTLS 复制通道**（D-01，细化见 E-2）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
+- **T1-1 mTLS 复制通道**（D-01，细化见 E-2，**已完成基础实现 2026-11-12**）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
 - **T1-2 Owner Epoch 写栅栏**（D-02，细化见 E-1，**已完成基础实现 2026-11-12**）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
 - **T1-3 facts 哈希链**（D-03）：Envelope 增 epoch/prev_hash/payload_hash/tip_hash；生产者链式、消费者校验、断链阻断（DEC-007）。验收：篡改/断链检测并阻断。依赖：T1-2。
 

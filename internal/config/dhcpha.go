@@ -127,6 +127,15 @@ func validateDHCPHA(c *DHCPHAConfig) error {
 			"otherwise the peer reads as stale between two of its own heartbeats", heartbeat, stale)
 	}
 
+	// TLS material is all-or-none: a half-configured channel would silently run
+	// without mutual authentication.
+	cert, key, ca := strings.TrimSpace(c.TLSCertFile), strings.TrimSpace(c.TLSKeyFile), strings.TrimSpace(c.TLSCAFile)
+	if cert != "" || key != "" || ca != "" {
+		if cert == "" || key == "" || ca == "" {
+			return fmt.Errorf("dhcp_ha peer TLS requires dhcp_ha.tls_cert_file, tls_key_file and tls_ca_file together")
+		}
+	}
+
 	return nil
 }
 

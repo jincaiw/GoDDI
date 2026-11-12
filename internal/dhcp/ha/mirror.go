@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -286,7 +287,14 @@ func (m *Mirror) Run(ctx context.Context) error {
 // the link breaks.
 func (m *Mirror) session(ctx context.Context) error {
 	d := net.Dialer{Timeout: m.cfg.PeerStaleAfter}
-	conn, err := d.DialContext(ctx, "tcp", m.cfg.PeerAddress)
+	var conn net.Conn
+	var err error
+	if ct := m.cfg.clientTLS(); ct != nil {
+		td := tls.Dialer{NetDialer: &d, Config: ct}
+		conn, err = td.DialContext(ctx, "tcp", m.cfg.PeerAddress)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", m.cfg.PeerAddress)
+	}
 	if err != nil {
 		return fmt.Errorf("dialling %s: %w", m.cfg.PeerAddress, err)
 	}
@@ -414,10 +422,17 @@ func (m *Mirror) session(ctx context.Context) error {
 
 func (m *Mirror) handshake(conn net.Conn) error {
 	conn.SetWriteDeadline(time.Now().Add(m.cfg.PeerStaleAfter))
+	var nonce string
+	var sentAt int64
+	if m.cfg.TLS != nil {
+		nonce, sentAt = newHelloNonce()
+	}
 	if err := writeFrame(conn, Frame{
 		Type:     FrameHello,
 		Protocol: Protocol,
 		Token:    m.cfg.PeerToken,
+		Nonce:    nonce,
+		SentAt:   sentAt,
 		Watermarks: &Watermarks{
 			NodeID:          m.cfg.NodeID,
 			Role:            m.cfg.Role,
@@ -444,6 +459,11 @@ func (m *Mirror) handshake(conn net.Conn) error {
 	if frame.Watermarks.Role != "primary" {
 		return fmt.Errorf("%w: a standby mirrors a primary, the peer says %q",
 			ErrRoleMismatch, frame.Watermarks.Role)
+	}
+	if m.cfg.TLS != nil {
+		if err := validateHelloFreshness(frame); err != nil {
+			return err
+		}
 	}
 	if err := m.observePrimaryEpoch(frame.Watermarks.Epoch); err != nil {
 		return err

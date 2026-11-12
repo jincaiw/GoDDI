@@ -8,7 +8,7 @@
 | Node ID 持久化/唯一 | PARTIAL | `internal/dhcp/ha/config.go` `NodeID`；来自配置/`GODDI_DHCP_HA_NODE_ID`（`internal/config/config.go:413`）。两组必须不同（配置校验），但**无集群级唯一性仲裁**（cluster 501）。 |
 | Cluster ID | NOT_IMPLEMENTED | 无 cluster id 概念；`internal/cluster` 仅协议模型（`cluster.go:14`）。 |
 | Owner Epoch（单调围栏令牌） | PARTIAL→**基础已实现（E-1，2026-11-12）** | `dataplane_meta.ha_owner_epoch` 持久化；`Takeover` 单调 +1；`Watermarks.Epoch` 握手交换；见更高 epoch → `StateFenced`/`MayBind=false`（不 ACK）。剩余：quorum 证明自动继续（E-3）与写路径显式 epoch 参数。 |
-| 双节点身份认证/mTLS/证书轮换/防重放 | **FAIL** | 复制通道为**明文 TCP + 共享 `peer_token`**（`internal/dhcp/ha/config.go` `PeerToken`，`protocol.go` Hello 携带 token）；ha 包无 `tls.`；无证书轮换；防重放仅靠水位(sequence)而非加密认证。管理面另有 mTLS（`tlsutil`）但**未用于数据面**。 |
+| 双节点身份认证/mTLS/证书轮换/防重放 | PARTIAL→**基础已实现（E-2，2026-11-12）** | 复制通道**可选 mTLS**（`ha.LoadTLS`、`serverTLS/clientTLS`，`RequireAndVerifyClientCert`；`tls_test.go` 验证 mTLS 往返/明文拒绝/错 CA 拒绝）；hello `Nonce+SentAt` 防重放。**仍缺**：证书自动轮换/吊销编排（需现场 PKI），且 TLS 非强制（nil=旧明文）。 |
 | 每 Scope Group 唯一 Owner | PARTIAL | 单写者模型：`EffectiveRole` 以库中 `ha_role` 为准（`role.go:115`），`standsAside` 非 primary 不构造 DHCP（`cmd/goddi/main.go` ~927）。但"Scope Group"粒度所有权未实现（所有权是全节点级，非每 scope group）。 |
 | 并发双写/旧主回归/脑裂 | PARTIAL | 无 epoch 写栅栏；旧主在分区时进入 `paused`（`state.go` `MayBind=false`）从而不 ACK，网络恢复后两 primary 无对端→均 paused（fail-closed，需人工 fence/rejoin）。**可用性依赖人工，但写入脑裂被 paused 抑制**。NOT_VERIFIED 运行时双写测试。 |
 | 心跳/复制/控制面链路区分 | PASS | 心跳=复制通道应用回执(`Applied`)，非独立心跳；控制库不在复制通道（ADR-0003 决策1，`replicator.go`/`mirror.go` 直连 TCP）。 |

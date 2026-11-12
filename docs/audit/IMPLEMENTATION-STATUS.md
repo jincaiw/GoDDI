@@ -1821,3 +1821,18 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 
 ### 1ax.3 边界
 E-1 为**单进程内**围栏（写路径经 `MayBind` 抑制）；真正的"跨节点证明唯一所有权/自动 degraded"仍需 E-2（mTLS）与 E-3（quorum/witness）。
+
+## 1ay. ADR-0010 落地 E-2：复制通道 mTLS + 防重放（round 359）
+
+### 1ay.1 变更（代码）
+- `internal/config/extensions.go`：`DHCPHAConfig` 增 `tls_cert_file/tls_key_file/tls_ca_file/tls_server_name`；`config.go` 增对应 `GODDI_DHCP_HA_TLS_*` env；`dhcpha.go` 校验 TLS 三项 all-or-none。
+- `internal/dhcp/ha/config.go`：`Config` 增 `TLS *tls.Config`、`TLSServerName`。
+- `internal/dhcp/ha/transport.go`：`LoadTLS`（证书+CA roots）、`serverTLS`（`RequireAndVerifyClientCert`）、`clientTLS`（ServerName 回退 peer host）。
+- `replicator.go`/`mirror.go`：监听 `tls.NewListener`、拨号 `tls.Dialer`；hello 增 `Nonce/SentAt`，TLS 路径校验新鲜度（`validateHelloFreshness`）。
+- `cmd/goddi/main.go`：HA 启用且 `tls_cert_file` 非空时 `ha.LoadTLS` 注入 `haCfg.TLS`。
+
+### 1ay.2 测试
+`internal/dhcp/ha/tls_test.go`：mTLS 往返成功、明文客户端被拒、错 CA 被拒（2 例）。`go test ./internal/dhcp/ha ./internal/config ./internal/dhcp/server` 全绿；`docs` 守卫 PASS。
+
+### 1ay.3 边界
+TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境必须配置 `dhcp_ha.tls_*`。证书**自动轮换/吊销编排**仍需现场 PKI（未实现，NOT_VERIFIED）。

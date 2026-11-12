@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -398,6 +399,9 @@ func (r *Replicator) Run(ctx context.Context) error {
 		return fmt.Errorf("ha: listening for the peer on %s: %w", r.cfg.ListenAddr, err)
 	}
 	defer ln.Close()
+	if st := r.cfg.serverTLS(); st != nil {
+		ln = tls.NewListener(ln, st)
+	}
 
 	r.mu.Lock()
 	r.bound = ln.Addr()
@@ -538,6 +542,11 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 		return Watermarks{}, fmt.Errorf("%w: the peer calls itself %q, which is this node",
 			ErrRoleMismatch, r.cfg.NodeID)
 	}
+	if r.cfg.TLS != nil {
+		if err := validateHelloFreshness(frame); err != nil {
+			return Watermarks{}, err
+		}
+	}
 	if frame.Watermarks.AppliedSeq < 0 || frame.Watermarks.FactsAppliedSeq < 0 {
 		return Watermarks{}, errors.New("ha: peer reported a negative applied watermark")
 	}
@@ -554,9 +563,16 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 	}
 
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.PeerStaleAfter))
+	var nonce string
+	var sentAt int64
+	if r.cfg.TLS != nil {
+		nonce, sentAt = newHelloNonce()
+	}
 	if err := writeFrame(conn, Frame{
 		Type:     FrameHello,
 		Protocol: Protocol,
+		Nonce:    nonce,
+		SentAt:   sentAt,
 		Watermarks: &Watermarks{
 			NodeID:          r.cfg.NodeID,
 			Role:            r.cfg.Role,

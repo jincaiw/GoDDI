@@ -88,6 +88,15 @@ type DHCPHAConfig struct {
 	// considers the pair broken. It only ever moves a primary into paused; it
 	// is never a reason to promote. See ADR 0003 decision 4.
 	PeerStaleAfter string `yaml:"peer_stale_after" json:"peer_stale_after"`
+	// TLS material for the peer channel. When tls_cert_file is set, the HA
+	// replication channel uses mutual TLS (the same node certificate is
+	// presented on dial and required on accept, verified against tls_ca_file).
+	// All three file settings are required together; empty means plaintext +
+	// shared token (legacy).
+	TLSCertFile   string `yaml:"tls_cert_file" json:"tls_cert_file"`
+	TLSKeyFile    string `yaml:"tls_key_file" json:"tls_key_file"`
+	TLSCAFile     string `yaml:"tls_ca_file" json:"tls_ca_file"`
+	TLSServerName string `yaml:"tls_server_name" json:"tls_server_name"`
 }
 
 // DefaultDoTConfig returns default DoT configuration.

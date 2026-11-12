@@ -1,6 +1,7 @@
 package ha
 
 import (
+	"crypto/tls"
 	"fmt"
 	"strings"
 	"time"
@@ -43,6 +44,13 @@ type Config struct {
 	// PeerStaleAfter is how long a silent peer takes this node out of the
 	// state in which it may promise addresses.
 	PeerStaleAfter time.Duration
+	// TLS, when non-nil, secures the peer channel with mutual TLS. The base
+	// config must carry this node's certificate and the CA roots the peer is
+	// verified against. Nil keeps the legacy plaintext+token channel.
+	TLS *tls.Config
+	// TLSServerName overrides the name verified on the dial side; empty falls
+	// back to the host part of PeerAddress.
+	TLSServerName string
 }
 
 // FromConfig resolves the operator's settings into a Config.

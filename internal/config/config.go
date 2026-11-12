@@ -417,6 +417,10 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvString("GODDI_DHCP_HA_CONFIRM_TIMEOUT", &cfg.DHCPHA.ConfirmTimeout)
 	setEnvString("GODDI_DHCP_HA_HEARTBEAT_INTERVAL", &cfg.DHCPHA.HeartbeatInterval)
 	setEnvString("GODDI_DHCP_HA_PEER_STALE_AFTER", &cfg.DHCPHA.PeerStaleAfter)
+	setEnvString("GODDI_DHCP_HA_TLS_CERT_FILE", &cfg.DHCPHA.TLSCertFile)
+	setEnvString("GODDI_DHCP_HA_TLS_KEY_FILE", &cfg.DHCPHA.TLSKeyFile)
+	setEnvString("GODDI_DHCP_HA_TLS_CA_FILE", &cfg.DHCPHA.TLSCAFile)
+	setEnvString("GODDI_DHCP_HA_TLS_SERVER_NAME", &cfg.DHCPHA.TLSServerName)
 
 	setEnvString("GODDI_SECURITY_JWT_SECRET", &cfg.Security.JWTSecret)
 	setEnvString("GODDI_SECURITY_ENCRYPTION_KEY", &cfg.Security.EncryptionKey)

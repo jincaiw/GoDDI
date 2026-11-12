@@ -40,6 +40,10 @@
 | `dhcp_ha.confirm_timeout` | duration / `2s` | `GODDI_DHCP_HA_CONFIRM_TIMEOUT` | 绑定等待第二副本确认的上限 |
 | `dhcp_ha.heartbeat_interval` | duration / `1s` | `GODDI_DHCP_HA_HEARTBEAT_INTERVAL` | 空闲时的心跳间隔 |
 | `dhcp_ha.peer_stale_after` | duration / `5s` | `GODDI_DHCP_HA_PEER_STALE_AFTER` | 静默多久后节点退出可承诺状态；必须大于 `confirm_timeout` 与 `heartbeat_interval` |
+| `dhcp_ha.tls_cert_file` | string / 空 | `GODDI_DHCP_HA_TLS_CERT_FILE` | 设置后复制通道启用 mTLS：本节点证书（CN=node_id）。三项 TLS 文件必须同时提供 |
+| `dhcp_ha.tls_key_file` | string / 空 | `GODDI_DHCP_HA_TLS_KEY_FILE` | 证书私钥；仅从受限文件/环境注入 |
+| `dhcp_ha.tls_ca_file` | string / 空 | `GODDI_DHCP_HA_TLS_CA_FILE` | 校验对端证书的根 CA |
+| `dhcp_ha.tls_server_name` | string / 空 | `GODDI_DHCP_HA_TLS_SERVER_NAME` | dial 侧校验的对端名称；空则取 peer_address 主机名 |
 
 ## 3. 保留占位（**配置可被解析，但功能未实现 / 501**）
 

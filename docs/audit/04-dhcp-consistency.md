@@ -28,7 +28,7 @@
 
 ## 6. 防脑裂 / Epoch / 旧主回归
 
-> 更新（2026-11-12）：**Owner Epoch 基础已实现（E-1）**——`ha_owner_epoch` 持久化、Takeover 单调+1、握手交换、见更高 epoch 即 `StateFenced`（`MayBind=false`）。旧主读到更高 epoch 不再承诺租约。
+> 更新（2026-11-12）：**Owner Epoch 基础已实现（E-1）**；复制通道 **mTLS+防重放基础已实现（E-2）**（`ha.LoadTLS`、hello nonce/时间戳；生产须配置 TLS）。——`ha_owner_epoch` 持久化、Takeover 单调+1、握手交换、见更高 epoch 即 `StateFenced`（`MayBind=false`）。旧主读到更高 epoch 不再承诺租约。
 - 无 `Owner Epoch` 写入栅栏（见 02 §3.1）。防双写依赖：单写者 + `paused` 时 `MayBind=false` + Confirm 必须成功。
 - 旧主分区：Confirm 失败/对端 stale → paused，不 ACK（fail-closed）。分区恢复：两 primary 均无对端→均 paused，需人工 `fence`/`rejoin`（`role.go:584/626`）。**无自动接管（DEC-002 PASS）**；但**可用性依赖人工**，且**无 epoch 证明旧主绝不写**（NOT_VERIFIED 并发双写注入）。
 - 决策方向：建议新增 `owner_epoch`（单调、持久、写前校验），旧主写入因 epoch 落后被拒并审计（见 08/09）。

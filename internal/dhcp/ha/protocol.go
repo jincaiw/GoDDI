@@ -1,11 +1,14 @@
 package ha
 
 import (
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/jasonwa/goddi/internal/facts"
 )
@@ -107,6 +110,38 @@ type Frame struct {
 	// protocol handler before any snapshot mutation.
 	FactsChunk    *facts.ReplicaSnapshotChunk    `json:"facts_chunk,omitempty"`
 	FactsManifest *facts.ReplicaSnapshotManifest `json:"facts_manifest,omitempty"`
+	// Nonce and SentAt (unix ms) are set on hello only when the channel uses
+	// TLS, and validated on receipt to bound handshake replay. Omitted on the
+	// legacy plaintext path for backwards compatibility.
+	Nonce  string `json:"nonce,omitempty"`
+	SentAt int64  `json:"sent_at,omitempty"`
+}
+
+// maxHandshakeSkew bounds how far a hello's timestamp may be from local time.
+const maxHandshakeSkew = 5 * time.Minute
+
+// newHelloNonce returns a fresh random nonce and the current unix-ms time.
+func newHelloNonce() (string, int64) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fall back to the clock if the RNG is unavailable; the TLS channel
+		// already authenticates, this only bounds replay.
+		return fmt.Sprintf("t%d", time.Now().UnixNano()), time.Now().UnixMilli()
+	}
+	return hex.EncodeToString(b[:]), time.Now().UnixMilli()
+}
+
+// validateHelloFreshness rejects a hello whose anti-replay fields are missing
+// or outside the allowed clock skew.
+func validateHelloFreshness(f Frame) error {
+	if f.Nonce == "" || len(f.Nonce) < 16 || f.SentAt == 0 {
+		return errors.New("ha: hello is missing a valid anti-replay nonce/timestamp")
+	}
+	skew := time.Since(time.UnixMilli(f.SentAt))
+	if skew > maxHandshakeSkew || skew < -maxHandshakeSkew {
+		return fmt.Errorf("ha: hello timestamp %s outside allowed skew %s", skew.Round(time.Millisecond), maxHandshakeSkew)
+	}
+	return nil
 }
 
 // LeaseRow is one lease as it travels between the nodes.

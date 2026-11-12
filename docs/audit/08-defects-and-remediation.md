@@ -14,6 +14,8 @@
 7. 依赖/顺序：先于任何生产 H2 上线；与 D-02 一起改（fencing 需可信对端身份）。
 8. 验收：无有效 mTLS 客户端证书一律拒绝；抓包无法读到明文租约。
 
+> **状态更新（2026-11-12）**：E-2 已实现——复制通道可选 **mTLS**（`ha.LoadTLS` + `Config.serverTLS/clientTLS`，`RequireAndVerifyClientCert`）；hello 增 `Nonce`+`SentAt` 防重放（`validateHelloFreshness`，仅 TLS 路径强制）；配置 `dhcp_ha.tls_{cert,key,ca}_file`/`tls_server_name`（含 env 与 CONFIG-REFERENCE）。测试 `tls_test.go`（mTLS 往返、明文拒绝、错 CA 拒绝）通过。生产环境**必须**配置 TLS（缺省 nil=旧明文，仅为兼容）。
+
 ### D-02 无 Owner Epoch（写入栅栏）
 1. 问题/触发：HA 用 `ha_role/takeover_at/fenced_at` 表达角色（`internal/dhcp/ha/role.go:28-53`），**没有单调 epoch 令牌**在**每次写**时校验；旧主若未被 fence 且状态误判，可能继续写。
 2. 源码：`role.go`（EffectiveRole `:115`、Takeover `:425`、Fence `:584`、Rejoin `:626`）；写路径 `internal/dhcp/server/handler.go:497-580` 未校验 epoch。

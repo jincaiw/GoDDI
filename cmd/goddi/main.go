@@ -928,6 +928,15 @@ func runServer(configPath string) error {
 			return fmt.Errorf("reading the DHCP HA settings: %w", err)
 		}
 		haCfg = resolved
+		if cfg.DHCPHA.TLSCertFile != "" {
+			tlsCfg, err := ha.LoadTLS(cfg.DHCPHA.TLSCertFile, cfg.DHCPHA.TLSKeyFile, cfg.DHCPHA.TLSCAFile, cfg.DHCPHA.TLSServerName)
+			if err != nil {
+				return fmt.Errorf("loading the DHCP HA peer TLS material: %w", err)
+			}
+			haCfg.TLS = tlsCfg
+			haCfg.TLSServerName = cfg.DHCPHA.TLSServerName
+			slog.Info("DHCP HA peer channel uses mutual TLS")
+		}
 	}
 
 	if servesDHCP {
