@@ -46,3 +46,38 @@
 
 ## 四、一句话
 **骨架真实、证据分层清楚**：单机可试运行但未达生产就绪；双节点"ACK 前双端持久化"可信，但**安全身份、Owner Epoch、事实哈希链、多节点配置发布与物理验收**是四到五个必须在正式上线前闭合的 P0/阻塞项。审计可按 09 阶段顺序推进至可验收。
+
+---
+
+## 附：实施进展与完成度（2026-11-12 滚动更新）
+
+> 本审计后续已按「遇决策→合理性评估→按推荐推进」执行了一轮实施，详见 `11-completion-status.md` 与 `IMPLEMENTATION-STATUS.md`。要点：
+
+### 已实现并有测试证据（默认安全、可回滚）
+- **D-01** 复制通道可选 mTLS + hello 防重放（`ha.LoadTLS`/serverTLS/clientTLS、`tls_test.go`）。
+- **D-02** Owner Epoch 写栅栏（`ha_owner_epoch`、Takeover 单调+1、握手交换、`epoch_test.go`）。
+- **D-04** DEC-006/ADR-0003 冲突由 **ADR-0010** 裁定（默认 paused；自动 degraded 需 epoch+quorum+mTLS）；DEC-002/006/007/008 建档。
+- **D-03** facts 哈希链：内核+校验器+tip store+StampTx；双库迁移增列；`facts_hash_chain_enabled` 开关；生产打戳；**IPAM+DNS 消费者 VerifyEnvelope + 断链 blocked**（flag 开启端到端）。
+- **D-06** `dns_zone_transfer` 授权 API（列/建/删）+ OpenAPI + 实机 AXFR 验证；TSIG 运行期热加载仍需重启（未做，作为运维注意）。
+- **D-08** SQLite FULL/IO/BUSY/ENOSPC/EIO 错误分类并接入 lease 写路径（`sqlitepolicy/errors.go`）。
+- **D-09** IPAM 投影缺口检测 + 可选严格栅栏（`ipam/projection.go`、`dhcp.require_ipam_projection`）。
+- **D-10** relay 中断/重启续传/重复幂等（`facts/relay_test.go`）。
+- **D-11** 租约幂等/并发 + 修复并发抢址裸 UNIQUE 错误→`ErrAddressTaken`。
+- **D-12** full 备份删后恢复 DNS/DHCP/IPAM 集成测试；旧基线→当前升级演练 `TestLegacyBaselineUpgradeKeepsTheData` 通过（升级路径有测试）。
+- **D-14** dataplane LKG 版本戳同事务写入 + `dataplane.LKG` + 指标。
+- **D-18/D-20** 基准脚本 `make bench`、Prometheus 指标（LKG/投影缺口，30s 刷新）。
+
+### 仍为外部阻断 BLOCKED（沙箱不可完成）
+- D-05 多节点配置发布/quorum（ADR-0005，需第三仲裁节点/见证）；B8.5 物理真机验收；真实填盘 ENOSPC/fsync 注入；证书轮换/吊销编排（需现场 PKI）。
+
+### 仍为 NOT_VERIFIED（需真机/长期环境）
+- 真实断电（仅 SIGKILL 演练）、WAL 磁盘损坏注入、网络分区恢复并发双写、并发 DORA/高频续租压测/72h soak、升级大库/停机窗口恢复、Appliance agent（D-17）运行验证、集群 ClusterID（D-19，501 产品边界）。
+
+### 回归证据
+- `go build ./...` OK；`go test ./...` **102 包 ok / 0 FAIL**（本轮）。
+- 演练：D2 独立 9/0、D2 HA 17/0、DNS loopback `DRILL OK`、DNS 两容器+dig `PASS=5 FAIL=0`。
+
+### 完成度结论
+- **可安全实施且可验证的 P0/P1 缺陷已全部落地**（默认关闭/可回滚的项均保持既有行为）；**D-03 端到端哈希链在启用开关时闭合**。
+- **剩余项均为外部阻断、需真机/长时间环境或不改变产品的边界**——不属本沙箱可完成范围。
+- **S1：接近就绪（待真机与长跑）**；**H2：核心安全要素（单写/ACK 前双端持久化/Owner Epoch/mTLS/不自动提升/哈希链可选）到位；自动 degraded 与 quorum 仍 BLOCKED**，故 H2 仍 PARTIAL。
