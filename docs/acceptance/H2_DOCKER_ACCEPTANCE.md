@@ -42,7 +42,11 @@ make h2-down                  # 清理
 故障场景判定、未运行套件（NOT_RUN，不当作 PASS）、以及 **Level 2 物理项清单（固定 NOT_VERIFIED）**。
 汇总判定：任一 FAIL → FAIL；全部通过但有未运行 → NOT_VERIFIED；否则 PASS。
 
+## 最终结论
+见 [`H2_ACCEPTANCE_CONCLUSION.md`](H2_ACCEPTANCE_CONCLUSION.md)：Level 1 **PASS**（PASS=171 / FAIL=0 / NOT_VERIFIED=23，8/8 强制项无违规）；Level 2 物理 5 项 **NOT_VERIFIED**；已知缺口（ADR-0005 等）已列明。
+
 ## 状态（滚动）
+- Round 10（六入口验证 + 最终结论）：`make h2-up / h2-test / h2-fault-test / h2-consistency-check / h2-report / h2-down` 全部实测可用、可重复、可清理。修复三处验收基础设施问题（`h2-fault-test` 调错脚本、`h2-down` 后探针丢失需自动重建、DNS 端口就绪竞态）。最终 `make h2-test` verdict=PASS（PASS=171），`make h2-fault-test` PASS=22 FAIL=0。产出 `docs/acceptance/H2_ACCEPTANCE_CONCLUSION.md`。
 - Round 9（Web 控制台全功能验收）：启动**最新构建**（HEAD 编译，隔离数据目录/端口），用真实 Chromium 执行 18 套 Playwright 回归 + 人操作 CRUD 走查 → **WEB PASS=113 FAIL=0 PAGE_ERRORS=0**。
   - 人操作路径实测：表单登录 → 仪表盘渲染 → 建区 → **列表 UI 可见** → 加 A 记录 → **区域详情页可见** → 删除 → 无页面错误。
   - 澄清一处"疑似缺陷"：区域详情页正确路由是 `/dns/zone-detail/:id`（列表页链接也指向它），`/dns/zones/:id` 返回 404 属预期；验收脚本已按真实路由修正。

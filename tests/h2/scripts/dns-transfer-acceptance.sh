@@ -17,6 +17,9 @@ RA=$(login 18181); TOK=$(printf '%s' "$RA"|jget "d['data']['token']"); CS=$(prin
 H=(-H "Authorization: Bearer $TOK" -H "X-CSRF-Token: $CS" -H 'Content-Type: application/json')
 
 ZONE=h2xfr.test.
+# The probes are Go programs from this repo; (re)install them so the suite works
+# after `make h2-down` removed the containers.
+bash scripts/build-probes.sh >/dev/null 2>&1 || true
 # Resolve node-a's client-network address at run time: Docker's ethN ordering and
 # IPAM lease order are not stable across recreates, so a hard-coded address can
 # silently point at node-b (which has no TSIG key and no authorization).
@@ -60,6 +63,13 @@ if [ -n "${KSECRET:-}" ] && [ -n "${KNAME:-}" ]; then
   done
   sleep 2
   DNS_IP=$(docker exec node-a sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+  # Wait for the DNS listener to accept TCP again: a restart brings the HTTP
+  # health check up before the DNS sockets are bound, so a transfer issued too
+  # early times out rather than being refused.
+  for _ in $(seq 1 30); do
+    docker exec client sh -c "nc -z -w1 $DNS_IP 53" 2>/dev/null && break
+    sleep 1
+  done
   echo "target DNS $DNS_IP:53"
   AX=$(docker exec client axfrprobe -server "${DNS_IP}:53" -zone "$ZONE" -key "$KNAME" -secret "$KSECRET" 2>&1 | tail -2)
   case "$AX" in
@@ -86,7 +96,7 @@ soa=$(docker exec client sh -c "nslookup -type=SOA $ZONE $DNS_IP 2>/dev/null | g
     *) nv "IXFR result: $(printf '%s' "$IX" | head -c 80)";;
   esac
   # NOTIFY: the server acknowledges a NOTIFY for a zone it serves (RFC 1996).
-  NT=$(docker exec client rawprobe -notify "$DNS_IP:53" "$ZONE" 2>&1 | tail -1)
+  NT=$(docker exec client notifyprobe -server "${DNS_IP}:53" -zone "$ZONE" 2>&1 | tail -1)
   case "$NT" in
     *NOTIFY_OK*) ok "NOTIFY acknowledged by the authoritative server ($NT)";;
     *) nv "NOTIFY result: $(printf '%s' "$NT" | head -c 80)";;

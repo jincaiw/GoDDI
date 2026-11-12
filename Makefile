@@ -132,7 +132,7 @@ h2-test:
 	@bash tests/h2/scripts/run-all.sh
 
 h2-fault-test:
-	@bash tests/h2/scripts/run-all.sh
+	@bash tests/h2/scripts/fault-scenarios.sh
 
 h2-dns-test:
 	@bash tests/h2/scripts/dns-acceptance.sh
