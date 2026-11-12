@@ -105,3 +105,54 @@ func TestWALLeaseStoreRollbackToSQLiteManagerSeesTheSameData(t *testing.T) {
 		t.Fatalf("rollback manager lease = %+v, want active gen2", byMAC)
 	}
 }
+
+// TestWALLeaseStoreReloadFromDBServesMirrorPopulatedRows proves standby-wal
+// promotion readiness: a standby's SQLite lease DB is filled by the HA mirror
+// while no DHCP server runs on it. When the node is promoted, a WAL store that
+// reloads from that DB must serve the mirrored leases (and allocate around
+// them) before taking new traffic.
+func TestWALLeaseStoreReloadFromDBServesMirrorPopulatedRows(t *testing.T) {
+	store := newLeaseStore(t)
+	seedScope(t, store.DB, "scope-1", "scope", "192.0.2.0/24", "192.0.2.10", "192.0.2.20")
+	ctx := context.Background()
+	s, err := OpenWALLeaseStore(ctx, WALLeaseStoreConfig{Path: filepath.Join(t.TempDir(), "leases.wal"),
+		DB: store.DB, Capacity: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(ctx)
+
+	// Simulate the HA mirror applying a primary snapshot directly to SQLite.
+	for _, row := range [][2]string{{"mirror-1", "192.0.2.10"}, {"mirror-2", "192.0.2.11"}} {
+		if _, err := store.DB.Exec(`INSERT INTO dhcp_leases
+			(id, scope_id, ip_address, mac_address, hostname, client_id, lease_start, lease_end, status, last_seen, generation)
+			VALUES (?, 'scope-1', ?, 'aa:bb', 'mirrored', '', ?, ?, 'active', ?, 1)`,
+			row[0], row[1], time.Now().UTC().Format(leaseTimeLayout),
+			time.Now().UTC().Add(time.Hour).Format(leaseTimeLayout), time.Now().UTC().Format(leaseTimeLayout)); err != nil {
+			t.Fatalf("mirror insert: %v", err)
+		}
+	}
+	if _, ok := s.Index().Get("mirror-1"); ok {
+		t.Fatal("index already saw a row it never loaded (mirror bypasses the store)")
+	}
+	if err := s.ReloadFromDB(ctx); err != nil {
+		t.Fatalf("ReloadFromDB: %v", err)
+	}
+	for _, ip := range []string{"192.0.2.10", "192.0.2.11"} {
+		held, err := s.GetHeldLeaseByIP(ip)
+		if err != nil || held == nil {
+			t.Fatalf("mirrored lease at %s not served after reload: %v %v", ip, held, err)
+		}
+	}
+	// Allocation must skip the mirrored addresses.
+	avail, err := s.FindAvailableIP("scope-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail == "192.0.2.10" || avail == "192.0.2.11" {
+		t.Fatalf("FindAvailableIP returned a mirrored address: %s", avail)
+	}
+	if _, err := s.CreateLease("scope-1", avail, "cc:dd", "new", time.Hour); err != nil {
+		t.Fatalf("create after reload: %v", err)
+	}
+}

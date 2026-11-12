@@ -69,3 +69,9 @@
 - **回滚开关**：任一处可设 `dhcp.lease_store: sqlite`（或 `GODDI_DHCP_LEASE_STORE=sqlite`）即回到同步 `*Manager`；演练已验证同卷回滚不丢数据。
 - **CI 稳定**：e2e 前端实例显式钉 `GODDI_DHCP_LEASE_STORE=sqlite`（该套件只测 API/UI，不测租约后端；WAL 热路径由 D2 演练与参考 HA 默认覆盖）。
 - **全矩阵（默认 wal 下）**：`make verify` OK；`verify-e2e` 4+8；`verify-browser` 20 套件 0 失败；全页面巡检 41/41；`verify-race` OK（0 DATA RACE）。参考 HA 默认（primary wal）实测真实 DORA→lease+fact(<ip>)+DNS+standby 镜像、双节点 `/ready` ok。
+
+## standby-wal 就绪（round 349）
+
+- `WALLeaseStore.ReloadFromDB(ctx)`：从 SQLite（standby 由 HA 镜像写入的库）重新装载索引后服务。HA 的 standby 处于 `standsAside`、不构造 DHCP server，其 SQLite 租约库由镜像保持最新；被提升时（重启式）新进程由 `OpenWALLeaseStore` 从该库装载快照即可服务，`ReloadFromDB` 亦可用于非重启的现场提升。
+- 就绪证据：`TestWALLeaseStoreReloadFromDBServesMirrorPopulatedRows`（镜像直写 SQLite 的租约 → `ReloadFromDB` 后 `GetHeldLeaseByIP` 命中、`FindAvailableIP` 跳过、可继续分配）。
+- 边界：standby 常驻仍不运行 DHCP server（不需要）；常驻 WAL 写的 standby 未实现，也不需要——提升靠重启/Reload 从已镜像快照装载。

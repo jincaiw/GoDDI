@@ -166,6 +166,26 @@ func isFactKind(kind MutationKind) bool {
 	}
 }
 
+// ReloadFromDB re-reads the lease and pool snapshot from SQLite into the read
+// index. It is the standby->primary promotion hook: a standby's SQLite lease DB
+// is kept current by the HA mirror while the standby never builds a DHCP server
+// (standsAside); when this node is promoted and starts serving, it must publish
+// an index built from that already-mirrored snapshot before answering. Call it
+// only when the store is not serving traffic (promotion/startup).
+func (s *WALLeaseStore) ReloadFromDB(ctx context.Context) error {
+	if s == nil || s.pipeline == nil {
+		return ErrWALPipelineClosed
+	}
+	leases, pools, err := loadLeaseSnapshot(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("lease wal store: reload snapshot: %w", err)
+	}
+	if err := s.pipeline.Index().ReplaceChecked(leases, pools); err != nil {
+		return fmt.Errorf("lease wal store: reload publish: %w", err)
+	}
+	return nil
+}
+
 func (s *WALLeaseStore) Close(ctx context.Context) error { return s.pipeline.Close(ctx) }
 func (s *WALLeaseStore) Drain(ctx context.Context) error { return s.pipeline.Drain(ctx) }
 func (s *WALLeaseStore) Index() *MemoryIndex             { return s.pipeline.Index() }

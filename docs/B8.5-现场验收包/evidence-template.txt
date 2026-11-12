@@ -1,0 +1,26 @@
+scenario_id:            # e.g. B8.5-A / B8.5-D
+software_version:
+git_commit:
+binary_sha256:
+operator:
+start_time_utc:
+end_time_utc:
+topology_ref:           # 指向 topology 图/说明或本包 README 场景
+client_or_relay_ref:
+monitoring_ref:
+
+preconditions:
+commands_log:
+raw_evidence:
+  pcaps:                # 文件名或目录
+  logs:
+  metrics:
+  db_checks:
+  screenshots:
+
+observations:
+expected:
+actual:
+result: BLOCKED          # PASS | PARTIAL | FAIL | BLOCKED
+blocking_reason:
+follow_up_owner:

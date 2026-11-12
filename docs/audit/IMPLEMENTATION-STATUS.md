@@ -1761,3 +1761,21 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 
 ### 1as.3 结论
 默认热路径已切到 WAL 事件溯源存储；灰度（独立节点 + HA 主备单节点）、SIGKILL 崩溃重放、同卷回滚均有可复现演练（`scripts/d2_wal_canary_drill.sh`、`scripts/d2_ha_wal_canary_drill.sh`）；未触碰生产、未提升 `ErrNoAuthority` 门禁。边界：断电为 SIGKILL/容器重启近似（非物理断电）；HA 演练为容器双节点（非物理机）；standby 常驻为 sqlite 镜像，promoted 节点靠重启加载 WAL。
+
+## 1at. 提交 + verify-tidy + B8.5 现场验收包 + standby-wal 就绪（round 349）
+
+### 1at.1 提交与模块卫生
+- `make verify-tidy`：**OK**（`go mod tidy -diff` 无漂移）。
+- 把本会话全部源码/测试/文档/迁移/前端改动提交为 **`3c385b2`**（754 files, +66693/-19841）；构建产物 `.ha-goddi-bin`/`.ha-web-dist/` 加入 `.gitignore`，提交后工作树干净。
+
+### 1at.2 B8.5 现场验收包
+- `docs/B8.5-现场验收包/`：`README.md`（使用步骤+场景/判据摘要）、`evidence-template.txt`（逐场景登记模板）、`RESULTS.md`（结果登记表，预填 BLOCKED）。
+- `scripts/b85_collect_evidence.sh`：`baseline` 采集版本/提交/二进制 sha256/配置；`collect <scenario>` 采集 `/metrics`、`/ready`、并提示 pcap 采集命令。**不启停任何服务**。
+- 仍不替代真机证据：B8.5 A–E 未执行前保持 BLOCKED。
+
+### 1at.3 standby-wal 就绪
+- `WALLeaseStore.ReloadFromDB(ctx)`（从镜像已写的 SQLite 重载索引）+ 测试 `TestWALLeaseStoreReloadFromDBServesMirrorPopulatedRows`。
+- 语义：standby 常驻不跑 DHCP server（`standsAside`），被提升（重启式）由 `OpenWALLeaseStore` 从已镜像快照装载；`ReloadFromDB` 供现场非重启提升。常驻 WAL 写 standby 未实现且不需要。
+
+### 1at.4 验证
+`go test ./...` 0；`make verify-tidy` OK；`docs`/`contracts`/`i18n`/`prodgates` PASS；`git diff --check` 干净。
