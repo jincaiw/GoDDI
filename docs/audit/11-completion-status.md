@@ -7,7 +7,7 @@
 |---|---|---|---|
 | D-01 | HA 复制通道 mTLS+防重放 | PASS（基础）；证书轮换编排 BLOCKED | `ha.LoadTLS/serverTLS/clientTLS`、hello nonce/sentAt、`tls_test.go`；生产须配 `dhcp_ha.tls_*` |
 | D-02 | Owner Epoch 写栅栏 | PASS（基础）；quorum 自动 degraded BLOCKED | `ha_owner_epoch`、Takeover +1、握手交换、`epoch_test.go` |
-| D-03 | facts 哈希链 | PARTIAL：阶段一 PASS（内核+校验器+StampTx）；阶段二端到端接线 NOT implemented（高风险管理项） | `facts/chain.go`、`chain_test.go`；outbox 增列+双库迁移+消费者校验待做 |
+| D-03 | facts 哈希链 | PARTIAL：阶段一 PASS；**阶段二第 1 步 PASS（2026-11-12：双库迁移增列 + outbox/replica 透传，默认空/行为不变）**；生产者 stamping、消费者校验（第 2/3 步）待做 | `facts/chain.go`、`migrations/035`、`dataplane/migrations/019`、`facts/outbox.go`、`replica.go` |
 | D-04 | DEC-006 vs ADR-0003 冲突 | 已解决 | ADR-0010 Accepted、DEC-006/007 建立、08/10 更新 |
 | D-05 | 多节点配置发布协调/quorum | NOT_IMPLEMENTED / BLOCKED（ADR-0005 外部仲裁） | `internal/cluster` ErrNotImplemented、`/cluster` 501 |
 | D-06 | AXFR 授权链路 + TSIG 热加载 | PASS（API+测试+实机）；TSIG 运行期热加载 NOT implemented（需重启）；UI 未做 | `dns_zone_transfer.go`、`primary_secondary_e2e_test.go`、容器 dig 演练 |

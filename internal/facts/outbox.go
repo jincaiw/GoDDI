@@ -90,11 +90,11 @@ func (o *ObservationOutbox) EnqueueTx(ctx context.Context, tx *sql.Tx, event Env
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO dhcp_ipam_observation_events
 			(event_id, version, entity, action, generation, sequence, source,
-			 occurred_at, payload_version, payload)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 occurred_at, payload_version, payload, epoch, prev_hash, payload_hash, tip_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventID, event.Version, event.Entity, event.Action, event.Generation,
 		event.Sequence, event.Source, event.OccurredAt.UTC().Format(time.RFC3339Nano),
-		event.PayloadVersion, string(payload))
+		event.PayloadVersion, string(payload), event.Epoch, event.PrevHash, event.PayloadHash, event.TipHash)
 	if err == nil {
 		return nil
 	}
@@ -104,10 +104,11 @@ func (o *ObservationOutbox) EnqueueTx(ctx context.Context, tx *sql.Tx, event Env
 	var payloadText string
 	lookupErr := tx.QueryRowContext(ctx, `
 		SELECT version, entity, action, generation, sequence, source,
-		       occurred_at, payload_version, payload
+		       occurred_at, payload_version, payload, epoch, prev_hash, payload_hash, tip_hash
 		FROM dhcp_ipam_observation_events WHERE event_id = ?`, event.EventID).
 		Scan(&existing.Version, &existing.Entity, &existing.Action, &existing.Generation,
-			&existing.Sequence, &existing.Source, &occurred, &existing.PayloadVersion, &payloadText)
+			&existing.Sequence, &existing.Source, &occurred, &existing.PayloadVersion, &payloadText,
+			&existing.Epoch, &existing.PrevHash, &existing.PayloadHash, &existing.TipHash)
 	if lookupErr != nil {
 		return fmt.Errorf("facts outbox: insert event %s: %w", event.EventID, err)
 	}
@@ -121,7 +122,9 @@ func (o *ObservationOutbox) EnqueueTx(ctx context.Context, tx *sql.Tx, event Env
 		existing.Action == event.Action && existing.Generation == event.Generation &&
 		existing.Sequence == event.Sequence && existing.Source == event.Source &&
 		existing.OccurredAt.Equal(event.OccurredAt) && existing.PayloadVersion == event.PayloadVersion &&
-		bytes.Equal(existing.Payload, event.Payload) {
+		bytes.Equal(existing.Payload, event.Payload) &&
+		existing.Epoch == event.Epoch && existing.PrevHash == event.PrevHash &&
+		existing.PayloadHash == event.PayloadHash && existing.TipHash == event.TipHash {
 		return nil
 	}
 	return fmt.Errorf("%w: event_id=%s", ErrDuplicateEvent, event.EventID)
@@ -181,7 +184,7 @@ func (o *ObservationOutbox) Pending(ctx context.Context, limit int) ([]Envelope,
 	}
 	rows, err := o.db.QueryContext(ctx, `
 		SELECT event_id, version, entity, action, generation, sequence, source,
-		       occurred_at, payload_version, payload
+		       occurred_at, payload_version, payload, epoch, prev_hash, payload_hash, tip_hash
 		FROM dhcp_ipam_observation_events
 		WHERE status = 'pending' AND julianday(next_attempt_at) <= julianday('now')
 		ORDER BY sequence ASC LIMIT ?`, limit)
@@ -195,7 +198,7 @@ func (o *ObservationOutbox) Pending(ctx context.Context, limit int) ([]Envelope,
 		var occurred, payload string
 		if err := rows.Scan(&event.EventID, &event.Version, &event.Entity, &event.Action,
 			&event.Generation, &event.Sequence, &event.Source, &occurred,
-			&event.PayloadVersion, &payload); err != nil {
+			&event.PayloadVersion, &payload, &event.Epoch, &event.PrevHash, &event.PayloadHash, &event.TipHash); err != nil {
 			return nil, fmt.Errorf("facts outbox: scan: %w", err)
 		}
 		var err error
@@ -309,7 +312,7 @@ func (o *ObservationOutbox) After(ctx context.Context, afterSequence int64, limi
 	}
 	rows, err := o.db.QueryContext(ctx, `
 		SELECT event_id, version, entity, action, generation, sequence, source,
-		       occurred_at, payload_version, payload
+		       occurred_at, payload_version, payload, epoch, prev_hash, payload_hash, tip_hash
 		FROM dhcp_ipam_observation_events
 		WHERE sequence > ?
 		ORDER BY sequence ASC LIMIT ?`, afterSequence, limit)
@@ -322,7 +325,8 @@ func (o *ObservationOutbox) After(ctx context.Context, afterSequence int64, limi
 		var e Envelope
 		var occurred, payload string
 		if err := rows.Scan(&e.EventID, &e.Version, &e.Entity, &e.Action, &e.Generation,
-			&e.Sequence, &e.Source, &occurred, &e.PayloadVersion, &payload); err != nil {
+			&e.Sequence, &e.Source, &occurred, &e.PayloadVersion, &payload,
+			&e.Epoch, &e.PrevHash, &e.PayloadHash, &e.TipHash); err != nil {
 			return nil, fmt.Errorf("facts outbox: after scan: %w", err)
 		}
 		parsed, err := time.Parse(time.RFC3339Nano, occurred)

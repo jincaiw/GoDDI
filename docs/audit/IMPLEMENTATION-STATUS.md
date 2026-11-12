@@ -1899,3 +1899,11 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - D-12：`internal/backup/restore_full_test.go`——full 备份→删除 DNS/DHCP/IPAM 行→`RestoreBackup`→断言六表恢复（dns_zones/dns_records/dhcp_scopes/dhcp_reservations/ipam_spaces/ipam_subnets）。既有 dns/security 恢复测试。升级路径/大库/停机演练仍 NOT_VERIFIED。
 - D-20：`cmd/goddi/main.go` 在 `backgroundCtx` 下每 30s 刷新 `goddi_dataplane_lkg_revision` 与 `goddi_dhcp_ipam_projection_gaps`（启动亦置值）。
 - 回归：`go build ./...` OK；`go test ./internal/backup ./internal/metrics` 全绿；docs 守卫 PASS。
+
+## 1bi. D-03 阶段二第 1 步：双库迁移 + outbox/replica 透传（round 369）
+
+- 迁移：`internal/dataplane/migrations/019_facts_hash_chain.sql`、`migrations/035_facts_hash_chain.sql` 为 `dhcp_ipam_observation_events` 增列 `epoch/prev_hash/payload_hash/tip_hash`（默认 0/''），Down 可回滚。
+- `internal/facts/outbox.go`：Enqueue 写入四列；重复冲突比较纳入四列；`Pending`/`After` 读取四列到 Envelope。`replica.go` 读取四列。
+- 测试 schema（`outbox_test.go` newFactsOutboxDB）同步增列。
+- 默认空值→现有行为不变；`go test ./internal/facts ./internal/dataplane ./internal/database` 全绿；`go build ./...` OK。
+- 待做（第 2/3 步）：`facts.hash_chain_enabled` 开关 + 生产 outbox `StampTx` 打戳；IPAM/DNS 消费者 `VerifyEnvelope` + 断链 `blocked`。

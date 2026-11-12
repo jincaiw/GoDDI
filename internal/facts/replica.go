@@ -84,7 +84,8 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 		return ReplicaPage{}, fmt.Errorf("facts: replica cursor %d exceeds sequence %d", after, page.LastSequence)
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT e.event_id, e.version, e.entity, e.action, e.generation,
-		e.sequence, e.source, e.occurred_at, e.payload_version, e.payload, e.attempts,
+		e.sequence, e.source, e.occurred_at, e.payload_version, e.payload,
+		e.epoch, e.prev_hash, e.payload_hash, e.tip_hash, e.attempts,
 		e.next_attempt_at, e.last_error, e.status,
 		d.event_id, d.queued_at, d.attempts, d.next_attempt_at, d.last_error
 		FROM dhcp_ipam_observation_events e
@@ -104,7 +105,9 @@ func (o *ObservationOutbox) ReadReplicaPageTx(ctx context.Context, tx *sql.Tx, a
 		if err := rows.Scan(&item.Envelope.EventID, &item.Envelope.Version,
 			&item.Envelope.Entity, &item.Envelope.Action, &item.Envelope.Generation,
 			&item.Envelope.Sequence, &item.Envelope.Source, &occurred,
-			&item.Envelope.PayloadVersion, &payload, &item.Attempts,
+			&item.Envelope.PayloadVersion, &payload,
+			&item.Envelope.Epoch, &item.Envelope.PrevHash, &item.Envelope.PayloadHash, &item.Envelope.TipHash,
+			&item.Attempts,
 			&nextAttempt, &item.LastError, &status,
 			&deliveryID, &queuedAt, &deliveryAttempts, &deliveryNextAttempt, &deliveryError); err != nil {
 			return ReplicaPage{}, fmt.Errorf("facts: scan replica page: %w", err)
