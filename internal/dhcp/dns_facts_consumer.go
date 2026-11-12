@@ -46,6 +46,8 @@ type DNSFactsConsumer struct {
 	link      *DNSLink
 	inbox     *facts.ObservationOutbox
 	watermark *facts.WatermarkStore
+	chain     *facts.ChainTipStore
+	chainDom  string
 }
 
 // NewDNSFactsConsumer wires the consumer. The inbox must live in the same
@@ -59,7 +61,11 @@ func NewDNSFactsConsumer(link *DNSLink, inbox *facts.ObservationOutbox) (*DNSFac
 	if err != nil {
 		return nil, err
 	}
-	return &DNSFactsConsumer{link: link, inbox: inbox, watermark: wm}, nil
+	chain := facts.NewChainTipStore(inbox.Database())
+	if err := chain.Ensure(context.Background()); err != nil {
+		return nil, err
+	}
+	return &DNSFactsConsumer{link: link, inbox: inbox, watermark: wm, chain: chain, chainDom: DNSFactsDomain + ":hash_chain"}, nil
 }
 
 // toDNSEvent maps a unified lease fact onto the DNS record command it owes.
@@ -116,6 +122,22 @@ func (c *DNSFactsConsumer) Tick(ctx context.Context) (consumed bool, changed boo
 	if err != nil {
 		return false, false, fmt.Errorf("dns facts consumer: %s: %w", event.EventID, err)
 	}
+	// D-03: verify the producer hash chain before applying; a fork/tamper leaves
+	// the fact pending (blocked) rather than publishing a wrong record.
+	var chainPrev, chainNext facts.ChainTip
+	chainOn := event.HasChain()
+	if chainOn {
+		chainPrev, err = c.chain.Load(ctx, c.chainDom)
+		if err != nil {
+			return false, false, err
+		}
+		chainNext, err = facts.VerifyEnvelope(chainPrev, event)
+		if err != nil {
+			slog.Error("dns facts consumer: hash chain verification failed; fact stays pending",
+				"event_id", event.EventID, "error", err)
+			return false, false, fmt.Errorf("dns facts consumer: hash chain verification failed for %s: %w", event.EventID, err)
+		}
+	}
 	wrote, err := c.link.ApplyOne(dnsEvent)
 	if err != nil {
 		// The fact stays pending for replay; the error is logged here because
@@ -136,6 +158,11 @@ func (c *DNSFactsConsumer) Tick(ctx context.Context) (consumed bool, changed boo
 	_ = advanced
 	if err := c.inbox.MarkDoneTx(ctx, tx, event.EventID); err != nil {
 		return false, false, err
+	}
+	if chainOn {
+		if err := c.chain.AdvanceTx(ctx, tx, c.chainDom, chainPrev.Tip, chainNext); err != nil {
+			return false, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, false, fmt.Errorf("dns facts consumer: commit %s: %w", event.EventID, err)

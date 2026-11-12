@@ -139,6 +139,25 @@ func (s *ChainTipStore) Ensure(ctx context.Context) error {
 	return nil
 }
 
+// Load reads the current tip outside a transaction (zero when absent). It is
+// for a single-threaded consumer that verifies before applying; the durable
+// advance still happens in the same transaction as MarkDone via AdvanceTx.
+func (s *ChainTipStore) Load(ctx context.Context, domain string) (ChainTip, error) {
+	if s == nil || s.db == nil {
+		return ChainTip{}, ErrOutboxClosed
+	}
+	var epoch int64
+	var tip string
+	err := s.db.QueryRowContext(ctx, `SELECT epoch, tip FROM facts_chain_tip WHERE domain = ?`, domain).Scan(&epoch, &tip)
+	if err == sql.ErrNoRows {
+		return ChainTip{}, nil
+	}
+	if err != nil {
+		return ChainTip{}, fmt.Errorf("facts: read chain tip: %w", err)
+	}
+	return ChainTip{Epoch: epoch, Tip: tip}, nil
+}
+
 // LoadTx reads the current tip inside a transaction (zero when absent).
 func (s *ChainTipStore) LoadTx(ctx context.Context, tx *sql.Tx, domain string) (ChainTip, error) {
 	var epoch int64

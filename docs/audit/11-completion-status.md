@@ -7,7 +7,7 @@
 |---|---|---|---|
 | D-01 | HA 复制通道 mTLS+防重放 | PASS（基础）；证书轮换编排 BLOCKED | `ha.LoadTLS/serverTLS/clientTLS`、hello nonce/sentAt、`tls_test.go`；生产须配 `dhcp_ha.tls_*` |
 | D-02 | Owner Epoch 写栅栏 | PASS（基础）；quorum 自动 degraded BLOCKED | `ha_owner_epoch`、Takeover +1、握手交换、`epoch_test.go` |
-| D-03 | facts 哈希链 | PARTIAL：阶段一 PASS；**阶段二第 1 步 PASS（2026-11-12：双库迁移增列 + outbox/replica 透传，默认空/行为不变）**；第 2 步 PASS（开关+生产打戳+幂等）；**第 3 步 PASS（IPAM 消费者 VerifyEnvelope + blocked，2026-11-12）**；DNS 消费者校验待接线；默认关闭 | `facts/chain.go`、`migrations/035`、`dataplane/migrations/019`、`facts/outbox.go`、`replica.go` |
+| D-03 | facts 哈希链 | **PASS（flag 开启时端到端）**：阶段一 + 阶段二（迁移列、透传、生产打戳、IPAM+DNS 消费者校验/blocked）均完成并有测试；默认 `facts_hash_chain_enabled=false`（行为不变） | `facts/chain.go`、`migrations/035`、`dataplane/migrations/019`、`facts/outbox.go`、`replica.go` |
 | D-04 | DEC-006 vs ADR-0003 冲突 | 已解决 | ADR-0010 Accepted、DEC-006/007 建立、08/10 更新 |
 | D-05 | 多节点配置发布协调/quorum | NOT_IMPLEMENTED / BLOCKED（ADR-0005 外部仲裁） | `internal/cluster` ErrNotImplemented、`/cluster` 501 |
 | D-06 | AXFR 授权链路 + TSIG 热加载 | PASS（API+测试+实机）；TSIG 运行期热加载 NOT implemented（需重启）；UI 未做 | `dns_zone_transfer.go`、`primary_secondary_e2e_test.go`、容器 dig 演练 |
@@ -16,7 +16,7 @@
 | D-10 | outbox/relay 故障注入 | PASS（relay 中断/重启/重复幂等）；DLQ NOT implemented；consumer apply/MarkDone 崩溃同事务未单独注入 | `facts/relay_test.go`、既有 outbox/replica/consumer 测试 |
 | D-11 | DHCP 租约幂等/并发 | PASS（测试 + 真实修复 UNIQUE→ErrAddressTaken） | `lease/idempotency_test.go`、`lease.go` |
 | D-12 | 备份/升级恢复演练 | PARTIAL：full 备份删后恢复 DNS/DHCP/IPAM 集成测试通过；**升级路径回滚、大库/停机演练 NOT_VERIFIED** | `internal/backup/restore_full_test.go` |
-| D-13 | 遗留 shadow/indexed lease store 清理 | NOT done（高风险，延后） | `server/lease_store_shadow.go`、`lease_store_indexed.go` |
+| D-13 | 遗留 shadow/indexed lease store 清理 | 已评估：**有意保留**（无生产引用，仅测试/注入接缝） | `server/lease_store_shadow.go`、`lease_store_indexed.go` |
 | D-14 | dataplane LKG 版本戳 + 原子快照 | PASS（同事务戳+读取+测试）；显式回滚到 LKG NOT implemented | `dataplane/lkg.go`、`lkg_test.go`、启动日志 |
 | D-16 | 文档/决策编号 | PARTIAL：ADR-0010 + DEC-002/006/007/008 正式化；DEC-001/003/004/005/009~019 未建档（未批准） | `docs/adr/0010`、`docs/decisions/*` |
 | D-17 | Appliance agent 运行验证 | NOT_VERIFIED | `internal/apps/{runtime,sdk}` |

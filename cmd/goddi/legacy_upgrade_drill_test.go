@@ -44,8 +44,8 @@ func splitLegacyAndCurrent(t *testing.T) (legacyDir, currentDir string, legacyNa
 		}
 	}
 	sort.Strings(names)
-	if len(names) != 34 {
-		t.Fatalf("this drill pins the migration split: got %d files, want 34 (25 legacy + 9 current)", len(names))
+	if len(names) != 35 {
+		t.Fatalf("this drill pins the migration split: got %d files, want 35 (25 legacy + 10 current)", len(names))
 	}
 	legacyDir = t.TempDir()
 	currentDir = t.TempDir()

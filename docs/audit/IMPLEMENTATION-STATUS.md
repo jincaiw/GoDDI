@@ -1923,3 +1923,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 测试 `internal/ipam/facts_consumer_chain_test.go`：被打戳的干净链可投影（Replay=1）；篡改 payload 后 `ProcessOne` 失败且事件保持 pending（blocked）。
 - 端到端：`dhcp.facts_hash_chain_enabled=true` 时 producer 打戳→relay 透传→IPAM 消费者校验；默认关闭行为不变。
 - 仍待：DNS facts consumer 同款校验接线（同一 inbox，小项）。
+
+## 1bl. D-03 阶段二第 4 步（DNS 消费者校验）+ D-13 评估（round 372）
+
+- `internal/dhcp/dns_facts_consumer.go`：`Tick` 在 apply 前 `facts.VerifyEnvelope`（`facts_chain_tip` 域 `dns:hash_chain`），失败留 pending（blocked）；tip 随 watermark/MarkDone 同事务 `AdvanceTx`。`ChainTipStore.Load`（非事务读）新增。
+- `facts_hash_chain_enabled=true` 时 producer→relay→IPAM/DNS 消费者**端到端链校验**闭合；默认关闭行为不变。
+- D-13：评估为**有意保留**——`lease_store_shadow.go`/`lease_store_indexed.go` 无生产引用，仅测试/注入接缝，删除会损失注入测试能力；文档化保留。
+- 回归：`go test ./...` **102 包 ok / 0 FAIL**（修正 `legacy_upgrade_drill_test` 迁移数量断言 34→35：新增 control 迁移 035）。
