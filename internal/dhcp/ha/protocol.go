@@ -10,6 +10,10 @@ import (
 	"github.com/jasonwa/goddi/internal/facts"
 )
 
+// ErrStaleEpoch reports that the peer carries a higher Owner Epoch, so this
+// node has been superseded and may not act as the authoritative writer.
+var ErrStaleEpoch = errors.New("ha: a newer owner epoch supersedes this node")
+
 // Protocol is the version of the peer wire format. It is carried in the
 // handshake so that two nodes running different builds refuse each other
 // instead of exchanging frames one of them reads as something else.
@@ -66,7 +70,11 @@ const (
 // was not sent, and the difference between the two numbers is exactly the set
 // of promises that may exist on one side and not the other.
 type Watermarks struct {
-	NodeID          string `json:"node_id"`
+	NodeID string `json:"node_id"`
+	// Epoch is the sender's persisted Owner Epoch. A node that sees a higher
+	// epoch than its own has been superseded by a newer owner and must not
+	// keep promising addresses.
+	Epoch           int64  `json:"epoch"`
 	Role            string `json:"role"`
 	AppliedSeq      int64  `json:"applied_seq"`
 	AckedSeq        int64  `json:"acked_seq"`

@@ -130,6 +130,7 @@ type Mirror struct {
 	applied      int64
 	factsApplied int64
 	fenced       bool
+	epoch        int64
 }
 
 type incomingSnapshot struct {
@@ -155,7 +156,36 @@ func NewMirror(cfg Config, store *dataplane.Store) (*Mirror, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ha: reading the applied facts watermark: %w", err)
 	}
-	return &Mirror{cfg: cfg, store: store, applied: applied, factsApplied: factsApplied}, nil
+	epoch, err := readWatermark(store.DB, metaOwnerEpoch)
+	if err != nil {
+		return nil, fmt.Errorf("ha: reading the owner epoch: %w", err)
+	}
+	return &Mirror{cfg: cfg, store: store, applied: applied, factsApplied: factsApplied, epoch: epoch}, nil
+}
+
+// epochValue returns the mirror's current Owner Epoch.
+func (m *Mirror) epochValue() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.epoch
+}
+
+// observePrimaryEpoch applies the primary's epoch from the handshake. If this
+// node has a higher epoch it was promoted later than the primary it is being
+// told to mirror, so that primary is stale: refuse and stay fenced. Otherwise
+// adopt (persist) the primary's epoch as the takeover baseline.
+func (m *Mirror) observePrimaryEpoch(peerEpoch int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.epoch > peerEpoch {
+		m.fenced = true
+		return fmt.Errorf("%w: primary epoch %d < local %d", ErrStaleEpoch, peerEpoch, m.epoch)
+	}
+	if peerEpoch > m.epoch {
+		m.epoch = peerEpoch
+		return setMetaText(m.store.DB, metaOwnerEpoch, fmt.Sprintf("%d", peerEpoch))
+	}
+	return nil
 }
 
 // AppliedSeq reports how far the mirror has been brought.
@@ -391,6 +421,7 @@ func (m *Mirror) handshake(conn net.Conn) error {
 		Watermarks: &Watermarks{
 			NodeID:          m.cfg.NodeID,
 			Role:            m.cfg.Role,
+			Epoch:           m.epochValue(),
 			AppliedSeq:      m.AppliedSeq(),
 			AckedSeq:        0,
 			FactsAppliedSeq: m.FactsAppliedSeq(),
@@ -413,6 +444,9 @@ func (m *Mirror) handshake(conn net.Conn) error {
 	if frame.Watermarks.Role != "primary" {
 		return fmt.Errorf("%w: a standby mirrors a primary, the peer says %q",
 			ErrRoleMismatch, frame.Watermarks.Role)
+	}
+	if err := m.observePrimaryEpoch(frame.Watermarks.Epoch); err != nil {
+		return err
 	}
 	// The handshake is where a whole number arrives rather than a delta: the
 	// primary states its current counter, which is the highest figure this node

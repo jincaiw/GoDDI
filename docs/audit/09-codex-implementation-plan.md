@@ -7,7 +7,7 @@
 
 ### 决策落地任务（ADR-0010 已批准 2026-11-12）
 
-**E-1 Owner Epoch 写栅栏（D-02，最高优先）**
+**E-1 Owner Epoch 写栅栏（D-02，最高优先）— 状态：已实现（2026-11-12，单测通过）**
 1. 存储：`dataplane_meta` 增 `owner_epoch`（单调递增，持久于租约数据面库，与 `ha_role` 同库）。
 2. 生成：`goddi ha takeover/fence/rejoin` 成功时事务内 `owner_epoch+1` 并写审计；状态展示读回。
 3. 校验：所有权威写（DHCP 绑定/续租/释放/facts 投影）事务内校验 `req.epoch == current_epoch`，落后即拒绝（`ErrStaleEpoch`）+ 审计；旧主启动/重连读到更高 epoch 立即 fenced。
@@ -30,7 +30,7 @@
 
 ## 阶段 1（H2 可信身份 + 围栏，最高优先）
 - **T1-1 mTLS 复制通道**（D-01，细化见 E-2）：`internal/dhcp/ha` 用 `internal/tlsutil` 启 mTLS；帧加 nonce/时间戳/序号防重放；证书轮换/吊销流程。验收：无证书拒绝、重放拒绝、轮换不断链。依赖：无。
-- **T1-2 Owner Epoch 写栅栏**（D-02，细化见 E-1）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
+- **T1-2 Owner Epoch 写栅栏**（D-02，细化见 E-1，**已完成基础实现 2026-11-12**）：`dataplane_meta` 增 `owner_epoch`；Takeover 单调+1；写事务校验 epoch；旧主读到更高 epoch 即 fenced。验收：旧 epoch 写 100% 拒绝+审计。依赖：T1-1。
 - **T1-3 facts 哈希链**（D-03）：Envelope 增 epoch/prev_hash/payload_hash/tip_hash；生产者链式、消费者校验、断链阻断（DEC-007）。验收：篡改/断链检测并阻断。依赖：T1-2。
 
 ## 阶段 2（H2 一致性/恢复）

@@ -1807,3 +1807,17 @@ P1 验收测试（全量包连续运行）稳定复现了一个竞态：`Wait` �
 - 实机（18080）：API 建区/TSIG/授权后，产品 `SecondarySync` 从 127.0.0.1:15353 AXFR 成功（records=3, sampleA=192.0.2.77）。
 - 已知限制：TSIG 密钥启动时加载一次，新增 key 需重启 DNS 进程才生效（文档已记）；UI 未加（API 就绪）。
 - `make verify-dns-drill-container`：容器版演练入口（需 Docker）。
+
+## 1ax. ADR-0010 落地 E-1：Owner Epoch 写栅栏（round 358）
+
+### 1ax.1 变更（代码）
+- `internal/dhcp/ha/protocol.go`：`Watermarks` 增 `Epoch`；新增 `ErrStaleEpoch`。
+- `internal/dhcp/ha/role.go`：新增 `metaOwnerEpoch="ha_owner_epoch"` 与 `OwnerEpoch(store)`；`Takeover` 在同一事务内单调 `+1` 并写入 `TakeoverOutcome.Epoch`（审计含 epoch）。
+- `internal/dhcp/ha/replicator.go`：加载/上报 epoch；`observeStandbyEpoch` 见更高 epoch → `superseded` → `StateFenced`/`MayBind=false`；握手交换 epoch。
+- `internal/dhcp/ha/mirror.go`：加载/上报 epoch；`observePrimaryEpoch` 拒绝更低（陈旧）primary、采纳更高 epoch 并持久化。
+
+### 1ax.2 测试
+`internal/dhcp/ha/epoch_test.go`：4 例（takeover 单调递增、replicator 被更高 epoch 围栏、忽略更低 epoch、mirror 拒绝陈旧/采纳更高）。`go test ./internal/dhcp/...` 全绿。
+
+### 1ax.3 边界
+E-1 为**单进程内**围栏（写路径经 `MayBind` 抑制）；真正的"跨节点证明唯一所有权/自动 degraded"仍需 E-2（mTLS）与 E-3（quorum/witness）。

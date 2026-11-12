@@ -24,6 +24,8 @@
 7. 依赖：D-01（可信身份）之后。
 8. 验收：任何落后 epoch 的写 100% 被拒并产生审计记录。
 
+> **状态更新（2026-11-12）**：E-1 已实现——`dataplane_meta.ha_owner_epoch` 持久化、`Takeover` 事务内单调 +1、握手交换 `Watermarks.Epoch`、见更高 epoch 即 `StateFenced`（`MayBind=false`，不 ACK）；单测 `epoch_test.go`（4 例）通过。剩余：多节点 quorum 证明（E-3）与更细粒度写路径 epoch 参数。
+
 ### D-03 facts 无哈希链（无篡改/分叉证明）
 1. 问题/触发：`facts.Envelope`（`internal/facts/event.go:21-37`）仅 `EventID/Sequence/Source/Generation`，**无 PrevHash/PayloadHash/TipHash/Epoch**；`Watermark` 只检测 sequence 缺口（`event.go:70+`）。
 2. 源码：`internal/facts/event.go`、`internal/facts/replica_stage.go`、`internal/ipam/facts_consumer.go`。

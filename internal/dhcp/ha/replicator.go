@@ -76,6 +76,11 @@ type Replicator struct {
 	lastSent   time.Time
 	degraded   bool
 	degradedAt time.Time
+	// epoch is this node's Owner Epoch; peerEpoch/superseded record a newer
+	// owner seen from a peer.
+	epoch      int64
+	peerEpoch  int64
+	superseded bool
 
 	// wake tells the send loop that the log is no longer empty. It is
 	// buffered to one: a signal that arrives while one is already pending is
@@ -124,12 +129,17 @@ func NewReplicator(cfg Config, store *dataplane.Store) (*Replicator, error) {
 	if factsAcked > currentFactsSeq {
 		return nil, fmt.Errorf("ha: acknowledged facts watermark %d is ahead of local allocator %d", factsAcked, currentFactsSeq)
 	}
+	epoch, err := readWatermark(store.DB, metaOwnerEpoch)
+	if err != nil {
+		return nil, fmt.Errorf("ha: reading the owner epoch: %w", err)
+	}
 	r := &Replicator{
 		cfg:        cfg,
 		store:      store,
 		seq:        seq,
 		acked:      acked,
 		factsAcked: factsAcked,
+		epoch:      epoch,
 		advance:    make(chan struct{}),
 		wake:       make(chan struct{}, 1),
 	}
@@ -186,7 +196,11 @@ func (r *Replicator) currentFactsSequence() (int64, error) {
 func (r *Replicator) State() State {
 	r.mu.Lock()
 	degraded := r.degraded
+	superseded := r.superseded
 	r.mu.Unlock()
+	if superseded {
+		return StateFenced
+	}
 	if degraded {
 		return StatePrimaryDegraded
 	}
@@ -198,6 +212,28 @@ func (r *Replicator) State() State {
 
 // MayBind reports whether this node may promise an address or an extension.
 func (r *Replicator) MayBind() bool { return r.State().MayBind() }
+
+// Epoch reports the Owner Epoch this node runs at.
+func (r *Replicator) Epoch() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.epoch
+}
+
+// observeStandbyEpoch applies a peer's epoch from the handshake. A standby that
+// reports a higher epoch than this primary was itself promoted at some point,
+// which means this node is the stale writer: it marks itself superseded so it
+// stops binding (StateFenced / MayBind=false) and refuses the session.
+func (r *Replicator) observeStandbyEpoch(peerEpoch int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if peerEpoch > r.epoch {
+		r.peerEpoch = peerEpoch
+		r.superseded = true
+		return fmt.Errorf("%w: peer epoch %d > local %d", ErrStaleEpoch, peerEpoch, r.epoch)
+	}
+	return nil
+}
 
 // PeerWatermarks reports the last handshake this node saw from its mirror.
 func (r *Replicator) PeerWatermarks() Watermarks {
@@ -505,6 +541,9 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 	if frame.Watermarks.AppliedSeq < 0 || frame.Watermarks.FactsAppliedSeq < 0 {
 		return Watermarks{}, errors.New("ha: peer reported a negative applied watermark")
 	}
+	if err := r.observeStandbyEpoch(frame.Watermarks.Epoch); err != nil {
+		return Watermarks{}, err
+	}
 	factsSeq, err := r.currentFactsSequence()
 	if err != nil {
 		return Watermarks{}, err
@@ -521,6 +560,7 @@ func (r *Replicator) handshake(conn net.Conn) (Watermarks, error) {
 		Watermarks: &Watermarks{
 			NodeID:          r.cfg.NodeID,
 			Role:            r.cfg.Role,
+			Epoch:           r.Epoch(),
 			AppliedSeq:      r.Seq(),
 			AckedSeq:        r.AckedSeq(),
 			FactsAppliedSeq: factsSeq,

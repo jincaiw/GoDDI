@@ -51,7 +51,19 @@ const (
 	// missing. That number is wrong in the one direction that matters: it
 	// overstates the loss, and it never changes again.
 	metaAcceptedGap = "ha_accepted_gap"
+	// metaOwnerEpoch is the monotonic Owner Epoch. It is bumped by every
+	// takeover (promotion) and exchanged in the peer handshake; a writer whose
+	// epoch is behind a peer's must stop (DEC-006/DEC-007, ADR-0010).
+	metaOwnerEpoch = "ha_owner_epoch"
 )
+
+// OwnerEpoch reports this node's persisted Owner Epoch (0 when never bumped).
+func OwnerEpoch(store *dataplane.Store) (int64, error) {
+	if store == nil {
+		return 0, fmt.Errorf("ha: nil store for owner epoch")
+	}
+	return readWatermark(store.DB, metaOwnerEpoch)
+}
 
 // RoleFenced is the recorded role of a node an operator has taken out of
 // service.
@@ -415,6 +427,8 @@ type TakeoverOutcome struct {
 	PeerSeqAt time.Time
 	// Seq is the sequence the new primary continues from.
 	Seq int64
+	// Epoch is the new monotonic Owner Epoch after promotion.
+	Epoch int64
 }
 
 // Takeover promotes a standby to primary.
@@ -513,6 +527,19 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 	}
 	out.Seq = resume
 
+	// Bump the Owner Epoch in the same transaction as the role change. A
+	// promotion is exactly the event that creates a new writer generation; the
+	// epoch is what lets a stale writer (an old primary that was never told)
+	// recognise it has been superseded.
+	curEpoch, err := readWatermarkTx(ctx, tx, metaOwnerEpoch)
+	if err != nil {
+		return out, err
+	}
+	out.Epoch = curEpoch + 1
+	if err := setWatermark(ctx, tx, metaOwnerEpoch, out.Epoch); err != nil {
+		return out, err
+	}
+
 	if err := setMetaTextTx(ctx, tx, metaRole, config.HARolePrimary); err != nil {
 		return out, err
 	}
@@ -563,7 +590,7 @@ func (o *Operator) Takeover(opts TakeoverOptions) (TakeoverOutcome, error) {
 		fmt.Sprintf("promoted to primary: applied_seq %d, primary_seq %d, gap %d, facts_applied_seq %d, peer_facts_seq %d, facts_gap %d, resuming at seq %d",
 			out.AppliedSeq, out.PeerSeq, out.Gap, out.FactsAppliedSeq, out.PeerFactsSeq, out.FactsGap, out.Seq),
 		fmt.Sprintf("applied_seq=%d primary_seq=%d facts_applied_seq=%d peer_facts_seq=%d", out.AppliedSeq, out.PeerSeq, out.FactsAppliedSeq, out.PeerFactsSeq),
-		fmt.Sprintf("role=primary seq=%d serving_without_a_second_copy=true", out.Seq))
+		fmt.Sprintf("role=primary seq=%d owner_epoch=%d serving_without_a_second_copy=true", out.Seq, out.Epoch))
 	return out, nil
 }
 
