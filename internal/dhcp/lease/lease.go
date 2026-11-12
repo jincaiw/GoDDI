@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/jasonwa/goddi/internal/sqlitepolicy"
 	"log/slog"
 	"net"
 	"sort"
@@ -157,7 +158,7 @@ func (m *Manager) createLeaseWithStatus(scopeID, ip, mac, hostname string, durat
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return nil, fmt.Errorf("%w: %s", ErrAddressTaken, ip)
 		}
-		return nil, fmt.Errorf("failed to create lease: %w", err)
+		return nil, fmt.Errorf("failed to create lease: %w", sqlitepolicy.ClassifyError(err))
 	}
 
 	created, err := m.GetLease(id)

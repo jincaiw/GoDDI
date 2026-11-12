@@ -1871,3 +1871,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - 既有 outbox/replica/consumer 测试覆盖 enqueue 幂等/冲突、快照原子、gap、失败留箱。
 - `go test ./internal/facts ./internal/ipam` 全绿；`go build ./...` OK。
 - 仍缺：显式 DLQ（失败留 inbox 重放）；consumer apply 与 MarkDone 间崩溃的端到端演练（同库同事务，风险低）。
+
+## 1be. D-08 SQLite 存储/IO/锁错误分类（round 365）
+
+- `internal/sqlitepolicy/errors.go`：`ClassifyError(err)` 把 `Code()==13/10/5/6`、`syscall.ENOSPC/EIO`、常见文本映射为 `ErrStorageFull/ErrStorageIO/ErrBusy`（未识别原样返回）。
+- `internal/dhcp/lease/lease.go` `createLeaseWithStatus`：非 UNIQUE 写错误经 `ClassifyError` 包装；写失败返回错误 → handler 不构建 ACK。
+- 测试 `internal/sqlitepolicy/errors_test.go`（8 类 + nil/透传）通过；`go test ./internal/sqlitepolicy ./internal/dhcp/lease ./internal/dhcp/server` 全绿。
+- 边界：真实填盘 ENOSPC / fsync 失败注入与 WAL Sync 错误路径仍 NOT_VERIFIED（需隔离盘/故障注入）。
