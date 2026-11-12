@@ -33,7 +33,7 @@
 | 检查项 | 状态 | 证据 |
 |---|---|---|
 | Lease Sequence 与 Facts Sequence 分离 | PASS | `dataplane_meta` 键 `ha_seq/ha_acked_seq/ha_applied_seq`（`mirror.go:23-33`）与 `ha_facts_applied_seq/ha_peer_facts_seq`（`mirror.go:32-34`）分开维护。 |
-| Event ID / Epoch / PrevHash / PayloadHash / TipHash | **FAIL/PARTIAL** | `facts.Envelope`（`internal/facts/event.go:21-37`）**无 PrevHash/PayloadHash/TipHash/Epoch**；仅 `EventID+Sequence+Watermark`。无哈希链→**无篡改检测**、无分叉证明。 |
+| Event ID / Epoch / PrevHash / PayloadHash / TipHash | PARTIAL→**阶段一已实现（D-03，2026-11-12）** | `Envelope` 已增 `Epoch/PrevHash/PayloadHash/TipHash`（向后兼容）；`internal/facts/chain.go` 提供 `ComputeTip/ChainBuilder/VerifyEnvelope/VerifyChain/ChainTipStore(StampTx)` 并有单测（篡改/乱序/丢事件/分叉检测）。**待接**：生产 outbox stamping + 消费者校验 + outbox 表增列（阶段二）。 |
 | 缺口/乱序/重复检测 | PARTIAL | `facts.Watermark` 拒绝未来 sequence（gap）与幂等重放（`event.go:70+`）；**无 prev-hash 分叉检测**。 |
 | 重传/重启/快照/断点续传幂等 | PARTIAL | `facts.ReplicaStage`（`replica_stage.go:16-171`）分块+manifest+watermark，快照与增量有单测；无故障注入运行证据。 |
 | 镜像回执在落盘后生成 | PASS | `mirror.go:344-347,430` 提交后 `confirm`。 |

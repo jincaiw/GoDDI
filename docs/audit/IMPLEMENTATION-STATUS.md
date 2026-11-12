@@ -1842,3 +1842,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - **结论**：真实 quorum/witness 需要第三仲裁节点/外部见证；本沙箱无此环境，无法实现并验证。为避免"伪见证"造成的虚假安全感（违反不得伪造证据），**不实现自动 degraded**；默认 `paused` 保持（符合 ADR-0010）。
 - **前置已完成**：E-1（Owner Epoch 写栅栏）、E-2（mTLS+防重放）已实现并有单测；E-3 一旦有见证环境，可在此之上实现"自动 degraded 仅当 epoch 最新 + witness 证明"。
 - **状态**：BLOCKED（external-validation-required），实施步骤与判据见 09 计划 E-3。
+
+## 1ba. D-03 facts 哈希链：阶段一（内核+校验器）round 361
+
+- `internal/facts/event.go`：`Envelope` 增 `Epoch/PrevHash/PayloadHash/TipHash`（`HasChain()`），向后兼容（旧事件空值不强制）。
+- `internal/facts/chain.go`：`PayloadDigest`、`ComputeTip(prev,env)`（绑定 prev/epoch/eventID/sequence/payloadHash）、`ChainBuilder.Stamp`、`VerifyEnvelope`/`VerifyChain`（检测篡改/乱序/丢事件/epoch 回退）、`ChainTipStore`（`facts_chain_tip` 表，CAS `AdvanceTx` 防并发分叉）+ `StampTx`（事务内 load-stamp-advance）。
+- `internal/facts/chain_test.go`：4+1 例全绿。
+- 阶段二（未完成）：生产 outbox `EnqueueTx` 同事务调用 `StampTx`、IPAM/DNS 消费者调用 `VerifyEnvelope` 并在不一致时进入 `blocked`；需 outbox 表增列（hash 字段）与双库迁移滚动。完成前不宣称端到端哈希链生效。

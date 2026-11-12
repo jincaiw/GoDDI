@@ -32,7 +32,17 @@ type Envelope struct {
 	OccurredAt     time.Time       `json:"occurred_at"`
 	PayloadVersion int             `json:"payload_version"`
 	Payload        json.RawMessage `json:"payload"`
+	// Hash-chain fields (D-03/DEC-007). Additive and optional: events stamped
+	// before this feature carry empty values; a verifier only enforces the
+	// chain when they are present. Epoch is the Owner Epoch of the producer.
+	Epoch       int64  `json:"epoch,omitempty"`
+	PrevHash    string `json:"prev_hash,omitempty"`
+	PayloadHash string `json:"payload_hash,omitempty"`
+	TipHash     string `json:"tip_hash,omitempty"`
 }
+
+// HasChain reports whether this envelope carries hash-chain fields.
+func (e Envelope) HasChain() bool { return e.TipHash != "" }
 
 func (e Envelope) Validate() error {
 	if e.Version != CurrentEnvelopeVersion || e.PayloadVersion <= 0 ||

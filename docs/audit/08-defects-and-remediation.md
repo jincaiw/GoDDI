@@ -38,6 +38,8 @@
 7. 依赖：D-02（epoch）先定；与镜像回执改造同批。
 8. 验收：任何链断裂/篡改被检测并阻断，不自动恢复。
 
+> **状态更新（2026-11-12，阶段一）**：已实现链**密码学内核与校验器**（`internal/facts/chain.go`：`PayloadDigest/ComputeTip/ChainBuilder.Stamp/VerifyEnvelope/VerifyChain`、`ChainTipStore`（CAS 防分叉）+ `StampTx` 事务内集成点；`Envelope` 增 `Epoch/PrevHash/PayloadHash/TipHash`，向后兼容）。测试 `chain_test.go`（篡改/乱序/丢事件/epoch 回退/tip 竞争/`StampTx` 链）通过。**待接**：把 `StampTx` 接入 lease 生产 outbox、把 `VerifyEnvelope` 接入 IPAM/DNS 消费者并持久化 tip（需 outbox 表增列 + 双库迁移滚动）——属阶段二，未完成前链路不宣称端到端生效。
+
 ### D-04 DEC-006 与 ADR-0003/实现冲突（复制失败是否继续服务）
 1. 问题/触发：任务书 DEC-006 要求复制中断时原 Owner 继续服务；实现默认 `paused`→不 ACK（`state.go`、`handler.go:491`），ADR-0003 明确"暂停新租约"。
 2. 源码：`internal/dhcp/ha/state.go`（`MayBind`/`ServesClients`）、`handler.go:491`、`main.go:273-291`（degrade）。
