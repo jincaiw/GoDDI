@@ -150,6 +150,13 @@ func (m *Manager) createLeaseWithStatus(scopeID, ip, mac, hostname string, durat
 		now.Format("2006-01-02T15:04:05Z"),
 		generation)
 	if err != nil {
+		// A concurrent reservation of the same (scope, ip) loses the insert to
+		// the unique index. That is exactly "this address is taken" and the
+		// caller must be able to retry with a fresh candidate, so surface it as
+		// ErrAddressTaken rather than a bare constraint error.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return nil, fmt.Errorf("%w: %s", ErrAddressTaken, ip)
+		}
 		return nil, fmt.Errorf("failed to create lease: %w", err)
 	}
 

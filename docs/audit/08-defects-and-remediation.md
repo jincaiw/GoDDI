@@ -78,7 +78,7 @@
 - **D-08 SQLite 磁盘满/fsync 错误未验证**：`sqlitepolicy` 只设 PRAGMA；需 ENOSPC/fsync 失败注入，要求绑定失败且不 ACK（`handler.go` 路径）。测试：填盘/错误注入。
 - **D-09 IPAM 陈旧导致错分配**：DHCP 从本地 `ipam_subnets` 分配，无 freshness 栅栏；建议分配前校验 generation/updated_at 或依赖发布屏障（`dataplane/sync.go`、`handler` 分配路径）。
 - **D-10 Outbox/consumer 故障注入缺失**：relay 中断/重复投递/消费者崩溃未测；无 DLQ（`facts/relay.go`、`ipam/facts_consumer.go`）。补故障注入 + 可选 DLQ。
-- **D-11 DHCP 报文重放/去重**：无显式事务号去重（依赖 IP/MAC 语义）；补重复 REQUEST/RELEASE 幂等测试。
+- **D-11 DHCP 报文重放/去重**：无显式事务号去重（依赖 IP/MAC 语义）；**已补租约层幂等/重复/并发测试并修复一处真实缺陷（2026-11-12）**：并发抢同一地址时落败方原返回裸 `UNIQUE constraint` 错误，现映射为 `ErrAddressTaken`（`internal/dhcp/lease/lease.go` `createLeaseWithStatus`），使调用方可按语义重试；测试 `internal/dhcp/lease/idempotency_test.go`（DISCOVER 重传同 ID/单行、异 MAC 拒绝、重复 Activate/Release 幂等、并发同址仅一胜者）全 PASS。
 - **D-12 备份/升级恢复演练缺失**：`internal/backup/*` 存在但无恢复演练；systemd 单实例约束需文档化（`deployments/systemd/goddi.service`）。
 - **D-13 遗留存储路径复杂度**：`lease_store_shadow.go`/`lease_store_indexed.go` 与 WAL store 并存；建议按灰度收敛计划清理。
 - **D-14 DNS LKG/原子性**：本地副本无显式 LKG 版本戳/回滚；`replaceWhole` 多表原子性未验证（`dataplane/sync.go`）。

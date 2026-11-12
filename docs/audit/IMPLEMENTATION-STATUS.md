@@ -1849,3 +1849,10 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - `internal/facts/chain.go`：`PayloadDigest`、`ComputeTip(prev,env)`（绑定 prev/epoch/eventID/sequence/payloadHash）、`ChainBuilder.Stamp`、`VerifyEnvelope`/`VerifyChain`（检测篡改/乱序/丢事件/epoch 回退）、`ChainTipStore`（`facts_chain_tip` 表，CAS `AdvanceTx` 防并发分叉）+ `StampTx`（事务内 load-stamp-advance）。
 - `internal/facts/chain_test.go`：4+1 例全绿。
 - 阶段二（未完成）：生产 outbox `EnqueueTx` 同事务调用 `StampTx`、IPAM/DNS 消费者调用 `VerifyEnvelope` 并在不一致时进入 `blocked`；需 outbox 表增列（hash 字段）与双库迁移滚动。完成前不宣称端到端哈希链生效。
+
+## 1bb. D-11 DHCP 租约幂等/重复/并发（round 362）
+
+- 新增 `internal/dhcp/lease/idempotency_test.go`：DISCOVER 重传幂等（同 ID/单行）、异 MAC 抢占返回 `ErrAddressTaken`、重复 Activate/Release 幂等、并发同址仅一胜者。
+- **修复真实缺陷**：`internal/dhcp/lease/lease.go` `createLeaseWithStatus` 把并发插入触发的 `UNIQUE constraint failed: dhcp_leases.scope_id, dhcp_leases.ip_address` 映射为 `ErrAddressTaken`（原为裸错误，调用方无法按"地址被占"语义重试）。
+- `go test ./internal/dhcp/lease ./internal/dhcp/server` 全绿；`go build ./...` OK。
+- D-10（outbox 故障注入）：现有覆盖已含 enqueue 幂等/冲突、replica 快照原子替换/校验失败/断点、consumer gap/失败留箱；relay 中断与 DLQ 仍 NOT_VERIFIED。
