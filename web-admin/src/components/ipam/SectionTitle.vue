@@ -8,7 +8,7 @@ defineProps<{
 <template>
   <h4 class="section-title">
     <span>{{ text }}</span>
-    <NTag v-if="count !== undefined" size="tiny" :bordered="false">{{ count }}</NTag>
+    <TTag v-if="count !== undefined" size="small" variant="light">{{ count }}</TTag>
   </h4>
 </template>
 
@@ -19,6 +19,6 @@ defineProps<{
   gap: 8px;
   margin: 20px 0 10px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
 }
 </style>

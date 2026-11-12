@@ -28,6 +28,7 @@ declare module "@elegant-router/types" {
     "admin_users": "/admin/users";
     "dashboard": "/dashboard";
     "dhcp": "/dhcp";
+    "dhcp_ha": "/dhcp/ha";
     "dhcp_leases": "/dhcp/leases";
     "dhcp_options": "/dhcp/options";
     "dhcp_reservations": "/dhcp/reservations";
@@ -37,6 +38,7 @@ declare module "@elegant-router/types" {
     "dns_apps": "/dns/apps";
     "dns_blocked": "/dns/blocked";
     "dns_cache": "/dns/cache";
+    "dns_dnssec": "/dns/dnssec";
     "dns_forwarders": "/dns/forwarders";
     "dns_security": "/dns/security";
     "dns_zone-detail": "/dns/zone-detail/:id";
@@ -128,6 +130,7 @@ declare module "@elegant-router/types" {
     | "admin_tokens"
     | "admin_users"
     | "dashboard"
+    | "dhcp_ha"
     | "dhcp_leases"
     | "dhcp_options"
     | "dhcp_reservations"
@@ -136,6 +139,7 @@ declare module "@elegant-router/types" {
     | "dns_apps"
     | "dns_blocked"
     | "dns_cache"
+    | "dns_dnssec"
     | "dns_forwarders"
     | "dns_security"
     | "dns_zone-detail"

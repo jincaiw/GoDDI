@@ -1,73 +1,51 @@
 <script setup lang="ts">
-import { h, onMounted, reactive, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NTag } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import { listDHCPLogs, type DHCPLog } from '@/service/api/goddi/dhcp'
+import { useI18n } from 'vue-i18n';
+import { Tag as TTag } from 'tdesign-vue-next';
+import type { PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { listDHCPLogs, type DHCPLog } from '@/service/api/goddi/dhcp';
 
-const { t } = useI18n()
-const loading = ref(false)
-const error = ref('')
-const logs = ref<DHCPLog[]>([])
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
+defineOptions({ name: 'DHCPLogsPage' });
 
-const columns = [
-  { title: () => t('logs.dhcp.eventType'), key: 'event_type', width: 130, render: (row: DHCPLog) => h(NTag, { size: 'small' }, { default: () => row.event_type }) },
-  { title: () => t('logs.dhcp.clientMac'), key: 'client_mac', width: 160 },
-  { title: () => t('logs.dhcp.clientIp'), key: 'client_ip', width: 140 },
-  { title: () => t('logs.dhcp.hostname'), key: 'hostname', width: 180, ellipsis: { tooltip: true } },
-  { title: () => t('logs.dhcp.scope'), key: 'scope_name', width: 160, ellipsis: { tooltip: true } },
-  { title: () => t('logs.dhcp.message'), key: 'message', minWidth: 240, ellipsis: { tooltip: true } },
-  { title: () => t('common.createdAt'), key: 'created_at', width: 180 },
-]
+const { t } = useI18n();
 
-async function loadData() {
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await listDHCPLogs({ page: pagination.page, page_size: pagination.pageSize })
-    logs.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : t('common.failed')
-  } finally {
-    loading.value = false
-  }
-}
-
-function handlePageChange(page: number) {
-  pagination.page = page
-  loadData()
-}
-
-function handlePageSizeChange(pageSize: number) {
-  pagination.pageSize = pageSize
-  pagination.page = 1
-  loadData()
-}
-
-onMounted(loadData)
+const columns: PrimaryTableCol[] = [
+  {
+    colKey: 'event_type',
+    title: t('logs.dhcp.eventType'),
+    width: 130,
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as DHCPLog).event_type ?? ''))
+  },
+  { colKey: 'client_mac', title: t('logs.dhcp.clientMac'), width: 160 },
+  { colKey: 'client_ip', title: t('logs.dhcp.clientIp'), width: 140 },
+  { colKey: 'hostname', title: t('logs.dhcp.hostname'), width: 180, ellipsis: true },
+  { colKey: 'scope_name', title: t('logs.dhcp.scope'), width: 160, ellipsis: true },
+  { colKey: 'message', title: t('logs.dhcp.message'), minWidth: 240, ellipsis: true },
+  { colKey: 'created_at', title: t('common.createdAt'), width: 180 }
+];
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('logs.dhcp.title')" />
-
-    <NAlert v-if="error" type="error" closable style="margin-bottom: 16px;" @close="error = ''">
-      {{ error }}
-    </NAlert>
-
-    <NCard>
-      <NDataTable
-        :columns="columns"
-        :data="logs"
-        :loading="loading"
-        remote
-        :pagination="pagination"
-        :row-key="(row: DHCPLog) => row.id"
-        @update:page="handlePageChange"
-        @update:page-size="handlePageSizeChange"
-      />
-    </NCard>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('logs.dhcp.title') }}</h2>
+    </TCard>
+    <RemoteTable :columns="columns" :fetcher="listDHCPLogs" />
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+</style>

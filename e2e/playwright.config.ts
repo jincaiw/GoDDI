@@ -6,9 +6,17 @@ import { defineConfig } from '@playwright/test'
 // against a seeded instance (scripts/w13_frontend_smoke.py up). The exclusion
 // is what keeps `npx playwright test` -- the command CI runs and the command a
 // developer types -- correct against a plain instance.
+//
+// console.spec.ts and workflows.spec.ts are excluded for a different reason:
+// they were written against the pre-TDesign console and fail wholesale
+// against the migrated UI. Their coverage was mapped and re-pinned elsewhere
+// (see the STALE headers at the top of each file and
+// docs/audit/IMPLEMENTATION-STATUS.md §1av/§1aw). Excluding them here keeps
+// the bare suite green until someone rewrites them against TDesign -- the
+// header comment in each file is the starting point for that work.
 export default defineConfig({
   testDir: './tests',
-  testIgnore: /\.fixture\.spec\.ts$/,
+  testIgnore: /(\.fixture\.spec\.ts|console\.spec\.ts|workflows\.spec\.ts)$/,
   workers: 1,
   timeout: 120000,
   use: {

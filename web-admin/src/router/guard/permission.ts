@@ -1,4 +1,5 @@
 import type { Router } from 'vue-router';
+import { MessagePlugin } from 'tdesign-vue-next';
 import { useAuthStore } from '@/store/modules/auth';
 import { $t } from '@/locales';
 
@@ -24,7 +25,7 @@ export function createPermissionGuard(router: Router) {
       return true;
     }
 
-    window.$message?.warning($t('common.noPermission'));
+    void MessagePlugin.warning($t('common.noPermission'));
 
     return { name: '403' };
   });

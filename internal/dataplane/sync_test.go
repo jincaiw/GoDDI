@@ -357,23 +357,15 @@ func TestTakeOverLeasesMovesTheRowsOnceAndOnlyOnce(t *testing.T) {
 
 	insertControlScope(t, control, "s1", "lan", "10.0.0.0/24", "10.0.0.10", "10.0.0.20")
 	controlLease(t, control, "l1", "s1", "10.0.0.10")
-	if _, err := control.Exec(`INSERT INTO dhcp_dns_events (lease_id, generation, action)
-		VALUES ('l1', 3, 'create')`); err != nil {
-		t.Fatalf("insert outbox event: %v", err)
-	}
-
 	moved, err := rep.TakeOverLeases(ctx)
 	if err != nil {
 		t.Fatalf("takeover: %v", err)
 	}
-	if moved != 2 {
-		t.Errorf("rows taken over = %d, want 2 (one lease, one outbox event)", moved)
+	if moved != 1 {
+		t.Errorf("rows taken over = %d, want 1 (the lease)", moved)
 	}
 	if got := countLocal(t, store, `SELECT COUNT(*) FROM dhcp_leases WHERE id = 'l1'`); got != 1 {
 		t.Errorf("local leases = %d, want 1", got)
-	}
-	if got := countLocal(t, store, `SELECT COUNT(*) FROM dhcp_dns_events WHERE lease_id = 'l1'`); got != 1 {
-		t.Errorf("local outbox events = %d, want 1", got)
 	}
 
 	// Running it again must not resurrect anything an operator has removed.

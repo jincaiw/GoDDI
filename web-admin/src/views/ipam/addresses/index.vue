@@ -1,172 +1,269 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import AddressDetailDrawer from '@/components/ipam/AddressDetailDrawer.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listIPAMAddresses, allocateIP, releaseIP, listIPAMSubnets, type IPAMAddress, type AllocateIPRequest } from '@/service/api/goddi/ipam'
+import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import AddressDetailDrawer from '@/components/ipam/AddressDetailDrawer.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  allocateIP,
+  listIPAMAddresses,
+  listIPAMSubnets,
+  releaseIP,
+  type AllocateIPRequest,
+  type IPAMAddress
+} from '@/service/api/goddi/ipam';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'IPAMAddressesPage' });
 
-const loading = ref(false)
-const allocating = ref(false)
-const addresses = ref<IPAMAddress[]>([])
-const searchQuery = ref('')
-const statusFilter = ref<string | null>(null)
-const showAllocateModal = ref(false)
-const showReleaseConfirm = ref(false)
-const releasingId = ref('')
-const subnetOptions = ref<Array<{ label: string; value: string }>>([])
+const { t } = useI18n();
+const perm = usePermission();
 
-// The 360° view is keyed by (space, ip) rather than by row id: an address is
-// identified by where it sits, and the same address in another space is a
-// different record.
-const showDetail = ref(false)
-const detailSpaceId = ref('')
-const detailIp = ref('')
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showAllocate = ref(false);
+const allocating = ref(false);
+const searchQuery = ref('');
+const statusFilter = ref<string | undefined>(undefined);
+const subnetOptions = ref<Array<{ label: string; value: string }>>([]);
 
-function openDetail(row: IPAMAddress) {
-  detailSpaceId.value = row.space_id
-  detailIp.value = row.ip_address
-  showDetail.value = true
-}
+// The 360° view is keyed by (space, ip), not by row id: the same address in
+// another space is a different record.
+const showDetail = ref(false);
+const detailSpaceId = ref('');
+const detailIp = ref('');
 
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
+const allocateForm = reactive<AllocateIPRequest>({
+  subnet_id: '',
+  ip_address: '',
+  hostname: '',
+  mac_address: '',
+  owner: '',
+  device: '',
+  location: '',
+  description: ''
+});
 
-const allocateForm = reactive<AllocateIPRequest>({ subnet_id: '', ip_address: '', hostname: '', mac_address: '', owner: '', device: '', location: '', description: '' })
+const formRules = {
+  subnet_id: [{ required: true, message: t('ipam.subnets.title') + ' required', type: 'error' }]
+};
 
 const statusOptions = [
   { label: t('ipam.addresses.statusUsed'), value: 'used' },
   { label: t('ipam.addresses.statusFree'), value: 'available' },
   { label: t('ipam.addresses.statusReserved'), value: 'reserved' },
-  { label: t('ipam.addresses.statusConflict'), value: 'conflict' },
-]
+  { label: t('ipam.addresses.statusConflict'), value: 'conflict' }
+];
 
-function statusTag(status: string) {
-  const map: Record<string, 'success' | 'default' | 'warning' | 'error'> = {
-    used: 'success', available: 'default', reserved: 'warning', conflict: 'error',
-  }
-  return map[status] || 'default'
+const statusTheme: Record<string, 'success' | 'default' | 'warning' | 'danger'> = {
+  used: 'success',
+  available: 'default',
+  reserved: 'warning',
+  conflict: 'danger'
+};
+
+const params = computed<Record<string, unknown>>(() => {
+  const p: Record<string, unknown> = {};
+  if (searchQuery.value) p.search = searchQuery.value;
+  if (statusFilter.value) p.status = statusFilter.value;
+  return p;
+});
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
-const columns = [
-  { title: () => t('ipam.addresses.ip'), key: 'ip_address' },
-  { title: () => t('common.status'), key: 'status', width: 100, render: (row: IPAMAddress) => h(NTag, { size: 'small', type: statusTag(row.status) }, { default: () => row.status }) },
-  { title: () => t('ipam.addresses.hostname'), key: 'hostname' },
-  { title: () => t('ipam.addresses.mac'), key: 'mac_address' },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
+const columns: PrimaryTableCol[] = [
+  { colKey: 'ip_address', title: t('ipam.addresses.ip'), width: 150 },
   {
-    title: () => t('common.actions'),
-    key: 'actions',
-    width: 190,
-    render: (row: IPAMAddress) =>
-      h(NSpace, null, {
-        default: () => [
-          h(NButton, { size: 'small', text: true, onClick: () => openDetail(row) }, { default: () => t('ipam.addresses.viewDetail') }),
-          row.status === 'used'
-            ? h(NButton, { size: 'small', text: true, type: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('ipam.addresses.release') })
-            : null,
-        ].filter(Boolean),
-      }),
+    colKey: 'status',
+    title: t('common.status'),
+    width: 110,
+    cell: (h, { row }) => {
+      const s = String((row as IPAMAddress).status);
+      return h(TTag, { size: 'small', theme: statusTheme[s] || 'default', variant: 'light' }, () => s);
+    }
   },
-]
+  { colKey: 'hostname', title: t('ipam.addresses.hostname'), ellipsis: true },
+  { colKey: 'mac_address', title: t('ipam.addresses.mac'), ellipsis: true },
+  { colKey: 'description', title: t('common.description'), ellipsis: true },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 190,
+    cell: (h, { row }) => {
+      const r = row as IPAMAddress;
+      return h('div', { class: 'row-actions' }, [
+        h(TLink, { theme: 'primary', onClick: () => openDetail(r) }, () => t('ipam.addresses.viewDetail')),
+        ...(r.status === 'used'
+          ? [h(TLink, { theme: 'warning', disabled: !perm.canWrite('ipam'), onClick: () => confirmRelease(r.id) }, () => t('ipam.addresses.release'))]
+          : [])
+      ]);
+    }
+  }
+];
 
-async function loadData() {
-  loading.value = true
-  try {
-    const params: Record<string, unknown> = { page: pagination.page, page_size: pagination.pageSize }
-    if (searchQuery.value) params.search = searchQuery.value
-    if (statusFilter.value) params.status = statusFilter.value
-    const result = await listIPAMAddresses(params)
-    addresses.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+function openDetail(row: IPAMAddress) {
+  detailSpaceId.value = row.space_id;
+  detailIp.value = row.ip_address;
+  showDetail.value = true;
 }
-
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 async function loadSubnets() {
   try {
-    const result = await listIPAMSubnets({ page: 1, page_size: 100 })
-    subnetOptions.value = result.data.map(s => ({ label: `${s.name} (${s.cidr})`, value: s.id }))
-  } catch { /* ignore */ }
+    const result = await listIPAMSubnets({ page: 1, page_size: 100 });
+    subnetOptions.value = result.data.map(s => ({ label: `${s.name} (${s.cidr})`, value: s.id }));
+  } catch {
+    // Subnet picker is optional for the list; it will simply be empty.
+  }
+}
+
+function openAllocate() {
+  if (!perm.canWrite('ipam')) return;
+  Object.assign(allocateForm, {
+    subnet_id: '',
+    ip_address: '',
+    hostname: '',
+    mac_address: '',
+    owner: '',
+    device: '',
+    location: '',
+    description: ''
+  });
+  showAllocate.value = true;
 }
 
 async function handleAllocate() {
-  if (!perm.canWrite('ipam')) return
-  allocating.value = true
+  if (!perm.canWrite('ipam')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  allocating.value = true;
   try {
-    await allocateIP(allocateForm)
-    message.success(t('common.createSuccess'))
-    showAllocateModal.value = false
-    loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { allocating.value = false }
+    await allocateIP(allocateForm);
+    void MessagePlugin.success(t('common.createSuccess'));
+    showAllocate.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    allocating.value = false;
+  }
 }
 
-async function handleRelease() {
-  if (!perm.canWrite('ipam')) return
-  try { await releaseIP(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showReleaseConfirm.value = false
+function confirmRelease(id: string) {
+  if (!perm.canWrite('ipam')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('ipam.addresses.release'),
+    body: t('common.deleteConfirm'),
+    theme: 'warning',
+    onConfirm: async () => {
+      try {
+        await releaseIP(id);
+        void MessagePlugin.success(t('common.success'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
-onMounted(() => { loadData(); loadSubnets() })
+void loadSubnets();
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('ipam.addresses.title')">
-      <NSpace>
-        <NButton v-if="perm.canWrite('ipam')" type="primary" @click="showAllocateModal = true">{{ t('ipam.addresses.allocate') }}</NButton>
-        <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
-      </NSpace>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('ipam.addresses.title') }}</h2>
+      <TSpace size="small">
+        <TButton v-if="perm.canWrite('ipam')" theme="primary" @click="openAllocate">
+          <template #icon><TIcon name="add" /></template>
+          {{ t('ipam.addresses.allocate') }}
+        </TButton>
+        <TButton variant="outline" @click="tableRef?.reload()">{{ t('common.refresh') }}</TButton>
+      </TSpace>
+    </TCard>
 
-    <div class="filter-bar">
-      <NSpace>
-        <NInput v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="loadData" />
-        <NSelect v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
-      </NSpace>
-    </div>
+    <TCard :bordered="false" class="filter-bar">
+      <TSpace size="small">
+        <TInput
+          v-model="searchQuery"
+          clearable
+          :placeholder="t('common.search')"
+          style="width: 240px"
+          @enter="tableRef?.reload()"
+        />
+        <TSelect v-model="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 160px" />
+      </TSpace>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="addresses"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: IPAMAddress) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listIPAMAddresses" :params="params" />
 
-    <!-- Allocate IP Modal -->
-    <NModal v-if="showAllocateModal" v-model:show="showAllocateModal" :title="t('ipam.addresses.allocate')" preset="card" style="width: 450px;">
-      <NForm :model="allocateForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('ipam.subnets.title')">
-          <NSelect v-model:value="allocateForm.subnet_id" :options="subnetOptions" />
-        </NFormItem>
-        <NFormItem :label="t('ipam.addresses.ip')"><NInput v-model:value="allocateForm.ip_address" placeholder="Auto-assign if empty" /></NFormItem>
-        <NFormItem :label="t('ipam.addresses.hostname')"><NInput v-model:value="allocateForm.hostname" /></NFormItem>
-        <NFormItem :label="t('ipam.addresses.mac')"><NInput v-model:value="allocateForm.mac_address" /></NFormItem>
-        <NFormItem :label="t('ipam.addresses.owner')"><NInput v-model:value="allocateForm.owner" /></NFormItem>
-        <NFormItem :label="t('ipam.addresses.device')"><NInput v-model:value="allocateForm.device" /></NFormItem>
-        <NFormItem :label="t('ipam.addresses.location')"><NInput v-model:value="allocateForm.location" /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="allocateForm.description" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showAllocateModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="allocating" :disabled="!perm.canWrite('ipam')" @click="handleAllocate">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
+    <TDialog
+      v-model:visible="showAllocate"
+      :header="t('ipam.addresses.allocate')"
+      :confirm-btn="{ loading: allocating, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="520px"
+      @confirm="handleAllocate"
+    >
+      <TForm ref="formRef" :data="allocateForm" :rules="formRules" label-align="top">
+        <TFormItem :label="t('ipam.subnets.title')" name="subnet_id">
+          <TSelect v-model="allocateForm.subnet_id" :options="subnetOptions" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.ip')">
+          <TInput v-model="allocateForm.ip_address" placeholder="Auto-assign if empty" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.hostname')">
+          <TInput v-model="allocateForm.hostname" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.mac')">
+          <TInput v-model="allocateForm.mac_address" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.owner')">
+          <TInput v-model="allocateForm.owner" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.device')">
+          <TInput v-model="allocateForm.device" />
+        </TFormItem>
+        <TFormItem :label="t('ipam.addresses.location')">
+          <TInput v-model="allocateForm.location" />
+        </TFormItem>
+        <TFormItem :label="t('common.descriptions')">
+          <TInput v-model="allocateForm.description" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
     <AddressDetailDrawer v-model:show="showDetail" :space-id="detailSpaceId" :ip="detailIp" />
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.filter-bar :deep(.t-card__body) {
+  padding: 12px 16px;
+}
+:deep(.row-actions) {
+  display: flex;
+  gap: 12px;
+}
+</style>

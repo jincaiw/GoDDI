@@ -40,5 +40,5 @@ const option = computed(() => ({
 
 <template>
   <VChart v-if="hours.length" :option="option" style="height: 300px;" autoresize />
-  <div v-else style="height: 300px; display: grid; place-items: center;"><NEmpty :description="t('common.noData')" /></div>
+  <div v-else style="height: 300px; display: grid; place-items: center;"><TEmpty :description="t('common.noData')" /></div>
 </template>

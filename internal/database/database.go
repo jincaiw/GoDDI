@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jasonwa/goddi/internal/sqlitepolicy"
 	"github.com/pressly/goose/v3"
-	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )
 
 // DB wraps the database connection and provides helper methods.
@@ -36,11 +36,15 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 
 	slog.Info("connecting to database", "driver", cfg.Driver, "dsn", maskDSN(cfg.DSN))
 
-	dsn := cfg.DSN
-
-	db, err := sql.Open(driverName, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+	var db *sql.DB
+	if cfg.Driver == "sqlite" {
+		db = sqlitepolicy.OpenWriter(cfg.DSN)
+	} else {
+		var err error
+		db, err = sql.Open(driverName, cfg.DSN)
+		if err != nil {
+			return nil, fmt.Errorf("opening database: %w", err)
+		}
 	}
 
 	// Configure connection pool based on driver.
@@ -58,22 +62,8 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 
 	// Verify connection.
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
-	}
-
-	// Set SQLite PRAGMA settings after Ping to ensure the connection is established.
-	if cfg.Driver == "sqlite" {
-		var pragmas [3]string
-		pragmas[0] = "PRAGMA busy_timeout = 5000"
-		pragmas[1] = "PRAGMA foreign_keys = ON"
-		pragmas[2] = "PRAGMA journal_mode = WAL"
-		for i := 0; i < len(pragmas); i++ {
-			if _, err := db.Exec(pragmas[i]); err != nil {
-				slog.Warn("failed to set SQLite PRAGMA", "pragma", pragmas[i], "error", err)
-			} else {
-				slog.Info("SQLite PRAGMA set", "pragma", pragmas[i])
-			}
-		}
 	}
 
 	slog.Info("database connected successfully")

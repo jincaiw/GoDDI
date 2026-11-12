@@ -28,15 +28,20 @@ type AsyncApplier struct {
 	queue  chan WALEvent
 	apply  ApplyFunc
 
-	mu        sync.RWMutex
-	failed    error
-	closeErr  error
-	closed    bool
-	applied   atomic.Int64
-	started   chan struct{}
-	done      chan struct{}
-	notify    chan struct{}
-	inflight  bool
+	mu       sync.RWMutex
+	failed   error
+	closeErr error
+	closed   bool
+	applied  atomic.Int64
+	started  chan struct{}
+	done     chan struct{}
+	notify   chan struct{}
+	// accepted is the highest sequence submitted for projection, guarded by mu.
+	// applied is the highest sequence durably applied. A drain is complete only
+	// when applied >= accepted; using len(queue)+inflight had a window where the
+	// worker had received an event but not yet marked it in flight, so Wait could
+	// report an empty queue while an event was still being applied.
+	accepted  int64
 	closeOnce sync.Once
 }
 
@@ -54,13 +59,14 @@ func NewAsyncApplier(parent context.Context, capacity int, applied int64, apply 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	a := &AsyncApplier{
-		ctx:     ctx,
-		cancel:  cancel,
-		queue:   make(chan WALEvent, capacity),
-		apply:   apply,
-		started: make(chan struct{}),
-		done:    make(chan struct{}),
-		notify:  make(chan struct{}, 1),
+		ctx:      ctx,
+		cancel:   cancel,
+		queue:    make(chan WALEvent, capacity),
+		apply:    apply,
+		started:  make(chan struct{}),
+		done:     make(chan struct{}),
+		notify:   make(chan struct{}, 1),
+		accepted: applied,
 	}
 	a.applied.Store(applied)
 	go a.run()
@@ -99,12 +105,8 @@ func (a *AsyncApplier) run() {
 				a.signal()
 				return
 			}
-			a.mu.Lock()
-			a.inflight = true
-			a.mu.Unlock()
 			err := a.applyOne(event)
 			a.mu.Lock()
-			a.inflight = false
 			if err != nil {
 				a.failed = err
 			}
@@ -139,19 +141,31 @@ func (a *AsyncApplier) Submit(event WALEvent) error {
 	if err := validateWALEvent(event); err != nil {
 		return err
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
 	if a.closed {
+		a.mu.Unlock()
 		return ErrApplierClosed
 	}
 	if a.failed != nil {
-		return fmt.Errorf("%w: %v", ErrApplierFailed, a.failed)
+		err := a.failed
+		a.mu.Unlock()
+		return fmt.Errorf("%w: %v", ErrApplierFailed, err)
 	}
+	prev := a.accepted
+	if event.Seq > a.accepted {
+		a.accepted = event.Seq
+	}
+	a.mu.Unlock()
 	select {
 	case a.queue <- event:
 		a.signal()
 		return nil
 	default:
+		a.mu.Lock()
+		if a.accepted == event.Seq {
+			a.accepted = prev
+		}
+		a.mu.Unlock()
 		return ErrApplyQueueFull
 	}
 }
@@ -178,30 +192,28 @@ func (a *AsyncApplier) Wait(ctx context.Context) error {
 		a.mu.RLock()
 		failed := a.failed
 		closed := a.closed
-		idle := len(a.queue) == 0 && !a.inflight
-		queued := len(a.queue)
+		accepted := a.accepted
 		a.mu.RUnlock()
+		applied := a.applied.Load()
 		if failed != nil {
 			return failed
 		}
-		if idle {
+		if applied >= accepted {
 			if closed {
 				return ErrApplierClosed
 			}
 			return nil
 		}
-		if closed && queued > 0 {
-			select {
-			case <-a.done:
-				return ErrApplierClosed
-			default:
-			}
+		// Work accepted before this call is still outstanding. A closed applier
+		// reports ErrApplierClosed so the caller knows queued durable work is
+		// left for startup replay rather than silently drained.
+		if closed {
+			return ErrApplierClosed
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-a.done:
-			continue
 		case <-a.notify:
 		}
 	}

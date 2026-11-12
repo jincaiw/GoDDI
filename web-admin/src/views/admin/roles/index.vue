@@ -1,174 +1,303 @@
 <script setup lang="ts">
-import { ref, reactive, h, computed, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listRoles, createRole, updateRole, deleteRole, setRolePermissions, listPermissions, type Role, type CreateRoleRequest, type Permission } from '@/service/api/goddi/user'
+import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  createRole,
+  deleteRole,
+  listPermissions,
+  listRoles,
+  setRolePermissions,
+  updateRole,
+  type CreateRoleRequest,
+  type Permission,
+  type Role
+} from '@/service/api/goddi/user';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'AdminRolesPage' });
 
-const loading = ref(false)
-const submitting = ref(false)
-const roles = ref<Role[]>([])
-const showModal = ref(false)
-const showDeleteConfirm = ref(false)
-const showPermModal = ref(false)
-const deletingId = ref('')
-const editing = ref<Role | null>(null)
-const allPermissions = ref<Permission[]>([])
-const selectedPerms = ref<string[]>([])
-const assigningRoleId = ref('')
+const { t } = useI18n();
+const perm = usePermission();
 
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-const formData = reactive<CreateRoleRequest>({ name: '', description: '' })
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showDialog = ref(false);
+const showPerm = ref(false);
+const submitting = ref(false);
+const editing = ref<Role | null>(null);
+const allPermissions = ref<Permission[]>([]);
+const selectedPerms = ref<string[]>([]);
+const assigningRoleId = ref('');
+
+const formData = reactive<CreateRoleRequest>({ name: '', description: '' });
+
+const formRules = {
+  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+};
 
 const permissionGroups = computed(() => {
-  const groups: Record<string, Permission[]> = {}
+  const groups: Record<string, Permission[]> = {};
   for (const p of allPermissions.value) {
-    if (!groups[p.resource]) groups[p.resource] = []
-    groups[p.resource].push(p)
+    if (!groups[p.resource]) groups[p.resource] = [];
+    groups[p.resource].push(p);
   }
-  return Object.entries(groups).map(([resource, permissions]) => ({ resource, permissions }))
-})
-
-// Localized helpers -------------------------------------------------------
+  return Object.entries(groups).map(([resource, permissions]) => ({ resource, permissions }));
+});
 
 function roleLabel(name: string): string {
-  const key = `admin.roles.builtin.${name}`
-  const localized = t(key)
-  return localized !== key ? localized : name
+  const key = `admin.roles.builtin.${name}`;
+  const localized = t(key);
+  return localized !== key ? localized : name;
 }
 
 function roleDesc(name: string, fallback: string): string {
-  const key = `admin.roles.builtinDesc.${name}`
-  const localized = t(key)
-  return localized !== key ? localized : fallback
+  const key = `admin.roles.builtinDesc.${name}`;
+  const localized = t(key);
+  return localized !== key ? localized : fallback;
 }
 
 function permTag(p: { resource: string; action: string }): string {
-  return `${t(`perm.resource.${p.resource}`)} · ${t(`perm.action.${p.action}`)}`
+  return `${t(`perm.resource.${p.resource}`)} · ${t(`perm.action.${p.action}`)}`;
 }
 
-const columns = [
-  { title: () => t('common.name'), key: 'name', render: (row: Role) => roleLabel(row.name) },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true }, render: (row: Role) => roleDesc(row.name, row.description) },
-  { title: () => t('admin.roles.isSystem'), key: 'is_system', width: 90, render: (row: Role) => h(NTag, { size: 'small', type: row.is_system ? 'info' : 'default' }, { default: () => row.is_system ? t('common.yes') : t('common.no') }) },
-  { title: () => t('admin.roles.permissions'), key: 'permissions', render: (row: Role) => h(NSpace, { size: 'small' }, { default: () => (row.permissions || []).map(p => h(NTag, { size: 'small', bordered: false, type: 'info' }, { default: () => permTag(p) })) }) },
-  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Role) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, disabled: row.is_system || !perm.canWrite('role'), onClick: () => { if (row.is_system || !perm.canWrite('role')) return; editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('role'), onClick: () => { if (!perm.canWrite('role')) return; assigningRoleId.value = row.id; selectedPerms.value = (row.permissions || []).map(p => p.id); showPermModal.value = true } }, { default: () => t('admin.roles.assignPermissions') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: row.is_system || !perm.canDelete('role'), onClick: () => { if (row.is_system || !perm.canDelete('role')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
+const columns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('common.name'), cell: (_h, { row }) => roleLabel((row as Role).name) },
+  {
+    colKey: 'description',
+    title: t('common.description'),
+    ellipsis: true,
+    cell: (_h, { row }) => {
+      const r = row as Role;
+      return roleDesc(r.name, r.description);
+    }
+  },
+  {
+    colKey: 'is_system',
+    title: t('admin.roles.isSystem'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(TTag, { size: 'small', theme: (row as Role).is_system ? 'primary' : 'default', variant: 'light' }, () =>
+        (row as Role).is_system ? t('common.yes') : t('common.no')
+      )
+  },
+  {
+    colKey: 'permissions',
+    title: t('admin.roles.permissions'),
+    cell: (h, { row }) =>
+      h(
+        TSpace,
+        { size: 'small' },
+        () =>
+          ((row as Role).permissions || []).map(p =>
+            h(TTag, { size: 'small', variant: 'light' }, () => permTag(p))
+          )
+      )
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 220,
+    cell: (h, { row }) => {
+      const r = row as Role;
+      return h(TSpace, { size: 'small' }, () => [
+        h(
+          TLink,
+          { theme: 'primary', disabled: r.is_system || !perm.canWrite('role'), onClick: () => openEdit(r) },
+          () => t('common.edit')
+        ),
+        h(
+          TLink,
+          { theme: 'primary', disabled: !perm.canWrite('role'), onClick: () => openPerm(r) },
+          () => t('admin.roles.assignPermissions')
+        ),
+        h(
+          TLink,
+          { theme: 'danger', disabled: r.is_system || !perm.canDelete('role'), onClick: () => confirmDelete(r.id) },
+          () => t('common.delete')
+        )
+      ]);
+    }
+  }
+];
 
-async function loadData() {
-  loading.value = true
-  try {
-    const result = await listRoles({ page: pagination.page, page_size: pagination.pageSize })
-    roles.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
-
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
-  if (!perm.canWrite('role')) return
-  editing.value = null
-  Object.assign(formData, { name: '', description: '' })
-  showModal.value = true
+  if (!perm.canWrite('role')) return;
+  editing.value = null;
+  Object.assign(formData, { name: '', description: '' });
+  showDialog.value = true;
+}
+
+function openEdit(row: Role) {
+  if (row.is_system || !perm.canWrite('role')) return;
+  editing.value = row;
+  Object.assign(formData, { name: row.name, description: row.description });
+  showDialog.value = true;
+}
+
+function openPerm(row: Role) {
+  if (!perm.canWrite('role')) return;
+  assigningRoleId.value = row.id;
+  selectedPerms.value = (row.permissions || []).map(p => p.id);
+  showPerm.value = true;
 }
 
 async function handleSubmit() {
-  if (!perm.canWrite('role')) return
-  submitting.value = true
+  if (!perm.canWrite('role')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editing.value) { await updateRole(editing.value.id, formData); message.success(t('common.updateSuccess')) }
-    else { await createRole(formData); message.success(t('common.createSuccess')) }
-    showModal.value = false; editing.value = null; loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { submitting.value = false }
+    if (editing.value) {
+      await updateRole(editing.value.id, formData);
+      void MessagePlugin.success(t('common.updateSuccess'));
+    } else {
+      await createRole(formData);
+      void MessagePlugin.success(t('common.createSuccess'));
+    }
+    showDialog.value = false;
+    editing.value = null;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('role')) return
-  try { await deleteRole(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showDeleteConfirm.value = false
-}
-
-async function loadPermissions() {
-  try { allPermissions.value = (await listPermissions({ page: 1, page_size: 100 })).data } catch { /* ignore */ }
+function confirmDelete(id: string) {
+  if (!perm.canDelete('role')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteRole(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
 async function handleAssignPermissions() {
-  if (!perm.canWrite('role')) return
+  if (!perm.canWrite('role')) return;
   try {
-    await setRolePermissions(assigningRoleId.value, selectedPerms.value)
-    message.success(t('common.updateSuccess'))
-    showPermModal.value = false
-    loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await setRolePermissions(assigningRoleId.value, selectedPerms.value);
+    void MessagePlugin.success(t('common.updateSuccess'));
+    showPerm.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  }
 }
 
-onMounted(() => { loadData(); loadPermissions() })
+async function loadPermissions() {
+  try {
+    allPermissions.value = (await listPermissions({ page: 1, page_size: 100 })).data;
+  } catch {
+    // Permissions are optional for the list; the assign dialog will be empty.
+  }
+}
+
+onMounted(loadPermissions);
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('admin.roles.title')">
-      <NButton v-if="perm.canWrite('role')" type="primary" @click="openCreate">{{ t('admin.roles.createRole') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('admin.roles.title') }}</h2>
+      <TButton v-if="perm.canWrite('role')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('admin.roles.createRole') }}
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="roles"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: Role) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listRoles" />
 
-    <!-- Create/Edit Role Modal -->
-    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.roles.editRole') : t('admin.roles.createRole')" preset="card" style="width: 450px;">
-      <NForm :model="formData" label-placement="left" label-width="80px">
-        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" :disabled="!perm.canWrite('role')" /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('role')" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('role')" @click="handleSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showDialog"
+      :header="editing ? t('admin.roles.editRole') : t('admin.roles.createRole')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleSubmit"
+    >
+      <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
+        <TFormItem :label="t('common.name')" name="name">
+          <TInput v-model="formData.name" />
+        </TFormItem>
+        <TFormItem :label="t('common.descriptions')" name="description">
+          <TTextarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Assign Permissions Modal -->
-    <NModal v-if="showPermModal" v-model:show="showPermModal" :title="t('admin.roles.assignPermissions')" preset="card" style="width: 550px;">
-      <NCheckboxGroup v-model:value="selectedPerms">
-        <NSpace vertical>
-          <div v-for="group in permissionGroups" :key="group.resource">
-            <NText strong>{{ t(`perm.resource.${group.resource}`) }}</NText>
-            <NSpace style="margin-top: 4px; margin-left: 12px;">
-              <NCheckbox v-for="p in group.permissions" :key="p.id" :value="p.id" :label="t(`perm.action.${p.action}`)" :disabled="!perm.canWrite('role')" />
-            </NSpace>
+    <TDialog
+      v-model:visible="showPerm"
+      :header="t('admin.roles.assignPermissions')"
+      :confirm-btn="t('common.save')"
+      :cancel-btn="t('common.cancel')"
+      width="560px"
+      @confirm="handleAssignPermissions"
+    >
+      <TCheckboxGroup v-model="selectedPerms">
+        <div v-for="group in permissionGroups" :key="group.resource" class="perm-group">
+          <div class="perm-resource">{{ t(`perm.resource.${group.resource}`) }}</div>
+          <div class="perm-actions">
+            <TCheckbox
+              v-for="p in group.permissions"
+              :key="p.id"
+              :value="p.id"
+              :label="t(`perm.action.${p.action}`)"
+              :disabled="!perm.canWrite('role')"
+            />
           </div>
-        </NSpace>
-      </NCheckboxGroup>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showPermModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :disabled="!perm.canWrite('role')" @click="handleAssignPermissions">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+        </div>
+      </TCheckboxGroup>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.perm-group {
+  margin-bottom: 16px;
+}
+.perm-resource {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-left: 12px;
+}
+</style>

@@ -1,0 +1,7 @@
+# D2 canary override: only the HA PRIMARY runs the WAL lease store; the standby
+# stays sqlite (it never builds a DHCP server while standby -- the mirror writes
+# its SQLite lease DB directly). This is the "one of two nodes switched" canary.
+services:
+  goddi-primary:
+    environment:
+      GODDI_DHCP_LEASE_STORE: "wal"

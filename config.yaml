@@ -145,6 +145,11 @@ forwarders:
 dhcp:
   enabled: true
   interfaces: []          # Empty = auto-detect
+  # Lease hot-path store. Default is the event-sourced WAL store: MemoryIndex
+  # authority, WAL durable boundary, async SQLite projection, facts derived from
+  # the WAL. Set to "sqlite" to fall back to the synchronous *lease.Manager.
+  lease_store: wal
+  # lease_wal_path: ""   # defaults to <server.data_dir>/leases.wal
   # Relay agents whose forwarded requests may be served, as CIDRs on the client
   # subnet (the giaddr a relay puts in the packet). Empty means no restriction.
   # A relayed request from anywhere else is dropped in silence: the client
@@ -153,6 +158,16 @@ dhcp:
   # This is deliberately not a client allowlist -- a client picks its own MAC
   # address, so a MAC list stops nobody who has decided to lie.
   trusted_relay_cidrs: []
+  # How a RENEWING/REBINDING request for an in-subnet address OUTSIDE the
+  # scope's allocation pool and with no existing binding is answered.
+  #   allow                 - historical behaviour: confirm the binding, so a
+  #                           statically configured host can renew. Any client
+  #                           can claim such a free address.
+  #   existing-binding-only - NAK unless a matching held lease or an
+  #                           operator-created reservation exists. In-pool
+  #                           renewals are unaffected.
+  # The choice is an operator/product decision; the default changes no behaviour.
+  renew_out_of_pool_policy: "allow"
 
 ipam:
   ping_check: true

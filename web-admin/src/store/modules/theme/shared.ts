@@ -1,6 +1,5 @@
-import type { GlobalThemeOverrides } from 'naive-ui';
 import { defu } from 'defu';
-import { addColorAlpha, getColorPalette, getPaletteColorByNumber, getRgb } from '@sa/color';
+import { getColorPalette, getRgb } from '@sa/color';
 import { DARK_CLASS } from '@/constants/app';
 import { toggleHtmlClass } from '@/utils/common';
 import { localStg } from '@/utils/storage';
@@ -193,74 +192,4 @@ export function toggleAuxiliaryColorModes(grayscaleMode = false, colourWeakness 
   htmlElement.style.filter = [grayscaleMode ? 'grayscale(100%)' : '', colourWeakness ? 'invert(80%)' : '']
     .filter(Boolean)
     .join(' ');
-}
-
-type NaiveColorScene = '' | 'Suppl' | 'Hover' | 'Pressed' | 'Active';
-type NaiveColorKey = `${App.Theme.ThemeColorKey}Color${NaiveColorScene}`;
-type NaiveThemeColor = Partial<Record<NaiveColorKey, string>>;
-interface NaiveColorAction {
-  scene: NaiveColorScene;
-  handler: (color: string) => string;
-}
-
-/**
- * Get naive theme colors
- *
- * @param colors Theme colors
- * @param [recommended=false] Use recommended color. Default is `false`
- */
-function getNaiveThemeColors(colors: App.Theme.ThemeColor, recommended = false) {
-  const colorActions: NaiveColorAction[] = [
-    { scene: '', handler: color => color },
-    { scene: 'Suppl', handler: color => color },
-    { scene: 'Hover', handler: color => getPaletteColorByNumber(color, 500, recommended) },
-    { scene: 'Pressed', handler: color => getPaletteColorByNumber(color, 700, recommended) },
-    { scene: 'Active', handler: color => addColorAlpha(color, 0.1) }
-  ];
-
-  const themeColors: NaiveThemeColor = {};
-
-  const colorEntries = Object.entries(colors) as [App.Theme.ThemeColorKey, string][];
-
-  colorEntries.forEach(color => {
-    colorActions.forEach(action => {
-      const [colorType, colorValue] = color;
-      const colorKey: NaiveColorKey = `${colorType}Color${action.scene}`;
-      themeColors[colorKey] = action.handler(colorValue);
-    });
-  });
-
-  return themeColors;
-}
-
-/**
- * Get naive theme
- *
- * @param colors Theme colors
- * @param settings Theme settings object
- * @param overrides Optional manual overrides from preset
- */
-export function getNaiveTheme(
-  colors: App.Theme.ThemeColor,
-  settings: App.Theme.ThemeSetting,
-  overrides?: GlobalThemeOverrides
-) {
-  const { primary: colorLoading } = colors;
-
-  const theme: GlobalThemeOverrides = {
-    common: {
-      ...getNaiveThemeColors(colors, settings.recommendColor),
-      borderRadius: `${settings.themeRadius}px`
-    },
-    LoadingBar: {
-      colorLoading
-    },
-    Tag: {
-      borderRadius: `${settings.themeRadius}px`
-    }
-  };
-
-  // If there are overrides, merge them with priority
-  // overrides has higher priority than auto-generated theme
-  return overrides ? defu(overrides, theme) : theme;
 }

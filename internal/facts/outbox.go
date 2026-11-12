@@ -16,7 +16,7 @@ var (
 )
 
 // ObservationOutbox is the staged durable writer for DHCP-derived IPAM facts.
-// It is intentionally separate from the legacy dhcp_dns_events table: callers
+// The facts chain is the sole durable record of a lease mutation: callers
 // can adopt the common envelope without changing the compatibility consumer.
 type ObservationOutbox struct {
 	db *sql.DB
@@ -293,4 +293,48 @@ func (o *ObservationOutbox) Status(ctx context.Context) (ObservationOutboxStatus
 		return ObservationOutboxStatus{}, fmt.Errorf("facts outbox: status: %w", err)
 	}
 	return status, nil
+}
+
+// After reads events with a sequence strictly greater than afterSequence, in
+// ascending sequence order regardless of status. The data-plane relay uses it
+// to copy producer events into the consumer inbox; the producer's own
+// lifecycle (HA acknowledgement) owns the rows' status, so the relay sees
+// every durable fact exactly once per sequence.
+func (o *ObservationOutbox) After(ctx context.Context, afterSequence int64, limit int) ([]Envelope, error) {
+	if o == nil || o.db == nil {
+		return nil, ErrOutboxClosed
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := o.db.QueryContext(ctx, `
+		SELECT event_id, version, entity, action, generation, sequence, source,
+		       occurred_at, payload_version, payload
+		FROM dhcp_ipam_observation_events
+		WHERE sequence > ?
+		ORDER BY sequence ASC LIMIT ?`, afterSequence, limit)
+	if err != nil {
+		return nil, fmt.Errorf("facts outbox: after query: %w", err)
+	}
+	defer rows.Close()
+	var out []Envelope
+	for rows.Next() {
+		var e Envelope
+		var occurred, payload string
+		if err := rows.Scan(&e.EventID, &e.Version, &e.Entity, &e.Action, &e.Generation,
+			&e.Sequence, &e.Source, &occurred, &e.PayloadVersion, &payload); err != nil {
+			return nil, fmt.Errorf("facts outbox: after scan: %w", err)
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, occurred)
+		if err != nil {
+			return nil, fmt.Errorf("facts outbox: parse event %s time: %w", e.EventID, err)
+		}
+		e.OccurredAt = parsed
+		e.Payload = json.RawMessage(payload)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("facts outbox: after rows: %w", err)
+	}
+	return out, nil
 }

@@ -111,10 +111,18 @@ func NewManager(db *sql.DB) *Manager {
 }
 
 // EnsureDefaults inserts default settings if they do not exist.
+//
+// overrides lets the caller supply the values that config.yaml already
+// declares for a key. Without them a fresh database would be seeded with the
+// hard-coded constants below, and applyPersistedSettings would then push those
+// constants back onto a component that was just built from the operator's
+// config -- silently replacing explicit `cache:` values. Only missing rows are
+// written, so a value the operator later changed through the UI stays theirs.
+//
 // It uses a single SELECT to read all existing keys and a single batch
 // INSERT to fill in the missing ones, instead of one SELECT and one
 // INSERT per default key (the previous N+1 pattern).
-func (m *Manager) EnsureDefaults() error {
+func (m *Manager) EnsureDefaults(overrides ...map[string]string) error {
 	// Read the set of keys that already exist in the DB.
 	existing := make(map[string]struct{}, len(defaultSettings))
 	rows, err := m.db.Query(`SELECT key FROM system_settings`)
@@ -141,9 +149,15 @@ func (m *Manager) EnsureDefaults() error {
 	}, 0, len(defaultSettings))
 	for key, def := range defaultSettings {
 		if _, ok := existing[key]; !ok {
+			value := def.Value
+			for _, o := range overrides {
+				if v, ok := o[key]; ok && v != "" {
+					value = v
+				}
+			}
 			missing = append(missing, struct {
 				key, value, description string
-			}{key, def.Value, def.Description})
+			}{key, value, def.Description})
 		}
 	}
 	if len(missing) == 0 {

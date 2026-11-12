@@ -59,6 +59,26 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STORE_GO = "internal/dataplane/store.go"
+POLICY_GO = "internal/sqlitepolicy/connection.go"
+
+PRAGMA_BLOCK = """	for _, stmt := range []string{
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA foreign_keys = ON",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA synchronous = FULL",
+	} {
+		if _, err := conn.ExecContext(ctx, stmt, nil); err != nil {
+			return fmt.Errorf("set %s: %w", stmt, err)
+		}
+	}
+	for _, check := range []struct{ query, want string }{
+		{"PRAGMA busy_timeout", "5000"},
+		{"PRAGMA foreign_keys", "1"},
+		{"PRAGMA journal_mode", "wal"},
+		{"PRAGMA synchronous", "2"},
+	} {"""
+
+PRAGMA_BLOCK_OFF = PRAGMA_BLOCK.replace('"PRAGMA synchronous = FULL"', '"PRAGMA synchronous = OFF"').replace('{"PRAGMA synchronous", "2"}', '{"PRAGMA synchronous", "0"}')
 LEASE_GO = "internal/dhcp/lease/lease.go"
 DRILL_GO = "internal/dhcp/lease/durability_test.go"
 ROLE_GO = "internal/dhcp/ha/role.go"
@@ -77,9 +97,14 @@ CHECK_SMOKE = [sys.executable, "scripts/w14_durability_check.py"]
 MUTATIONS = [
     {
         "name": "租约库的 synchronous 掉到 0（提交不再等待落盘）",
-        "file": STORE_GO,
-        "old": '{"synchronous", "2"}, // 2 = FULL',
-        "new": '{"synchronous", "0"}, // 0 = OFF',
+        "file": POLICY_GO,
+        # The durability pragmas moved from dataplane/store.go into the shared
+        # sqlitepolicy connection setup. Mutate both the applied pragma and its
+        # verification entry so the connection still opens with synchronous=OFF
+        # (otherwise the guard itself fails and the expected-survivor crash
+        # drill would be masked by an unrelated open error).
+        "old": PRAGMA_BLOCK,
+        "new": PRAGMA_BLOCK_OFF,
         "must_fail": "TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest",
         "must_pass": [
             ("TestEveryCommittedBindingIsOnDiskAfterAKill",

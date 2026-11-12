@@ -6,7 +6,7 @@
 import type { RouteComponent } from "vue-router";
 import type { LastLevelRouteKey, RouteLayout } from "@elegant-router/types";
 
-import BaseLayout from "@/layouts/base-layout/index.vue";
+import BaseLayout from "@/layouts/tdesign-layout/index.vue";
 import BlankLayout from "@/layouts/blank-layout/index.vue";
 
 export const layouts: Record<RouteLayout, RouteComponent | (() => Promise<RouteComponent>)> = {
@@ -26,6 +26,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   admin_tokens: () => import("@/views/admin/tokens/index.vue"),
   admin_users: () => import("@/views/admin/users/index.vue"),
   dashboard: () => import("@/views/dashboard/index.vue"),
+  dhcp_ha: () => import("@/views/dhcp/ha/index.vue"),
   dhcp_leases: () => import("@/views/dhcp/leases/index.vue"),
   dhcp_options: () => import("@/views/dhcp/options/index.vue"),
   dhcp_reservations: () => import("@/views/dhcp/reservations/index.vue"),
@@ -34,6 +35,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   dns_apps: () => import("@/views/dns/apps/index.vue"),
   dns_blocked: () => import("@/views/dns/blocked/index.vue"),
   dns_cache: () => import("@/views/dns/cache/index.vue"),
+  dns_dnssec: () => import("@/views/dns/dnssec/index.vue"),
   dns_forwarders: () => import("@/views/dns/forwarders/index.vue"),
   dns_security: () => import("@/views/dns/security/index.vue"),
   "dns_zone-detail": () => import("@/views/dns/zone-detail/[id].vue"),

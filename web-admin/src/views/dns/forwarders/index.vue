@@ -1,217 +1,354 @@
 <script setup lang="ts">
-import { ref, reactive, computed, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import { usePermission } from '@/composables/usePermission'
+import { computed, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
 import {
-  listDNSForwarders, createDNSForwarder, updateDNSForwarder, deleteDNSForwarder,
-  listConditionalForwarders, createConditionalForwarder, deleteConditionalForwarder,
-  type DNSForwarder, type ConditionalForwarder,
-} from '@/service/api/goddi/dns'
+  createConditionalForwarder,
+  createDNSForwarder,
+  deleteConditionalForwarder,
+  deleteDNSForwarder,
+  listConditionalForwarders,
+  listDNSForwarders,
+  updateDNSForwarder,
+  type ConditionalForwarder,
+  type DNSForwarder
+} from '@/service/api/goddi/dns';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DNSForwardersPage' });
 
-const loading = ref(false)
-const submitting = ref(false)
-const forwarders = ref<DNSForwarder[]>([])
-const showFwdModal = ref(false)
-const editingFwd = ref<DNSForwarder | null>(null)
+const { t } = useI18n();
+const perm = usePermission();
 
-const condLoading = ref(false)
-const condSubmitting = ref(false)
-const conditionals = ref<ConditionalForwarder[]>([])
-const showCondModal = ref(false)
+const fwdTable = ref<{ reload: () => Promise<void> } | null>(null);
+const condTable = ref<{ reload: () => Promise<void> } | null>(null);
+const fwdFormRef = ref<FormInstanceFunctions | null>(null);
+const condFormRef = ref<FormInstanceFunctions | null>(null);
+const showFwd = ref(false);
+const showCond = ref(false);
+const submitting = ref(false);
+const editing = ref<DNSForwarder | null>(null);
+const allForwarders = ref<DNSForwarder[]>([]);
 
 const protocolOptions = [
   { label: 'UDP', value: 'udp' },
   { label: 'TCP', value: 'tcp' },
   { label: 'DoT', value: 'dot' },
   { label: 'DoH', value: 'doh' },
-  { label: 'DoQ', value: 'doq' },
-]
+  { label: 'DoQ', value: 'doq' }
+];
 
-const fwdForm = reactive({ name: '', protocol: 'udp', address: '', enabled: true, priority: 0 })
-const condForm = reactive({ domain: '', enabled: true })
-
-// Per-protocol address hints (DoT/DoQ default to :853; DoH is a full URL).
 const addressPlaceholders: Record<string, string> = {
   udp: '8.8.8.8:53',
   tcp: '8.8.8.8:53',
   dot: 'dns.quad9.net:853',
   doh: 'https://dns.quad9.net/dns-query',
-  doq: 'dns.adguard-dns.com:853',
+  doq: 'dns.adguard-dns.com:853'
+};
+
+const fwdForm = reactive({ name: '', protocol: 'udp', address: '', enabled: true, priority: 0 });
+const condForm = reactive<{ domain: string; forwarder_ids: string[]; enabled: boolean }>({
+  domain: '',
+  forwarder_ids: [],
+  enabled: true
+});
+
+const addressPlaceholder = computed(() => addressPlaceholders[fwdForm.protocol] ?? '8.8.8.8:53');
+const forwarderOptions = computed(() =>
+  allForwarders.value.map(f => ({ label: `${f.name} (${f.address})`, value: f.id }))
+);
+
+const fwdRules = {
+  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }],
+  address: [{ required: true, message: t('dns.forwarders.address') + ' required', type: 'error' }]
+};
+const condRules = {
+  domain: [{ required: true, message: t('dns.forwarders.domain') + ' required', type: 'error' }],
+  forwarder_ids: [{ required: true, message: t('dns.forwarders.title') + ' required', type: 'error' }]
+};
+
+const fwdColumns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('common.name') },
+  {
+    colKey: 'protocol',
+    title: t('dns.forwarders.protocol'),
+    width: 110,
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as DNSForwarder).protocol).toUpperCase())
+  },
+  { colKey: 'address', title: t('dns.forwarders.address'), ellipsis: true },
+  { colKey: 'priority', title: t('common.priority'), width: 90 },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => {
+      const r = row as DNSForwarder;
+      return h(TSwitch, {
+        size: 'small',
+        value: Boolean(r.enabled),
+        disabled: !perm.canWrite('dns'),
+        onChange: (value: unknown) => void toggleEnabled(r, Boolean(value))
+      });
+    }
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 150,
+    cell: (h, { row }) => {
+      const r = row as DNSForwarder;
+      return h(TSpace, { size: 'small' }, () => [
+        h(TLink, { theme: 'primary', disabled: !perm.canWrite('dns'), onClick: () => openEdit(r) }, () => t('common.edit')),
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDeleteFwd(r.id) }, () => t('common.delete'))
+      ]);
+    }
+  }
+];
+
+const condColumns: PrimaryTableCol[] = [
+  { colKey: 'domain', title: t('dns.forwarders.domain'), ellipsis: true },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as ConditionalForwarder).enabled) })
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(
+        TLink,
+        { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDeleteCond((row as ConditionalForwarder).id) },
+        () => t('common.delete')
+      )
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
-const addressPlaceholder = computed(() => addressPlaceholders[fwdForm.protocol] ?? '8.8.8.8:53')
 
-const forwarderColumns = [
-  { title: () => t('common.name'), key: 'name' },
-  { title: () => t('dns.forwarders.protocol'), key: 'protocol', render: (row: DNSForwarder) => h(NTag, { size: 'small' }, { default: () => row.protocol.toUpperCase() }) },
-  { title: () => t('dns.forwarders.address'), key: 'address' },
-  { title: () => t('common.priority'), key: 'priority', width: 80 },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSForwarder) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: async (enabled: boolean) => {
-    if (!perm.canWrite('dns')) return
-    try { await updateDNSForwarder(row.id, { name: row.name, protocol: row.protocol, address: row.address, priority: row.priority, enabled }); await loadForwarders() }
-    catch (err) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  } }) },
-  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DNSForwarder) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => { if (!perm.canWrite('dns')) return; editingFwd.value = row; Object.assign(fwdForm, row); showFwdModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteFwd(row.id) }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
-
-const condColumns = [
-  { title: () => t('dns.forwarders.domain'), key: 'domain' },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: ConditionalForwarder) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: ConditionalForwarder) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteCond(row.id) }, { default: () => t('common.delete') }) },
-]
-
-function openCreateForwarder() {
-  if (!perm.canWrite('dns')) return
-  editingFwd.value = null
-  Object.assign(fwdForm, { name: '', protocol: 'udp', address: '', enabled: true, priority: 0 })
-  showFwdModal.value = true
+/** Wraps getList into RemoteTable's contract and keeps a local copy for the select. */
+async function fetchForwarders(params: Record<string, unknown>) {
+  const result = await listDNSForwarders(params);
+  allForwarders.value = result.data as DNSForwarder[];
+  return result;
 }
 
-async function loadForwarders() {
-  loading.value = true
+function openCreate() {
+  if (!perm.canWrite('dns')) return;
+  editing.value = null;
+  Object.assign(fwdForm, { name: '', protocol: 'udp', address: '', enabled: true, priority: 0 });
+  showFwd.value = true;
+}
+
+function openEdit(row: DNSForwarder) {
+  if (!perm.canWrite('dns')) return;
+  editing.value = row;
+  Object.assign(fwdForm, {
+    name: row.name,
+    protocol: row.protocol,
+    address: row.address,
+    enabled: row.enabled,
+    priority: row.priority
+  });
+  showFwd.value = true;
+}
+
+async function toggleEnabled(row: DNSForwarder, value: boolean) {
+  if (!perm.canWrite('dns')) return;
   try {
-    const result = await listDNSForwarders()
-    forwarders.value = result.data
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    loading.value = false
+    await updateDNSForwarder(row.id, {
+      name: row.name,
+      protocol: row.protocol,
+      address: row.address,
+      priority: row.priority,
+      enabled: value
+    });
+    await fwdTable.value?.reload();
+  } catch (err) {
+    msgError(err);
   }
 }
 
 async function handleFwdSubmit() {
-  if (!perm.canWrite('dns')) return
-  submitting.value = true
+  if (!perm.canWrite('dns')) return;
+  const valid = await fwdFormRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editingFwd.value) {
-      await updateDNSForwarder(editingFwd.value.id, fwdForm)
-    } else {
-      await createDNSForwarder(fwdForm)
+    if (editing.value) await updateDNSForwarder(editing.value.id, fwdForm);
+    else await createDNSForwarder(fwdForm);
+    void MessagePlugin.success(t('common.success'));
+    showFwd.value = false;
+    await fwdTable.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+function confirmDeleteFwd(id: string) {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteDNSForwarder(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await fwdTable.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
     }
-    message.success(t('common.success'))
-    showFwdModal.value = false
-    loadForwarders()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    submitting.value = false
-  }
+  });
 }
 
-async function handleDeleteFwd(id: string) {
-  if (!perm.canDelete('dns')) return
-  try {
-    await deleteDNSForwarder(id)
-    message.success(t('common.deleteSuccess'))
-    loadForwarders()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  }
-}
-
-async function loadConditionals() {
-  condLoading.value = true
-  try {
-    const result = await listConditionalForwarders()
-    conditionals.value = result.data
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    condLoading.value = false
-  }
+function openCond() {
+  if (!perm.canWrite('dns')) return;
+  Object.assign(condForm, { domain: '', forwarder_ids: [], enabled: true });
+  showCond.value = true;
 }
 
 async function handleCondSubmit() {
-  if (!perm.canWrite('dns')) return
-  condSubmitting.value = true
+  if (!perm.canWrite('dns')) return;
+  const valid = await condFormRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    await createConditionalForwarder(condForm)
-    message.success(t('common.createSuccess'))
-    showCondModal.value = false
-    loadConditionals()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+    await createConditionalForwarder(condForm);
+    void MessagePlugin.success(t('common.createSuccess'));
+    showCond.value = false;
+    await condTable.value?.reload();
+  } catch (err) {
+    msgError(err);
   } finally {
-    condSubmitting.value = false
+    submitting.value = false;
   }
 }
 
-async function handleDeleteCond(id: string) {
-  if (!perm.canDelete('dns')) return
-  try {
-    await deleteConditionalForwarder(id)
-    message.success(t('common.deleteSuccess'))
-    loadConditionals()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  }
+function confirmDeleteCond(id: string) {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteConditionalForwarder(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await condTable.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
-
-onMounted(() => {
-  loadForwarders()
-  loadConditionals()
-})
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dns.forwarders.title')">
-      <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateForwarder">{{ t('dns.forwarders.createForwarder') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dns.forwarders.title') }}</h2>
+      <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('dns.forwarders.createForwarder') }}
+      </TButton>
+    </TCard>
 
-    <NTabs type="card">
-      <NTabPane name="forwarders" :tab="t('dns.forwarders.title')">
-        <NDataTable :columns="forwarderColumns" :data="forwarders" :loading="loading" :row-key="(row: DNSForwarder) => row.id" />
-      </NTabPane>
-      <NTabPane name="conditional" :tab="t('dns.forwarders.conditionalForwarders')">
-        <NSpace style="margin-bottom: 12px;">
-          <NButton v-if="perm.canWrite('dns')" type="primary" @click="showCondModal = true">{{ t('dns.forwarders.createConditional') }}</NButton>
-        </NSpace>
-        <NDataTable :columns="condColumns" :data="conditionals" :loading="condLoading" :row-key="(row: ConditionalForwarder) => row.id" />
-      </NTabPane>
-    </NTabs>
+    <TTabs default-value="forwarders">
+      <TTabPanel value="forwarders" :label="t('dns.forwarders.title')">
+        <RemoteTable ref="fwdTable" :columns="fwdColumns" :fetcher="fetchForwarders" :show-pagination="false" />
+      </TTabPanel>
+      <TTabPanel value="conditional" :label="t('dns.forwarders.conditionalForwarders')">
+        <TCard :bordered="false" class="inner-actions">
+          <TButton v-if="perm.canWrite('dns')" theme="primary" size="small" @click="openCond">
+            {{ t('dns.forwarders.createConditional') }}
+          </TButton>
+        </TCard>
+        <RemoteTable ref="condTable" :columns="condColumns" :fetcher="listConditionalForwarders" :show-pagination="false" />
+      </TTabPanel>
+    </TTabs>
 
-    <!-- Forwarder Modal -->
-    <NModal v-if="showFwdModal" v-model:show="showFwdModal" preset="card" :title="editingFwd ? t('common.edit') : t('dns.forwarders.createForwarder')" style="width: 450px;">
-      <NForm :model="fwdForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('common.name')"><NInput v-model:value="fwdForm.name" /></NFormItem>
-        <NFormItem :label="t('dns.forwarders.protocol')">
-          <NSelect v-model:value="fwdForm.protocol" :options="protocolOptions" />
-        </NFormItem>
-        <NFormItem :label="t('dns.forwarders.address')"><NInput v-model:value="fwdForm.address" :placeholder="addressPlaceholder" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="fwdForm.enabled" /></NFormItem>
-        <NFormItem :label="t('common.priority')"><NInputNumber v-model:value="fwdForm.priority" :min="0" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showFwdModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleFwdSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showFwd"
+      :header="editing ? t('common.edit') : t('dns.forwarders.createForwarder')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="500px"
+      @confirm="handleFwdSubmit"
+    >
+      <TForm ref="fwdFormRef" :data="fwdForm" :rules="fwdRules" label-align="top">
+        <TFormItem :label="t('common.name')" name="name">
+          <TInput v-model="fwdForm.name" />
+        </TFormItem>
+        <TFormItem :label="t('dns.forwarders.protocol')" name="protocol">
+          <TSelect v-model="fwdForm.protocol" :options="protocolOptions" />
+        </TFormItem>
+        <TFormItem :label="t('dns.forwarders.address')" name="address">
+          <TInput v-model="fwdForm.address" :placeholder="addressPlaceholder" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')" name="enabled">
+          <TSwitch v-model="fwdForm.enabled" />
+        </TFormItem>
+        <TFormItem :label="t('common.priority')" name="priority">
+          <TInputNumber v-model="fwdForm.priority" :min="0" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Conditional Forwarder Modal -->
-    <NModal v-if="showCondModal" v-model:show="showCondModal" preset="card" :title="t('dns.forwarders.createConditional')" style="width: 450px;">
-      <NForm :model="condForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('dns.forwarders.domain')"><NInput v-model:value="condForm.domain" placeholder="example.com" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="condForm.enabled" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showCondModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="condSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCondSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showCond"
+      :header="t('dns.forwarders.createConditional')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="500px"
+      @confirm="handleCondSubmit"
+    >
+      <TForm ref="condFormRef" :data="condForm" :rules="condRules" label-align="top">
+        <TFormItem :label="t('dns.forwarders.domain')" name="domain">
+          <TInput v-model="condForm.domain" placeholder="example.com" />
+        </TFormItem>
+        <TFormItem :label="t('dns.forwarders.title')" name="forwarder_ids">
+          <TSelect v-model="condForm.forwarder_ids" :options="forwarderOptions" multiple filterable :min-collapsed-num="2" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')" name="enabled">
+          <TSwitch v-model="condForm.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.inner-actions :deep(.t-card__body) {
+  padding: 12px 16px;
+}
+</style>

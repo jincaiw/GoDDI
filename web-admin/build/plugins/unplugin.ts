@@ -5,7 +5,6 @@ import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
 import Icons from 'unplugin-icons/vite';
 import IconsResolver from 'unplugin-icons/resolver';
 import Components from 'unplugin-vue-components/vite';
-import { NaiveUiResolver } from 'unplugin-vue-components/resolvers';
 import { FileSystemIconLoader } from 'unplugin-icons/loaders';
 
 export function setupUnplugin(viteEnv: Env.ImportMeta) {
@@ -30,10 +29,7 @@ export function setupUnplugin(viteEnv: Env.ImportMeta) {
     Components({
       dts: 'src/typings/components.d.ts',
       types: [{ from: 'vue-router', names: ['RouterLink', 'RouterView'] }],
-      resolvers: [
-        NaiveUiResolver(),
-        IconsResolver({ customCollections: [collectionName], componentPrefix: VITE_ICON_PREFIX })
-      ]
+      resolvers: [IconsResolver({ customCollections: [collectionName], componentPrefix: VITE_ICON_PREFIX })]
     }),
     createSvgIconsPlugin({
       iconDirs: [localIconPath],

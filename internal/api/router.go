@@ -109,6 +109,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 		// purpose: they belong to the orchestrator, not to the console, and an
 		// orchestrator whose probe is refused restarts the process -- so a
 		// mistyped entry here would cause the outage it was meant to prevent.
+		r.Use(handler.EnterpriseStaticProblems)
 		r.Use(middleware.AdminAllowList(cfg.Security.AdminAllowCIDRs))
 		// Public routes (no auth required).
 		r.Group(func(r chi.Router) {
@@ -121,6 +122,7 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authentication(jwtMgr, sessMgr, tokenMgr, db.DB))
 			r.Use(middleware.CSRFProtection(cfg))
+			r.Use(handler.EnterpriseStaticBodyLimit)
 			// Audit authenticated write operations across every API resource. The
 			// middleware itself skips read-only requests, so it does not audit the
 			// audit-log listing endpoint while still covering DNS/debug mutations.
@@ -368,6 +370,9 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 
 			// DHCP Logs.
 			r.With(rbac.RequirePermission(rbacMgr, "dhcp", "read")).Get("/logs/dhcp", handler.ListDHCPLogs)
+
+			// Enterprise STATIC creation stays closed until tenant and writer authority exist.
+			r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/ddi/tenants/{tenantId}/ipam/spaces/{spaceId}/allocations", handler.EnterpriseStaticAllocation)
 
 			// IPAM Spaces.
 			r.Route("/ipam/spaces", func(r chi.Router) {

@@ -1,240 +1,362 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { GlobeOutline, ServerOutline, DesktopOutline, GridOutline } from '@vicons/ionicons5'
-import PageHeader from '@/components/PageHeader.vue'
-import { getDashboardStats, getDashboardTop, getDNSStats, type HourlyDNSStats, type TopStats, type StatsResponse } from '@/service/api/goddi/dns'
-import { listAuditLogs } from '@/service/api/goddi/logs'
+import { defineAsyncComponent, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import type { PrimaryTableCol } from 'tdesign-vue-next';
+import { GlobeOutline, ServerOutline, DesktopOutline, GridOutline } from '@vicons/ionicons5';
+import {
+  getDNSStats,
+  getDashboardStats,
+  getDashboardTop,
+  type HourlyDNSStats,
+  type StatsResponse,
+  type TopStats
+} from '@/service/api/goddi/dns';
+import { listAuditLogs } from '@/service/api/goddi/logs';
 
-const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'))
-const StatsTrendChart = defineAsyncComponent(() => import('@/components/StatsTrendChart.vue'))
+defineOptions({ name: 'DashboardPage' });
 
-const { t, locale } = useI18n()
+const DashboardChart = defineAsyncComponent(() => import('@/components/DashboardChart.vue'));
+const StatsTrendChart = defineAsyncComponent(() => import('@/components/StatsTrendChart.vue'));
 
-const stats = ref({
-  dnsQueries: 0,
-  cacheHitRate: 0,
-  activeLeases: 0,
-  ipamUsage: 0,
-})
+const { t, locale } = useI18n();
 
-const chartReady = ref(false)
-const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queries: [] })
+const stats = ref({ dnsQueries: 0, cacheHitRate: 0, activeLeases: 0, ipamUsage: 0 });
+const chartReady = ref(false);
+const chartData = ref<{ hours: string[]; queries: number[] }>({ hours: [], queries: [] });
 
-// Top statistics
-const topRange = ref<'hour' | 'day' | 'week'>('hour')
-const topStats = ref<TopStats>({ range: 'hour', top_clients: [], top_domains: [], top_blocked: [], rcodes: { total: 0, noerror: 0, nxdomain: 0, servfail: 0, refused: 0, other: 0 } })
+const topRange = ref<'hour' | 'day' | 'week'>('hour');
+const topRangeOptions = [
+  { label: t('dashboard.hour'), value: 'hour' },
+  { label: t('dashboard.day'), value: 'day' },
+  { label: t('dashboard.week'), value: 'week' }
+];
+const topStats = ref<TopStats>({
+  range: 'hour',
+  top_clients: [],
+  top_domains: [],
+  top_blocked: [],
+  rcodes: { total: 0, noerror: 0, nxdomain: 0, servfail: 0, refused: 0, other: 0 }
+});
 
 async function loadTop() {
-  try { topStats.value = await getDashboardTop(topRange.value, 10) } catch { /* ignore */ }
+  try { topStats.value = await getDashboardTop(topRange.value, 10); } catch { /* ignore */ }
 }
 
-// Long-term statistics (GET /stats, Technitium parity A2).
-const statsRange = ref<'hour' | 'day' | 'week' | 'month' | 'year'>('day')
-const ltStats = ref<StatsResponse | null>(null)
+const statsRange = ref<'hour' | 'day' | 'week' | 'month' | 'year'>('day');
+const statsRangeOptions = [
+  { label: t('dashboard.hour'), value: 'hour' },
+  { label: t('dashboard.day'), value: 'day' },
+  { label: t('dashboard.week'), value: 'week' },
+  { label: t('dashboard.month'), value: 'month' },
+  { label: t('dashboard.year'), value: 'year' }
+];
+const ltStats = ref<StatsResponse | null>(null);
 
 async function loadLongTermStats() {
-  try { ltStats.value = await getDNSStats({ range: statsRange.value }) } catch { /* ignore */ }
+  try { ltStats.value = await getDNSStats({ range: statsRange.value }); } catch { /* ignore */ }
 }
 
-const eventColumns = computed(() => [
-  { title: () => t('logs.audit.user'), key: 'username', width: 100 },
-  { title: () => t('logs.audit.action'), key: 'action', width: 100 },
-  { title: () => t('logs.audit.resource'), key: 'resource_type', width: 120 },
-  { title: () => t('common.createdAt'), key: 'created_at', width: 160,
-    render: (row: { created_at: string }) => {
-      const date = new Date(row.created_at)
-      return Number.isNaN(date.getTime()) ? row.created_at : date.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
-    },
-  },
-])
+const eventColumns: PrimaryTableCol[] = [
+  { colKey: 'username', title: t('logs.audit.user'), width: 110 },
+  { colKey: 'action', title: t('logs.audit.action'), width: 110 },
+  { colKey: 'resource_type', title: t('logs.audit.resource'), width: 130 },
+  {
+    colKey: 'created_at',
+    title: t('common.createdAt'),
+    width: 170,
+    cell: (_h, { row }) => {
+      const value = String((row as { created_at?: string }).created_at ?? '');
+      const date = new Date(value);
+      return Number.isNaN(date.getTime())
+        ? value
+        : date.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+  }
+];
 
-const recentEvents = ref<unknown[]>([])
+const recentEvents = ref<unknown[]>([]);
 
 onMounted(async () => {
-  loadTop()
-  loadLongTermStats()
+  void loadTop();
+  void loadLongTermStats();
   try {
     const [dashboardResult, auditResult] = await Promise.allSettled([
       getDashboardStats(),
-      listAuditLogs({ page: 1, page_size: 10 }),
-    ])
+      listAuditLogs({ page: 1, page_size: 10 })
+    ]);
 
     if (dashboardResult.status === 'fulfilled') {
-      const d = dashboardResult.value
-      stats.value.dnsQueries = d.dns_queries_today
-      stats.value.cacheHitRate = Math.round(d.cache_hit_rate)
-      stats.value.activeLeases = d.active_leases
-      stats.value.ipamUsage = Math.round(d.ipam_usage)
+      const d = dashboardResult.value;
+      stats.value.dnsQueries = d.dns_queries_today;
+      stats.value.cacheHitRate = Math.round(d.cache_hit_rate);
+      stats.value.activeLeases = d.active_leases;
+      stats.value.ipamUsage = Math.round(d.ipam_usage);
 
-      const hourlyData = d.recent_dns_stats as HourlyDNSStats[]
+      const hourlyData = d.recent_dns_stats as HourlyDNSStats[];
       if (hourlyData && hourlyData.length > 0) {
         const hours = hourlyData.map(item => {
-          const parts = item.hour.split(' ')
-          const timePart = parts[1] ?? item.hour
-          return timePart.substring(0, 5)
-        })
-        const queries = hourlyData.map(item => item.queries)
-        chartData.value = { hours, queries }
+          const parts = item.hour.split(' ');
+          const timePart = parts[1] ?? item.hour;
+          return timePart.substring(0, 5);
+        });
+        chartData.value = { hours, queries: hourlyData.map(item => item.queries) };
       }
     }
 
     if (auditResult.status === 'fulfilled') {
-      recentEvents.value = auditResult.value.data
+      recentEvents.value = auditResult.value.data;
     }
   } catch {
     // Silently handle dashboard errors
   } finally {
-    chartReady.value = true
+    chartReady.value = true;
   }
-})
+});
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dashboard.title')" />
-    <NGrid :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-      <NGi span="4 m:2 l:1">
-        <NCard class="metric-card">
-          <NStatistic :label="t('dashboard.dnsQueriesToday')">
-            <template #prefix>
-              <NIcon color="#0a84ff"><GlobeOutline /></NIcon>
-            </template>
-            {{ stats.dnsQueries.toLocaleString('en-US') }}
-          </NStatistic>
-        </NCard>
-      </NGi>
-      <NGi span="4 m:2 l:1">
-        <NCard class="metric-card">
-          <NStatistic :label="t('dashboard.cacheHitRate')">
-            <template #prefix>
-              <NIcon color="#af52de"><ServerOutline /></NIcon>
-            </template>
-            {{ stats.cacheHitRate }}%
-          </NStatistic>
-        </NCard>
-      </NGi>
-      <NGi span="4 m:2 l:1">
-        <NCard class="metric-card">
-          <NStatistic :label="t('dashboard.activeLeases')">
-            <template #prefix>
-              <NIcon color="#ff9500"><DesktopOutline /></NIcon>
-            </template>
-            {{ stats.activeLeases }}
-          </NStatistic>
-        </NCard>
-      </NGi>
-      <NGi span="4 m:2 l:1">
-        <NCard class="metric-card">
-          <NStatistic :label="t('dashboard.ipamUsage')">
-            <template #prefix>
-              <NIcon color="#0a84ff"><GridOutline /></NIcon>
-            </template>
-            {{ stats.ipamUsage }}%
-          </NStatistic>
-        </NCard>
-      </NGi>
-    </NGrid>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dashboard.title') }}</h2>
+      <TTag theme="primary" variant="light">Single-Node</TTag>
+    </TCard>
 
-    <NCard style="margin-top: 16px;" :title="t('dashboard.topStats')">
-      <template #header-extra>
-        <NRadioGroup v-model:value="topRange" size="small" @update:value="loadTop">
-          <NRadioButton value="hour">{{ t('dashboard.rangeHour') }}</NRadioButton>
-          <NRadioButton value="day">{{ t('dashboard.rangeDay') }}</NRadioButton>
-          <NRadioButton value="week">{{ t('dashboard.rangeWeek') }}</NRadioButton>
-        </NRadioGroup>
-      </template>
-      <NGrid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <NGi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topClients') }}</h4>
-          <NEmpty v-if="topStats.top_clients.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_clients" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </NGi>
-        <NGi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topDomains') }}</h4>
-          <NEmpty v-if="topStats.top_domains.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_domains" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </NGi>
-        <NGi span="3 l:1">
-          <h4 class="top-title">{{ t('dashboard.topBlocked') }}</h4>
-          <NEmpty v-if="topStats.top_blocked.length === 0" size="small" :description="t('common.noData')" />
-          <ul v-else class="top-list">
-            <li v-for="e in topStats.top_blocked" :key="e.name">
-              <span class="top-name">{{ e.name }}</span>
-              <span class="top-count">{{ e.count }}</span>
-            </li>
-          </ul>
-        </NGi>
-      </NGrid>
-    </NCard>
+    <div class="metric-grid">
+      <TCard :bordered="false" class="metric-card">
+        <div class="metric-inner">
+          <span class="metric-icon" style="color: #0a84ff"><GlobeOutline /></span>
+          <div class="metric-text">
+            <span class="metric-label">{{ t('dashboard.dnsQueriesToday') }}</span>
+            <b class="metric-value">{{ stats.dnsQueries.toLocaleString('en-US') }}</b>
+          </div>
+        </div>
+      </TCard>
+      <TCard :bordered="false" class="metric-card">
+        <div class="metric-inner">
+          <span class="metric-icon" style="color: #af52de"><ServerOutline /></span>
+          <div class="metric-text">
+            <span class="metric-label">{{ t('dashboard.cacheHitRate') }}</span>
+            <b class="metric-value">{{ stats.cacheHitRate }}%</b>
+          </div>
+        </div>
+      </TCard>
+      <TCard :bordered="false" class="metric-card">
+        <div class="metric-inner">
+          <span class="metric-icon" style="color: #ff9500"><DesktopOutline /></span>
+          <div class="metric-text">
+            <span class="metric-label">{{ t('dashboard.activeLeases') }}</span>
+            <b class="metric-value">{{ stats.activeLeases.toLocaleString('en-US') }}</b>
+          </div>
+        </div>
+      </TCard>
+      <TCard :bordered="false" class="metric-card">
+        <div class="metric-inner">
+          <span class="metric-icon" style="color: #34c759"><GridOutline /></span>
+          <div class="metric-text">
+            <span class="metric-label">{{ t('dashboard.ipamUsage') }}</span>
+            <b class="metric-value">{{ stats.ipamUsage }}%</b>
+          </div>
+        </div>
+      </TCard>
+    </div>
 
-    <NCard style="margin-top: 16px;" :title="t('dashboard.longTermStats')">
-      <template #header-extra>
-        <NRadioGroup v-model:value="statsRange" size="small" @update:value="loadLongTermStats">
-          <NRadioButton value="hour">{{ t('dashboard.rangeHour') }}</NRadioButton>
-          <NRadioButton value="day">{{ t('dashboard.rangeDay') }}</NRadioButton>
-          <NRadioButton value="week">{{ t('dashboard.rangeWeek') }}</NRadioButton>
-          <NRadioButton value="month">{{ t('dashboard.rangeMonth') }}</NRadioButton>
-          <NRadioButton value="year">{{ t('dashboard.rangeYear') }}</NRadioButton>
-        </NRadioGroup>
-      </template>
-      <NSpace v-if="ltStats" :size="24" style="margin-bottom: 8px;" :wrap="true">
-        <NStatistic :label="t('dashboard.statsTotal')" :value="ltStats.summary.total" />
-        <NStatistic :label="t('dashboard.statsNoError')" :value="ltStats.summary.noerror" />
-        <NStatistic :label="t('dashboard.statsNxDomain')" :value="ltStats.summary.nxdomain" />
-        <NStatistic :label="t('dashboard.statsServFail')" :value="ltStats.summary.servfail" />
-        <NStatistic :label="t('dashboard.statsRefused')" :value="ltStats.summary.refused" />
-        <NStatistic :label="t('dashboard.statsBlocked')" :value="ltStats.summary.blocked" />
-        <NStatistic :label="t('dashboard.statsCached')" :value="ltStats.summary.cached" />
-        <NStatistic :label="t('dashboard.statsClients')" :value="ltStats.summary.clients" />
-        <NStatistic :label="t('dashboard.statsAvgLatency')" :value="ltStats.summary.avg_response_ms.toFixed(1) + 'ms'" />
-      </NSpace>
-      <StatsTrendChart :stats="ltStats" />
-    </NCard>
-
-    <NGrid :cols="2" :x-gap="16" :y-gap="16" style="margin-top: 16px;" responsive="screen" item-responsive>
-      <NGi span="2 l:1">
-        <NCard :title="t('dashboard.queryChart')">
+    <div class="chart-grid">
+      <TCard :bordered="false" :title="t('dashboard.dnsQueryTrend')">
+        <TLoading :loading="!chartReady" size="small">
           <DashboardChart v-if="chartReady" :hours="chartData.hours" :queries="chartData.queries" />
-          <NSkeleton v-else :height="300" />
-        </NCard>
-      </NGi>
-      <NGi span="2 l:1">
-        <NCard :title="t('dashboard.recentEvents')">
-          <NDataTable :columns="eventColumns" :data="(recentEvents as any[])" :bordered="false" size="small" />
-        </NCard>
-      </NGi>
-    </NGrid>
+        </TLoading>
+      </TCard>
+      <TCard :bordered="false">
+        <template #title>
+          <div class="card-title-row">
+            <span>{{ t('dashboard.dnsStats') }}</span>
+            <TSelect v-model="statsRange" :options="statsRangeOptions" size="small" style="width: 130px" @change="loadLongTermStats" />
+          </div>
+        </template>
+        <StatsTrendChart :stats="ltStats" />
+      </TCard>
+    </div>
+
+    <div class="top-grid">
+      <TCard :bordered="false">
+        <template #title>
+          <div class="card-title-row">
+            <span>{{ t('dashboard.topStats') }}</span>
+            <TRadioGroup v-model="topRange" :options="topRangeOptions" size="small" variant="default-filled" @change="loadTop" />
+          </div>
+        </template>
+        <div class="top-columns">
+          <div>
+            <p class="top-title">{{ t('dashboard.topClients') }}</p>
+            <ul class="top-list">
+              <li v-for="(item, index) in topStats.top_clients" :key="index">
+                <span class="top-name">{{ item.name }}</span><span class="top-count">{{ item.count }}</span>
+              </li>
+              <li v-if="!topStats.top_clients.length" class="top-empty">—</li>
+            </ul>
+          </div>
+          <div>
+            <p class="top-title">{{ t('dashboard.topDomains') }}</p>
+            <ul class="top-list">
+              <li v-for="(item, index) in topStats.top_domains" :key="index">
+                <span class="top-name">{{ item.name }}</span><span class="top-count">{{ item.count }}</span>
+              </li>
+              <li v-if="!topStats.top_domains.length" class="top-empty">—</li>
+            </ul>
+          </div>
+          <div>
+            <p class="top-title">{{ t('dashboard.topBlocked') }}</p>
+            <ul class="top-list">
+              <li v-for="(item, index) in topStats.top_blocked" :key="index">
+                <span class="top-name">{{ item.name }}</span><span class="top-count">{{ item.count }}</span>
+              </li>
+              <li v-if="!topStats.top_blocked.length" class="top-empty">—</li>
+            </ul>
+          </div>
+        </div>
+      </TCard>
+
+      <TCard :bordered="false" :title="t('dashboard.rcodeDistribution')">
+        <div class="rcode-grid">
+          <div v-for="(value, key) in topStats.rcodes" :key="key" class="rcode-item">
+            <span class="rcode-label">{{ key }}</span>
+            <b class="rcode-value">{{ value }}</b>
+          </div>
+        </div>
+      </TCard>
+    </div>
+
+    <TCard :bordered="false" :title="t('dashboard.recentEvents')">
+      <TTable :columns="eventColumns" :data="recentEvents" row-key="created_at" size="small" stripe hover />
+    </TCard>
   </div>
 </template>
 
 <style scoped>
-.metric-card {
-  height: 100%;
-  min-height: 128px;
-  position: relative;
-  border-radius: 10px;
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-
-.metric-card :deep(.n-statistic__label), .metric-card :deep(.n-statistic-value) { margin-left: 56px; }
-.metric-card :deep(.n-statistic__label) { font-size: 13px; min-height: 40px; margin-bottom: 0; }
-.metric-card :deep(.n-statistic-value__content) { font-size: 28px; font-weight: 600; letter-spacing: -0.8px; }
-.metric-card :deep(.n-statistic-value__prefix) { position: absolute; left: 20px; top: 40px; margin: 0; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #0a84ff10; }
-
-.top-title { margin: 0 0 8px; font-size: 13px; color: #888; }
-.top-list { list-style: none; margin: 0; padding: 0; }
-.top-list li { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; border-bottom: 1px dashed rgba(128, 128, 128, 0.15); }
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.metric-grid,
+.chart-grid,
+.top-grid {
+  display: grid;
+  gap: 16px;
+}
+.metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.chart-grid,
+.top-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-grid, .top-grid { grid-template-columns: 1fr; }
+}
+.metric-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.metric-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.metric-icon :deep(svg) {
+  width: 24px;
+  height: 24px;
+  color: #fff;
+}
+.metric-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.metric-label {
+  font-size: 13px;
+  color: #6b7280;
+}
+.metric-value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.top-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.top-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #888;
+}
+.top-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.top-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed rgba(128, 128, 128, 0.15);
+}
 .top-list li:last-child { border-bottom: none; }
-.top-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; }
+.top-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 75%;
+}
 .top-count { font-weight: 600; }
+.top-empty { color: #9ca3af; }
+.rcode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.rcode-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.08);
+}
+.rcode-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+.rcode-value {
+  font-size: 20px;
+}
 </style>

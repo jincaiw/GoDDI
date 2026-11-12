@@ -71,7 +71,14 @@ func (h *UpdateHandler) HandleUpdate(msg *dns.Msg) (*dns.Msg, error) {
 
 // HandleUpdateFrom processes an RFC 2136 Dynamic DNS Update message from a
 // known client IP (used for IP-based update policies).
-func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Msg, error) {
+//
+// wireTSIGStatus, when supplied by the DNS listener, is that listener's
+// verification of the TSIG MAC against the raw wire bytes. It replaces the
+// handler's own re-packed verification: re-packing a compressed request
+// produces different bytes and makes a valid signature look bad. Callers
+// that pass it must ensure the listener was configured with the TSIG keys
+// and fail closed when it was not; a nil status then means "verified".
+func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string, wireTSIGStatus ...error) (*dns.Msg, error) {
 	if len(msg.Question) == 0 {
 		return h.makeResponse(msg, dns.RcodeFormatError), nil
 	}
@@ -115,10 +122,16 @@ func (h *UpdateHandler) HandleUpdateFrom(msg *dns.Msg, clientIP string) (*dns.Ms
 		slog.Warn("dynamic_update: unknown TSIG key", "key", tsig.Hdr.Name)
 		return h.makeResponse(msg, dns.RcodeRefused), nil
 	}
-	// Re-pack the message into wire format. The TSIG MAC is computed over
-	// the message bytes (with the TSIG RR stripped and the TSIG variables
-	// appended), which is exactly what dns.TsigVerify handles internally.
-	if err := h.verifyTSIG(msg, secret); err != nil {
+	// Prefer the listener's verification of the raw wire bytes. When no
+	// status was supplied (direct callers, tests, HandleUpdate), fall back
+	// to verifying a re-packed message, which is only reliable for
+	// uncompressed requests.
+	if len(wireTSIGStatus) > 0 {
+		if err := wireTSIGStatus[0]; err != nil {
+			slog.Warn("dynamic_update: listener TSIG verification failed", "key", tsig.Hdr.Name, "error", err)
+			return h.makeResponse(msg, dns.RcodeRefused), nil
+		}
+	} else if err := h.verifyTSIG(msg, secret); err != nil {
 		slog.Warn("dynamic_update: TSIG verification failed", "key", tsig.Hdr.Name, "error", err)
 		return h.makeResponse(msg, dns.RcodeRefused), nil
 	}

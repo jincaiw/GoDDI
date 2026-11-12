@@ -20,20 +20,11 @@ import (
 // Callers provide the event identity and IPAM space ID; the authoritative
 // lease update, sequence allocation, envelope construction, and durable
 // outbox insert are committed together.
-//
-// DNSMutationSink is the optional compatibility bridge for the legacy DNS
-// outbox. Implementations must write through the supplied transaction; they
-// must not commit it. Keeping the interface here avoids making the migration
-// seam depend on the DHCP package.
-type DNSMutationSink interface {
-	EnqueueTx(tx *sql.Tx, l *Lease, action DNSMutationAction) error
-}
 
 type FactsMutationWriter struct {
 	manager    *Manager
 	allocator  *facts.SequenceAllocator
 	outbox     *facts.ObservationOutbox
-	dns        DNSMutationSink
 	postCommit func()
 }
 
@@ -54,15 +45,6 @@ func NewFactsMutationWriter(manager *Manager, allocator *facts.SequenceAllocator
 		return nil, errors.New("lease facts mutation: observation outbox and lease manager must share a database")
 	}
 	return &FactsMutationWriter{manager: manager, allocator: allocator, outbox: outbox}, nil
-}
-
-// WithDNSSink enables the legacy DNS outbox compatibility write. It remains
-// opt-in and is applied in the same transaction as the lease and facts event.
-func (w *FactsMutationWriter) WithDNSSink(sink DNSMutationSink) *FactsMutationWriter {
-	if w != nil {
-		w.dns = sink
-	}
-	return w
 }
 
 // WithPostCommitWake installs an optional non-blocking notification invoked
@@ -588,16 +570,6 @@ func (w *FactsMutationWriter) enqueueMutationFact(ctx context.Context, tx *sql.T
 	}
 	if err := w.outbox.EnqueueTx(ctx, tx, event); err != nil {
 		return fmt.Errorf("lease facts mutation: enqueue %s: %w", eventID, err)
-	}
-	if w.dns != nil {
-		action := DNSActionUpsert
-		switch command.Kind {
-		case MutationRelease, MutationDecline, MutationExpire:
-			action = DNSActionDelete
-		}
-		if err := w.dns.EnqueueTx(tx, command.After, action); err != nil {
-			return fmt.Errorf("lease facts mutation: enqueue legacy dns %s: %w", eventID, err)
-		}
 	}
 	return nil
 }

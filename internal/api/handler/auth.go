@@ -630,13 +630,17 @@ func (h *Handlers) ListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions, err := h.sessMgr.ListUserSessions(userID)
+	// Every login leaves a session behind, so this list can grow into the
+	// thousands. Read one page at a time instead of shipping the whole table
+	// to the browser; meta.total keeps the pager honest.
+	page, pageSize := response.ParsePagination(r)
+	sessions, total, err := h.sessMgr.ListUserSessionsPaged(userID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		response.InternalError(w, "查询会话失败")
 		return
 	}
 
-	response.OK(w, sessions)
+	response.OKPaginated(w, sessions, total, page, pageSize)
 }
 
 // DeleteSession handles DELETE /api/v1/auth/sessions/{id}

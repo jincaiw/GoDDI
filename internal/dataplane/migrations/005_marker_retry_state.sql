@@ -65,10 +65,6 @@ ALTER TABLE dhcp_lease_dirty     ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE dhcp_lease_dirty     ADD COLUMN next_attempt_at DATETIME;
 ALTER TABLE dhcp_lease_dirty     ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
 
-ALTER TABLE dhcp_dns_event_dirty ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE dhcp_dns_event_dirty ADD COLUMN next_attempt_at DATETIME;
-ALTER TABLE dhcp_dns_event_dirty ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
-
 ALTER TABLE dhcp_log_dirty       ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE dhcp_log_dirty       ADD COLUMN next_attempt_at DATETIME;
 ALTER TABLE dhcp_log_dirty       ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
@@ -101,10 +97,6 @@ ALTER TABLE dns_record_dirty     DROP COLUMN attempts;
 ALTER TABLE dhcp_log_dirty       DROP COLUMN last_error;
 ALTER TABLE dhcp_log_dirty       DROP COLUMN next_attempt_at;
 ALTER TABLE dhcp_log_dirty       DROP COLUMN attempts;
-
-ALTER TABLE dhcp_dns_event_dirty DROP COLUMN last_error;
-ALTER TABLE dhcp_dns_event_dirty DROP COLUMN next_attempt_at;
-ALTER TABLE dhcp_dns_event_dirty DROP COLUMN attempts;
 
 ALTER TABLE dhcp_lease_dirty     DROP COLUMN last_error;
 ALTER TABLE dhcp_lease_dirty     DROP COLUMN next_attempt_at;

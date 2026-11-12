@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -15,22 +16,24 @@ import (
 
 // Config represents the complete application configuration.
 type Config struct {
-	Server     ServerConfig     `yaml:"server" validate:"required"`
-	Database   DatabaseConfig   `yaml:"database" validate:"required"`
-	DataPlane  DataPlaneConfig  `yaml:"dataplane"`
-	DNS        DNSConfig        `yaml:"dns"`
-	Cache      CacheConfig      `yaml:"cache"`
-	Forwarders ForwardersConfig `yaml:"forwarders"`
-	DHCP       DHCPConfig       `yaml:"dhcp"`
-	IPAM       IPAMConfig       `yaml:"ipam"`
-	Security   SecurityConfig   `yaml:"security"`
-	Proxy      ProxyConfig      `yaml:"proxy"`
-	Metrics    MetricsConfig    `yaml:"metrics"`
-	Log        LogConfig        `yaml:"log"`
-	SSO        SSOConfig        `yaml:"sso"`
-	Cluster    ClusterConfig    `yaml:"cluster"`
-	Plugin     PluginConfig     `yaml:"plugin"`
-	DHCPHA     DHCPHAConfig     `yaml:"dhcp_ha"`
+	editionFileEnterprise bool
+	editionFileInvalid    bool
+	Server                ServerConfig     `yaml:"server" validate:"required"`
+	Database              DatabaseConfig   `yaml:"database" validate:"required"`
+	DataPlane             DataPlaneConfig  `yaml:"dataplane"`
+	DNS                   DNSConfig        `yaml:"dns"`
+	Cache                 CacheConfig      `yaml:"cache"`
+	Forwarders            ForwardersConfig `yaml:"forwarders"`
+	DHCP                  DHCPConfig       `yaml:"dhcp"`
+	IPAM                  IPAMConfig       `yaml:"ipam"`
+	Security              SecurityConfig   `yaml:"security"`
+	Proxy                 ProxyConfig      `yaml:"proxy"`
+	Metrics               MetricsConfig    `yaml:"metrics"`
+	Log                   LogConfig        `yaml:"log"`
+	SSO                   SSOConfig        `yaml:"sso"`
+	Cluster               ClusterConfig    `yaml:"cluster"`
+	Plugin                PluginConfig     `yaml:"plugin"`
+	DHCPHA                DHCPHAConfig     `yaml:"dhcp_ha"`
 
 	// Env is the deployment's own declaration of what it is. Only the exact
 	// value "production" changes behaviour, and only to tighten it: it is what
@@ -82,6 +85,8 @@ type ServerConfig struct {
 	// Role selects which planes this process runs. Empty means "all", which
 	// is the single-process deployment every existing installation has.
 	Role string `yaml:"role" validate:"omitempty,oneof=all control dns dhcp"`
+	// Edition is a temporary fail-closed deployment selector, not authority.
+	Edition string `yaml:"edition" validate:"oneof=legacy enterprise"`
 	// ExposeOpenAPI controls whether /api/v1/openapi.json is served.
 	// It defaults to true (the schema contains no secrets and the web
 	// console tooling uses it); set it to false on hardened deployments
@@ -205,6 +210,13 @@ type ForwarderServer struct {
 	Address  string `yaml:"address"`
 }
 
+// RENEWING out-of-pool policies. The default preserves the historical
+// static-host renewal behaviour; see DHCPConfig.RenewOutOfPoolPolicy.
+const (
+	RenewOutOfPoolAllow               = "allow"
+	RenewOutOfPoolExistingBindingOnly = "existing-binding-only"
+)
+
 // DHCPConfig holds DHCP service configuration.
 type DHCPConfig struct {
 	Enabled    bool     `yaml:"enabled"`
@@ -217,6 +229,28 @@ type DHCPConfig struct {
 	// stop nobody who had decided to lie. A relay is a device the operator
 	// owns, and its giaddr reaches the server only if it sent the packet.
 	TrustedRelayCIDRs []string `yaml:"trusted_relay_cidrs"`
+	// RenewOutOfPoolPolicy governs a RENEWING/REBINDING request for an
+	// in-subnet address that lies OUTSIDE the scope's pool and has no existing
+	// binding. Historically the server confirmed such a binding so a
+	// statically configured host could renew; that also lets any client claim
+	// an address the pool never allocated.
+	//
+	//   "allow" (default)             - keep the historical behaviour.
+	//   "existing-binding-only"       - NAK unless a matching held lease or an
+	//                                  operator-created reservation exists.
+	//
+	// In-pool renewals, infrastructure-address rejection and the HA ACK gate
+	// are unchanged by this setting.
+	RenewOutOfPoolPolicy string `yaml:"renew_out_of_pool_policy" validate:"omitempty,oneof=allow existing-binding-only"`
+
+	// LeaseStore selects the DHCP lease hot-path store. "sqlite" (default)
+	// keeps the synchronous *lease.Manager. "wal" uses the event-sourced
+	// WALLeaseStore: MemoryIndex authority, WAL durable boundary, asynchronous
+	// SQLite projection, and facts derived from the same WAL event.
+	LeaseStore string `yaml:"lease_store" validate:"omitempty,oneof=sqlite wal"`
+	// LeaseWALPath is the WAL file for lease_store=wal. Defaults to
+	// <server.data_dir>/leases.wal.
+	LeaseWALPath string `yaml:"lease_wal_path"`
 }
 
 // IPAMConfig holds IPAM configuration.
@@ -278,13 +312,44 @@ func LoadFromYAML(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
 
+	// Decode to a map so yaml.v3 resolves aliases and merge precedence before
+	// inspecting the effective edition. A null value must not silently leave the
+	// default legacy string in place. The full strict decode still follows.
+	var editionProbe struct {
+		Server map[string]yaml.Node `yaml:"server"`
+	}
+	if err := yaml.Unmarshal(data, &editionProbe); err != nil {
+		return nil, fmt.Errorf("parsing config file %s: %w", path, err)
+	}
+	if node, present := editionProbe.Server["edition"]; present {
+		current := &node
+		for depth := 0; current.Kind == yaml.AliasNode; depth++ {
+			if depth >= 128 || current.Alias == nil {
+				return nil, fmt.Errorf("invalid server.edition alias")
+			}
+			current = current.Alias
+		}
+		if current.Tag != "!!str" {
+			return nil, fmt.Errorf("server.edition must be a string")
+		}
+	}
 	cfg := DefaultConfig()
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parsing config file %s: %w", path, err)
 	}
+	// A second document, even an empty one, must not hide configuration.
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return nil, fmt.Errorf("parsing config file %s: %w", path, err)
+		}
+		return nil, fmt.Errorf("parsing config file %s: multiple YAML documents are not supported", path)
+	}
 
+	cfg.editionFileEnterprise = cfg.Server.Edition == "enterprise"
+	cfg.editionFileInvalid = cfg.Server.Edition != "legacy" && cfg.Server.Edition != "enterprise"
 	return cfg, nil
 }
 
@@ -292,6 +357,13 @@ func LoadFromYAML(path string) (*Config, error) {
 // Environment variables use the prefix GODDI_ with underscore-separated paths.
 // For example: GODDI_SERVER_HTTP_ADDR, GODDI_DATABASE_DRIVER, GODDI_DNS_ENABLED
 func ApplyEnvOverrides(cfg *Config) {
+	if edition, ok := os.LookupEnv("GODDI_SERVER_EDITION"); ok {
+		if cfg.editionFileEnterprise && edition == "legacy" {
+			cfg.Server.Edition = "enterprise-env-conflict"
+		} else {
+			cfg.Server.Edition = edition
+		}
+	}
 	setEnvString("GODDI_ENV", &cfg.Env)
 	setEnvString("GODDI_SERVER_NAME", &cfg.Server.Name)
 	setEnvString("GODDI_SERVER_HTTP_ADDR", &cfg.Server.HTTPAddr)
@@ -328,6 +400,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvInt("GODDI_CACHE_MAX_ENTRIES", &cfg.Cache.MaxEntries)
 
 	setEnvBool("GODDI_DHCP_ENABLED", &cfg.DHCP.Enabled)
+	setEnvString("GODDI_DHCP_RENEW_OUT_OF_POOL_POLICY", &cfg.DHCP.RenewOutOfPoolPolicy)
+	setEnvString("GODDI_DHCP_LEASE_STORE", &cfg.DHCP.LeaseStore)
+	setEnvString("GODDI_DHCP_LEASE_WAL_PATH", &cfg.DHCP.LeaseWALPath)
 
 	// The HA peer token is a shared secret, so it is read from the environment
 	// as well as from the file. Every other dhcp_ha setting is deployment
@@ -361,8 +436,19 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvInt("GODDI_LOG_RETENTION_DAYS", &cfg.Log.RetentionDays)
 }
 
+// ValidateEdition rejects invalid or conflicting selectors without inferring authority.
+func ValidateEdition(cfg *Config) error {
+	if cfg == nil || cfg.editionFileInvalid || (cfg.Server.Edition != "legacy" && cfg.Server.Edition != "enterprise") {
+		return fmt.Errorf("invalid or conflicting server.edition")
+	}
+	return nil
+}
+
 // Validate validates the configuration using go-playground/validator.
 func Validate(cfg *Config) error {
+	if err := ValidateEdition(cfg); err != nil {
+		return err
+	}
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
@@ -470,6 +556,7 @@ func Validate(cfg *Config) error {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
+			Edition:   "legacy",
 			Name:      "GoDDI",
 			HTTPAddr:  ":6080",
 			PublicURL: "http://localhost:6080",
@@ -534,8 +621,9 @@ func DefaultConfig() *Config {
 			},
 		},
 		DHCP: DHCPConfig{
-			Enabled:    true,
-			Interfaces: []string{},
+			Enabled:              true,
+			Interfaces:           []string{},
+			RenewOutOfPoolPolicy: RenewOutOfPoolAllow,
 		},
 		IPAM: IPAMConfig{
 			PingCheck:    true,

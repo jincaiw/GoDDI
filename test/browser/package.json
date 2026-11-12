@@ -1,0 +1,12 @@
+{
+  "name": "goddi-browser-regression",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright regression suites for the GoDDI TDesign management UI (run against an isolated server only).",
+  "scripts": {
+    "test": "./run.sh"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

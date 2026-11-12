@@ -1,130 +1,162 @@
 <script setup lang="ts">
-import { ref, computed, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { listSessions, deleteSession, type SessionInfo } from '@/service/api/goddi/auth'
-import { useAuthStore } from '@/store/modules/auth'
+import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
+import type { PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { deleteSession, listSessions, type SessionInfo } from '@/service/api/goddi/auth';
+import { useAuthStore } from '@/store/modules/auth';
 
-const { t, locale } = useI18n()
-const message = useMessage()
-const authStore = useAuthStore()
+defineOptions({ name: 'AdminSessionsPage' });
 
-const loading = ref(false)
-const revokingOthers = ref(false)
-const sessions = ref<SessionInfo[]>([])
-const showRevokeConfirm = ref(false)
-const showRevokeOthersConfirm = ref(false)
-const revokingId = ref('')
+const { t, locale } = useI18n();
+const authStore = useAuthStore();
+
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const revokingOthers = ref(false);
 
 function formatTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString(locale.value, {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  })
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
 }
 
 function isCurrentSession(row: SessionInfo) {
-  return row.user_id === authStore.userInfo.userId
+  return row.user_id === authStore.userInfo.userId;
 }
 
-const columns = computed(() => [
-  { title: () => t('sessions.sessionId'), key: 'id', width: 260, ellipsis: { tooltip: true } },
+const columns = computed<PrimaryTableCol[]>(() => [
+  { colKey: 'id', title: t('sessions.sessionId'), width: 260, ellipsis: true },
   {
-    title: () => t('sessions.user'), key: 'user_id', width: 140,
-    render: (row: SessionInfo) => h(NTag, { size: 'small', type: isCurrentSession(row) ? 'info' : 'success', bordered: false }, {
-      default: () => (isCurrentSession(row) ? authStore.userInfo.userName || row.user_id : row.user_id),
-    }),
+    colKey: 'user_id',
+    title: t('sessions.user'),
+    width: 150,
+    cell: (h, { row }) => {
+      const r = row as SessionInfo;
+      return h(TTag, { size: 'small', theme: isCurrentSession(r) ? 'primary' : 'success', variant: 'light' }, () =>
+        isCurrentSession(r) ? authStore.userInfo.userName || r.user_id : r.user_id
+      );
+    }
   },
-  { title: () => t('sessions.ip'), key: 'ip', width: 150 },
-  { title: () => t('sessions.createdAt'), key: 'created_at', width: 170, render: (row: SessionInfo) => formatTime(row.created_at) },
-  { title: () => t('sessions.expiresAt'), key: 'expires_at', width: 170, render: (row: SessionInfo) => formatTime(row.expires_at) },
+  { colKey: 'ip_address', title: t('sessions.ip'), width: 150 },
   {
-    title: () => t('common.actions'), key: 'actions', width: 100,
-    render: (row: SessionInfo) => h(NSpace, null, {
-      default: () => [
-        h(NButton, { size: 'small', text: true, type: 'error', quaternary: true, onClick: () => { revokingId.value = row.id; showRevokeConfirm.value = true } }, { default: () => t('sessions.revoke') }),
-      ],
-    }),
+    colKey: 'created_at',
+    title: t('sessions.createdAt'),
+    width: 180,
+    cell: (_h, { row }) => formatTime((row as SessionInfo).created_at)
   },
-])
-
-async function loadData() {
-  loading.value = true
-  try {
-    sessions.value = await listSessions()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    loading.value = false
+  {
+    colKey: 'expires_at',
+    title: t('sessions.expiresAt'),
+    width: 180,
+    cell: (_h, { row }) => formatTime((row as SessionInfo).expires_at)
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(TLink, { theme: 'danger', onClick: () => confirmRevoke((row as SessionInfo).id) }, () => t('sessions.revoke'))
   }
+]);
+
+/** The backend lists sessions one page at a time; the total drives the pager. */
+async function fetchSessions(params: Record<string, unknown>) {
+  const result = await listSessions(params);
+  return { data: result.data, meta: { total: result.meta.total } };
 }
 
-async function handleRevoke() {
-  try {
-    await deleteSession(revokingId.value)
-    message.success(t('sessions.revokeSuccess'))
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  }
-  showRevokeConfirm.value = false
-}
-
-async function handleRevokeOthers() {
-  revokingOthers.value = true
-  try {
-    // Keep the most recently created session (assumed to be the current one).
-    const sorted = [...sessions.value].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    const keepId = sorted[0]?.id
-    const targets = sessions.value.filter((s) => s.id !== keepId)
-    for (const target of targets) {
+function confirmRevoke(id: string) {
+  const dlg = DialogPlugin.confirm({
+    header: t('sessions.revoke'),
+    body: t('sessions.revokeConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
       try {
-        await deleteSession(target.id)
-      } catch {
-        // Continue revoking the remaining sessions
+        await deleteSession(id);
+        void MessagePlugin.success(t('sessions.revokeSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+      }
+      dlg.hide();
+    }
+  });
+}
+
+function confirmRevokeOthers() {
+  const dlg = DialogPlugin.confirm({
+    header: t('sessions.revokeOthers'),
+    body: t('sessions.revokeOthersConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      revokingOthers.value = true;
+      try {
+        // Keep the most recently created session (assumed to be the current one).
+        // The list is paged server-side now, so walk every page: a person
+        // clicking "revoke others" means all of them, not just the first page.
+        const all: SessionInfo[] = [];
+        const pageSize = 100;
+        for (let page = 1; ; page += 1) {
+          const result = await listSessions({ page, page_size: pageSize });
+          all.push(...result.data);
+          if (result.data.length < pageSize || all.length >= result.meta.total) break;
+        }
+        const sorted = [...all].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const keepId = sorted[0]?.id;
+        for (const target of all.filter(s => s.id !== keepId)) {
+          try {
+            await deleteSession(target.id);
+          } catch {
+            // Continue revoking the remaining sessions.
+          }
+        }
+        void MessagePlugin.success(t('sessions.revokeSuccess'));
+        await tableRef.value?.reload();
+      } finally {
+        revokingOthers.value = false;
+        dlg.hide();
       }
     }
-    message.success(t('sessions.revokeSuccess'))
-    loadData()
-  } finally {
-    revokingOthers.value = false
-    showRevokeOthersConfirm.value = false
-  }
+  });
 }
-
-onMounted(loadData)
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('sessions.title')">
-      <NButton type="primary" :loading="revokingOthers" @click="showRevokeOthersConfirm = true">
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('sessions.title') }}</h2>
+      <TButton theme="primary" :loading="revokingOthers" @click="confirmRevokeOthers">
         {{ t('sessions.revokeOthers') }}
-      </NButton>
-    </PageHeader>
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="sessions"
-      :loading="loading"
-      :row-key="(row: SessionInfo) => row.id"
-    />
-
-    <ConfirmDialog
-      :show="showRevokeConfirm"
-      :message="t('sessions.revokeConfirm')"
-      @confirm="handleRevoke"
-      @cancel="showRevokeConfirm = false"
-    />
-    <ConfirmDialog
-      :show="showRevokeOthersConfirm"
-      :message="t('sessions.revokeOthersConfirm')"
-      @confirm="handleRevokeOthers"
-      @cancel="showRevokeOthersConfirm = false"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="fetchSessions" />
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+</style>

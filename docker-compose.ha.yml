@@ -1,0 +1,97 @@
+# Containerized two-node DHCP HA exercise (round 246).
+#
+# Two goddi containers on a private bridge network, each with its own data
+# directory and its own network namespace -- the mirror link between them is
+# real cross-container TCP, and every failure below (stop / restart /
+# disconnect) is injectable with plain docker commands.
+#
+#   docker compose -f docker-compose.ha.yml up -d
+#   docker compose -f docker-compose.ha.yml logs -f goddi-primary
+#
+# Positioning (honest): this is a containerized two-node HA exercise. It is a
+# stronger evidence tier than the single-host two-process run (ledger §1c) --
+# separate network namespaces, separate data, real cross-container TCP -- but
+# it is NOT B8.5 acceptance: same host kernel and disk, no physical power loss,
+# no fencing/witness trust domain, no real DHCP broadcast client.
+#
+# Shared peer token (>=16 chars, validated fail-closed at startup).
+x-ha-common: &ha-common
+  GODDI_SECURITY_JWT_SECRET: "ha-exercise-jwt-secret-not-for-production"
+  GODDI_ADMIN_USERNAME: "admin"
+  GODDI_ADMIN_PASSWORD: "AdminPass-0123456789"
+  GODDI_SERVER_DATA_DIR: /var/lib/goddi
+  GODDI_DATABASE_DSN: /var/lib/goddi/goddi.db
+  GODDI_LOG_LEVEL: info
+  GODDI_DHCP_HA_ENABLED: "true"
+  GODDI_DHCP_HA_PEER_TOKEN: "ha-exercise-peer-token-0123456789"
+  GODDI_DHCP_HA_CONFIRM_TIMEOUT: "1s"
+  GODDI_DHCP_HA_HEARTBEAT_INTERVAL: "2s"
+  GODDI_DHCP_HA_PEER_STALE_AFTER: "5s"
+
+services:
+  goddi-primary:
+    image: goddi:ha
+    container_name: goddi-primary
+    hostname: ha-node-a
+    networks: [ha-net]
+    volumes:
+      - primary-data:/var/lib/goddi
+    environment:
+      <<: *ha-common
+      GODDI_DHCP_HA_NODE_ID: "ha-node-a"
+      GODDI_DHCP_HA_ROLE: "primary"
+      GODDI_DHCP_HA_LISTEN_ADDR: ":9953"
+      GODDI_DHCP_HA_PEER_ADDRESS: "goddi-standby:9953"
+    ports:
+      - "18081:6080"   # primary management API/metrics
+      - "15354:53/udp" # primary DNS
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:6080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  goddi-standby:
+    image: goddi:ha
+    container_name: goddi-standby
+    hostname: ha-node-b
+    networks: [ha-net]
+    volumes:
+      - standby-data:/var/lib/goddi
+    environment:
+      <<: *ha-common
+      GODDI_DHCP_HA_NODE_ID: "ha-node-b"
+      GODDI_DHCP_HA_ROLE: "standby"
+      GODDI_DHCP_HA_LISTEN_ADDR: ":9953"
+      GODDI_DHCP_HA_PEER_ADDRESS: "goddi-primary:9953"
+    ports:
+      - "18082:6080"   # standby management API/metrics
+      - "15355:53/udp" # standby DNS
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:6080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # A DHCP client on the same bridge: broadcast DISCOVER reaches the primary
+  # (the standby never serves). udhcpc keeps renewing, which drives DORA +
+  # RENEWING through the real packet path.
+  dhclient:
+    image: alpine:3.24  # already local: registry pulls are flaky from this sandbox
+    container_name: ha-dhclient
+    hostname: ha-client
+    networks: [ha-net]
+    command: >
+      sh -c "apk add -q busybox-extras >/dev/null 2>&1;
+             udhcpc -i eth0 -s /usr/share/udhcpc/default.script -t 20 -T 3 -b -q;
+             sleep 3600"
+    cap_add: [NET_RAW, NET_ADMIN]
+
+networks:
+  ha-net:
+    name: ha-net
+    driver: bridge
+
+volumes:
+  primary-data:
+  standby-data:

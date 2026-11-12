@@ -87,8 +87,7 @@ func TestADisabledBoundIsNotChecked(t *testing.T) {
 		t.Fatalf("an all-zero quota reports Enabled; zero is documented as off")
 	}
 	if breaches := q.Check(store, Status{
-		HeldLeases:       held,
-		PendingDNSEvents: 1 << 20,
+		HeldLeases: held,
 	}); breaches != nil {
 		t.Errorf("breaches = %v, want none for a disabled quota", breaches)
 	}
@@ -105,19 +104,18 @@ func TestQuotaBreachesAreReportedInAFixedOrder(t *testing.T) {
 	st := Status{
 		HeldLeases:          3,
 		PendingLeaseChanges: 6,
-		PendingDNSEvents:    5,
 		PendingDHCPLogs:     4,
 		PendingRecords:      3,
 		PendingZoneSerials:  2,
 	}
 
 	first := q.Check(store, st)
-	if len(first) != 6 {
-		t.Fatalf("breaches = %v, want six (leases plus five queues)", first)
+	if len(first) != 5 {
+		t.Fatalf("breaches = %v, want five (leases plus four queues)", first)
 	}
 	want := []string{
 		"leases=3/1",
-		"lease_changes=6/1", "dns_events=5/1", "dhcp_logs=4/1", "records=3/1", "zone_serials=2/1",
+		"lease_changes=6/1", "dhcp_logs=4/1", "records=3/1", "zone_serials=2/1",
 	}
 	for i, b := range first {
 		if b.String() != want[i] {

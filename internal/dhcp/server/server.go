@@ -19,6 +19,7 @@ import (
 	"github.com/jasonwa/goddi/internal/dhcp/scope"
 	"github.com/jasonwa/goddi/internal/metrics"
 
+	"github.com/jasonwa/goddi/internal/config"
 	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
 )
 
@@ -28,7 +29,6 @@ type Server struct {
 	leaseMgr    LeaseStore
 	reservMgr   *reservation.Manager
 	optionMgr   *option.Manager
-	outbox      *dhcpinternal.DNSOutbox
 	eventLogger *dhcpinternal.EventLogger
 
 	interfaces []string
@@ -43,6 +43,11 @@ type Server struct {
 	relayAllowListBroken bool
 	listeners            []net.PacketConn
 	serverIPs            map[string]net.IP // interface -> server IP
+
+	// renewOutOfPoolPolicy is set from config.DHCPConfig.RenewOutOfPoolPolicy.
+	// The zero value is "allow", which is also the configured default, so a
+	// Server built without the setter keeps the historical behaviour.
+	renewOutOfPoolPolicy string
 
 	// request admission is deliberately bounded: a slow lease database must not
 	// let an unbounded number of packets accumulate in memory. A full queue
@@ -75,11 +80,6 @@ type Server struct {
 	// startupGate is optional. When configured, Start must complete recovery
 	// before binding UDP :67. The default constructor leaves it nil.
 	startupGate StartupGate
-
-	// outboxWake is told that a DNS change was just queued, so the store's
-	// replication loop can push it without waiting for its next poll. Optional:
-	// unset means the entry waits for the poll, which is correct and slower.
-	outboxWake func()
 
 	// releaseFacts is nil by default. When configured, RELEASE is routed
 	// exclusively through the facts caller; a facts failure never falls back to
@@ -161,9 +161,6 @@ type LeaseFactsMutationConfig struct {
 	Caller         LeaseFactsMutationCaller
 	Source         string
 	ResolveSpaceID func(scopeID, ip string) (string, error)
-	// DNSOutboxAtomic means the caller writes the legacy DNS outbox through the
-	// lease transaction, so request handlers must not enqueue it a second time.
-	DNSOutboxAtomic bool
 }
 
 // SetLeaseObserver installs the observer. It is called once during wiring.
@@ -185,7 +182,6 @@ func (s *Server) ReleaseLeaseFromManagement(id string) error {
 		return err
 	}
 	var released *lease.Lease
-	dnsAtomic := false
 	if cfg, spaceID, ok, err := s.resolveLeaseFactSpace(before.ScopeID, before.IPAddress); err != nil {
 		return err
 	} else if ok {
@@ -196,7 +192,6 @@ func (s *Server) ReleaseLeaseFromManagement(id string) error {
 		if released == nil {
 			return errors.New("dhcp lease facts mutation: caller returned no released lease")
 		}
-		dnsAtomic = cfg.DNSOutboxAtomic
 	} else {
 		if err := s.leaseMgr.ReleaseLease(id); err != nil {
 			return err
@@ -209,11 +204,6 @@ func (s *Server) ReleaseLeaseFromManagement(id string) error {
 		}
 	}
 	s.replicateLeaseState(released)
-	if scope, err := s.scopeMgr.GetScope(before.ScopeID); err == nil && scope.DNSUpdates && !dnsAtomic {
-		if err := s.enqueueDNSEvent(before, dhcpinternal.DNSEventDelete); err != nil {
-			slog.Error("DHCP management: failed to queue DNS teardown", "lease_id", id, "error", err)
-		}
-	}
 	s.observeLease(LeaseObservedRelease, released)
 	return nil
 }
@@ -375,7 +365,7 @@ type dhcpRequest struct {
 // New creates a new DHCP server.
 //
 // Everything the request path touches -- scopes, leases, reservations, options,
-// the DNS outbox and the event log -- is read and written through one database,
+// the event log -- is read and written through one database,
 // the data plane's own. The client's reply therefore depends on one file the
 // data plane owns, and not on a control-plane database that another process is
 // free to restart.
@@ -405,7 +395,6 @@ func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, e
 		leaseMgr:     store,
 		reservMgr:    reservation.NewManager(leaseDB),
 		optionMgr:    option.NewManager(leaseDB),
-		outbox:       dhcpinternal.NewDNSOutbox(leaseDB),
 		eventLogger:  eventLogger,
 		interfaces:   interfaces,
 		serverIPs:    make(map[string]net.IP),
@@ -437,6 +426,30 @@ func (s *Server) SetStartupGate(gate StartupGate) {
 		return
 	}
 	s.startupGate = gate
+}
+
+// SetRenewOutOfPoolPolicy selects how a RENEWING/REBINDING request for an
+// unbound, out-of-pool address is answered. Only the two values declared by
+// config are accepted; anything else is treated as the safe historical
+// default and logged, so a typo can never silently tighten or loosen the
+// policy.
+func (s *Server) SetRenewOutOfPoolPolicy(policy string) {
+	switch policy {
+	case "", config.RenewOutOfPoolAllow, config.RenewOutOfPoolExistingBindingOnly:
+		if policy == "" {
+			policy = config.RenewOutOfPoolAllow
+		}
+		s.renewOutOfPoolPolicy = policy
+	default:
+		slog.Warn("DHCP: unknown renew_out_of_pool_policy; keeping the historical allow behaviour", "policy", policy)
+		s.renewOutOfPoolPolicy = config.RenewOutOfPoolAllow
+	}
+}
+
+// strictOutOfPoolRenewal reports whether the operator asked to refuse
+// RENEWING claims for addresses the pool never allocated.
+func (s *Server) strictOutOfPoolRenewal() bool {
+	return s.renewOutOfPoolPolicy == config.RenewOutOfPoolExistingBindingOnly
 }
 
 // SetTrustedRelays restricts relayed requests to relay agents inside the given
@@ -554,7 +567,12 @@ func (s *Server) Start(ctx context.Context) error {
 	primaryIP := net.IPv4zero
 	for _, ifaceName := range ifaces {
 		if err := s.registerInterfaceServerIP(ifaceName); err != nil {
-			slog.Error("DHCP server: skipping interface", "interface", ifaceName, "error", err)
+			// A machine normally has interfaces without an IPv4 address with
+			// auto-detection (loopback, unused NICs, virtual adapters). That is
+			// an expected skip, not a server error: logging it at ERROR makes
+			// a healthy deployment look failed. Only the caller that could not
+			// bind/listen at all returns an error.
+			slog.Warn("DHCP server: skipping interface without a usable IPv4 address", "interface", ifaceName, "error", err)
 			continue
 		}
 		serverIP := s.serverIPs[ifaceName]
@@ -910,7 +928,6 @@ func (s *Server) sweepExpiredLeases(reason string) {
 		slog.Error("DHCP server: failed to expire leases", "reason", reason, "error", err)
 		return
 	}
-	queued := 0
 	for _, l := range swept {
 		// Every swept lease stopped being held, whether or not it ever had a
 		// name. The observation is what takes the address out of the "in use"
@@ -926,76 +943,9 @@ func (s *Server) sweepExpiredLeases(reason string) {
 		expired.Status = lease.LeaseStatusExpired
 		s.replicateLeaseState(&expired)
 
-		if l.Status != lease.LeaseStatusActive || l.Hostname == "" {
-			continue
-		}
-		if cfg, _, ok, resolveErr := s.resolveLeaseFactSpace(l.ScopeID, l.IPAddress); resolveErr == nil && ok && cfg.DNSOutboxAtomic {
-			continue
-		}
-		if err := s.enqueueDNSEvent(l, dhcpinternal.DNSEventDelete); err != nil {
-			slog.Error("DHCP server: failed to queue DNS teardown for expired lease",
-				"lease_id", l.ID, "error", err)
-			continue
-		}
-		queued++
 	}
-	if queued > 0 {
-		slog.Info("DHCP server: queued DNS teardown for expired leases",
-			"reason", reason, "count", queued)
-	}
+	_ = reason
 }
-
-// enqueueDNSEvent records a DNS change owed by a lease.
-//
-// The row is written before the DHCP reply is returned, so the intent is
-// durable by the time the client is told it may use the address. It is not in
-// the same transaction as the lease write — that would require threading a
-// transaction through the lease manager, which belongs with the data-plane
-// split — so a crash in the gap leaves a binding with no event; the reconciler
-// covers exactly that case.
-//
-// Which wake-up can be sent, and which cannot:
-//
-//   - The consumer cannot be woken. The entry is applied by the plane that
-//     writes the records, and in a split deployment that is another process on
-//     another file system. It has no channel to this one, and the only way it
-//     learns of the entry is that this store's replication pushes it and the
-//     other side pulls it. A channel here would signal a process that cannot
-//     see the row yet.
-//   - This process's own outbox push can be woken, and is. The row is
-//     committed here, in a store this process owns, and the push is a loop this
-//     process runs. Without the signal the row waits for the poll interval,
-//     which is one of the two intervals between a confirmed binding and a
-//     resolvable name; with it, the only wait left on this side is the push
-//     itself.
-func (s *Server) enqueueDNSEvent(l *lease.Lease, action dhcpinternal.DNSEventAction) error {
-	if l == nil {
-		return nil
-	}
-	err := s.outbox.Enqueue(dhcpinternal.DNSEvent{
-		LeaseID:    l.ID,
-		Generation: l.Generation,
-		Action:     action,
-		ScopeID:    l.ScopeID,
-		IPAddress:  l.IPAddress,
-		MACAddress: l.MACAddress,
-		Hostname:   l.Hostname,
-	})
-	if err == nil {
-		s.wakeOutbox()
-	}
-	return err
-}
-
-// SetOutboxWake installs the signal sent after a DNS change is queued. It is
-// called once during wiring and may be left unset, in which case the entry
-// waits for the replication loop's next pass.
-//
-// It is a callback rather than a channel this package drains, because the
-// replication loop belongs to the process that owns the store, not to the
-// DHCP server, and the data plane must not have to know which loop it is
-// feeding.
-func (s *Server) SetOutboxWake(fn func()) { s.outboxWake = fn }
 
 // SetReleaseFactsMutation enables the explicit RELEASE facts seam. Passing nil
 // disables it. No default constructor calls this method.
@@ -1026,12 +976,6 @@ func (s *Server) SetRequestAdmission(queueCapacity, workers int) {
 	}
 	s.requestQueue = make(chan dhcpRequest, queueCapacity)
 	s.workers = workers
-}
-
-func (s *Server) wakeOutbox() {
-	if s.outboxWake != nil {
-		s.outboxWake()
-	}
 }
 
 // isStopped checks if the server has been stopped.

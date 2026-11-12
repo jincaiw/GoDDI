@@ -67,19 +67,19 @@ OLD_SHAPE_UPSERT = '''		} else {
 		}
 '''
 
+# The active-lease upsert branch of Push (round 281 supersede shape). Both
+# refusal mutations are anchored here: this is the only block with the
+# SAVEPOINT rollback, so it occurs exactly once in transfer.go.
+ANCHOR_ACTIVE_UPSERT = '\t\tif _, err := upsertStmt.Exec(p.values...); err != nil {\n\t\t\tif superseded {\n\t\t\t\t_, _ = tx.Exec("ROLLBACK TO lease_push_row")\n\t\t\t}\n\t\t\t_, _ = tx.Exec("RELEASE lease_push_row")\n\t\t\trefused = append(refused, pushFailure{key: p.id, err: err})\n\t\t\tcontinue\n\t\t}\n'
+ANCHOR_RETURN_ON_REFUSAL = '\t\tif _, err := upsertStmt.Exec(p.values...); err != nil {\n\t\t\tif superseded {\n\t\t\t\t_, _ = tx.Exec("ROLLBACK TO lease_push_row")\n\t\t\t}\n\t\t\t_, _ = tx.Exec("RELEASE lease_push_row")\n\t\t\treturn res, fmt.Errorf("dataplane: copying lease %s up: %w", p.id, err)\n\t\t}\n'
+ANCHOR_CLEAR_REFUSED_MARKER = '\t\tif _, err := upsertStmt.Exec(p.values...); err != nil {\n\t\t\tif superseded {\n\t\t\t\t_, _ = tx.Exec("ROLLBACK TO lease_push_row")\n\t\t\t}\n\t\t\t_, _ = tx.Exec("RELEASE lease_push_row")\n\t\t\tdone = append(done, p.id)\n\t\t\trefused = append(refused, pushFailure{key: p.id, err: err})\n\t\t\tcontinue\n\t\t}\n'
+
 MUTATIONS = [
     {
         "name": "退回旧形状：一行被拒就让整批 pass 结束",
         "file": TRANSFER,
-        "old": '''		} else {
-			if _, err := upsertStmt.Exec(p.values...); err != nil {
-				refused = append(refused, pushFailure{key: p.id, err: err})
-				continue
-			}
-			res.Upserted++
-		}
-''',
-        "new": OLD_SHAPE_UPSERT,
+        "old": ANCHOR_ACTIVE_UPSERT,
+        "new": ANCHOR_RETURN_ON_REFUSAL,
         "must_fail": "TestOneRefusedRowDoesNotTakeTheBatchWithIt",
     },
     {
@@ -105,19 +105,8 @@ MUTATIONS = [
     {
         "name": "被拒的行也把标记清掉（把没送到报成送到了）",
         "file": TRANSFER,
-        "old": '''			if _, err := upsertStmt.Exec(p.values...); err != nil {
-				refused = append(refused, pushFailure{key: p.id, err: err})
-				continue
-			}
-			res.Upserted++
-''',
-        "new": '''			if _, err := upsertStmt.Exec(p.values...); err != nil {
-				// MUTATION: reported as delivered.
-				done = append(done, p.id)
-				continue
-			}
-			res.Upserted++
-''',
+        "old": ANCHOR_ACTIVE_UPSERT,
+        "new": ANCHOR_CLEAR_REFUSED_MARKER,
         "must_fail": "TestOneRefusedRowDoesNotTakeTheBatchWithIt",
     },
     {

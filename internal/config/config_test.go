@@ -559,3 +559,28 @@ func TestDefaultConfig_RecursionAllowNetsNotOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestRenewOutOfPoolPolicyDefaultAndValidation(t *testing.T) {
+	t.Parallel()
+
+	defaults := DefaultConfig()
+	if defaults.DHCP.RenewOutOfPoolPolicy != RenewOutOfPoolAllow {
+		t.Fatalf("default renew_out_of_pool_policy = %q, want %q (historical behaviour)", defaults.DHCP.RenewOutOfPoolPolicy, RenewOutOfPoolAllow)
+	}
+
+	// Validate() also checks unrelated required fields, so start from a
+	// known-valid configuration.
+	cfg := validTestConfig()
+	cfg.DHCP.RenewOutOfPoolPolicy = RenewOutOfPoolExistingBindingOnly
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("the strict policy must validate: %v", err)
+	}
+	cfg.DHCP.RenewOutOfPoolPolicy = "deny-everything"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("an out-of-range renew_out_of_pool_policy must be rejected at startup")
+	}
+	cfg.DHCP.RenewOutOfPoolPolicy = ""
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("an unset policy is allowed (the setter maps it to the default): %v", err)
+	}
+}

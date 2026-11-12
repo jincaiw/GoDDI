@@ -3,6 +3,7 @@ package ipam
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -246,6 +247,15 @@ func stopTimer(timer *time.Timer) {
 }
 
 func (c *FactsConsumer) finishLifecycle(state FactsConsumerState, err error) {
+	// A lifecycle end is never silent: a failed replay leaves durable facts
+	// pending, and an operator has to be able to see why without querying the
+	// database by hand.
+	if state == FactsConsumerFailed && err != nil {
+		slog.Error("ipam facts consumer: replay failed; facts stay pending for replay",
+			"error", err)
+	} else if state == FactsConsumerStopped && err != nil && !errors.Is(err, context.Canceled) {
+		slog.Warn("ipam facts consumer: stopped with an error", "error", err)
+	}
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
 	c.state = state

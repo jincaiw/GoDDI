@@ -44,6 +44,14 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/dashboard$/)
 }
 
+/**
+ * Selector notes (TDesign migration): the revision table is `.t-table` (the
+ * one whose rows carry Rollback actions), with positional cells — no
+ * data-col-key attributes; row actions are TLink anchors matched by exact
+ * text; the rollback dialog is `.t-dialog` (its header is not a heading
+ * role). The en-US texts below are what the UI renders via the GODDI_lang
+ * localStorage key.
+ */
 /** The page's own credentials, so the test can set up state the UI cannot. */
 async function authHeaders(page: Page): Promise<Record<string, string>> {
   const stored = await page.evaluate(() => ({
@@ -108,16 +116,22 @@ async function openPage(page: Page) {
     if (response.status() >= 500) errors.push(`${response.status()} ${response.url()}`)
   })
   await page.goto('/settings/config-versions')
-  await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible()
-  await expect(page.locator('.n-spin-body')).toHaveCount(0)
+  // TDesign renders the surface as tables; the revision table is the one
+  // whose rows carry the Rollback action.
+  await expect(page.locator('.t-table').first()).toBeVisible()
   return errors
 }
 
-const bodyRows = (page: Page) => page.locator('.n-data-table').first().locator('tbody .n-data-table-tr')
+// The revision table is the one whose rows carry the Rollback action; the
+// resource-types card above it is not a data table. TDesign renders no
+// data-col-key attributes, so the type/id cells are positional (column order:
+// revision, status, type, resource id, actor, note, ...).
+const bodyRows = (page: Page) =>
+  page.locator('.t-table').filter({ hasText: 'Rollback' }).first().locator('tbody tr')
 const revisionOf = (row: Locator) => row.locator('td').nth(0)
 
-const TYPE_COLUMN = 'td[data-col-key="resource_type"]'
-const ID_COLUMN = 'td[data-col-key="resource_id"]'
+const typeCell = (row: Locator) => row.locator('td').nth(2)
+const idCell = (row: Locator) => row.locator('td').nth(3)
 
 /**
  * The row for one revision, narrowed by type and by resource id when given.
@@ -140,11 +154,11 @@ async function findRow(
     const text = (await revisionOf(row).textContent())?.trim()
     if (text !== String(revision)) continue
     if (resourceType) {
-      const type = (await row.locator(TYPE_COLUMN).textContent())?.trim()
+      const type = (await typeCell(row).textContent())?.trim()
       if (type !== resourceType) continue
     }
     if (resourceId) {
-      const id = (await row.locator(ID_COLUMN).textContent())?.trim()
+      const id = (await idCell(row).textContent())?.trim()
       if (id !== resourceId) continue
     }
     return row
@@ -202,11 +216,11 @@ test('a rollback is published as a new revision, with the baseline for the row\'
   expect(secondRevision).toBe(baseRevision + 1)
 
   // Narrow the table to this one resource *type and id*.
-  await page.locator('.n-base-selection').first().click()
+  await page.locator('.t-select').first().click()
   // Scoped to the dropdown: "DNS Zone" is also a tag in the type list and a
   // cell in the table, so an unscoped text match is ambiguous.
   await page
-    .locator('.n-base-select-option')
+    .locator('.t-select__list .t-option, .t-select-option')
     .filter({ hasText: /^DNS Zone$/ })
     .first()
     .click()
@@ -215,8 +229,8 @@ test('a rollback is published as a new revision, with the baseline for the row\'
   await expect(bodyRows(page).first()).toBeVisible()
 
   const targetRow = await findRow(page, baseRevision, 'DNS Zone', resourceId)
-  await targetRow.getByRole('button', { name: 'Rollback', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Roll back to an earlier revision', exact: true })).toBeVisible()
+  await targetRow.getByText('Rollback', { exact: true }).click()
+  await expect(page.locator('.t-dialog').filter({ hasText: 'Roll back to an earlier revision' })).toBeVisible()
   await page.getByRole('button', { name: 'Publish as new revision' }).click()
 
   await expect(page.getByText('Rollback published')).toBeVisible()
@@ -269,8 +283,8 @@ test('a rollback from the unfiltered table cites the resource\'s own revision, n
   await expect(bodyRows(page).first()).toBeVisible()
 
   const targetRow = await findRow(page, baseRevision, 'DNS Zone', resourceId)
-  await targetRow.getByRole('button', { name: 'Rollback', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Roll back to an earlier revision', exact: true })).toBeVisible()
+  await targetRow.getByText('Rollback', { exact: true }).click()
+  await expect(page.locator('.t-dialog').filter({ hasText: 'Roll back to an earlier revision' })).toBeVisible()
   await page.getByRole('button', { name: 'Publish as new revision' }).click()
 
   // A stale baseline is surfaced as a conflict instead of applied, so the

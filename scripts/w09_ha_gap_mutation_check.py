@@ -54,11 +54,18 @@ UNIT = [
 PROCESS_CASE = "takeover-accepts-only-its-own-figure"
 PROCESS = ["python3", "scripts/w09_ha_operator_smoke_check.py", f"--only={PROCESS_CASE}"]
 
+# The gate now covers both Gap and FactsGap (the facts/lease dual-watermark
+# protocol landed after this script was written). Keep the target in sync with
+# role.go so the two mutations below are actually injected instead of being
+# reported SKIPPED-NOT-FOUND.
 GATED = '''	// Only a mirror is missing somebody else's changes. See the field's comment
 	// for why the subtraction is not the answer anywhere else.
 	if role == config.HARoleStandby {
 		if st.Gap = st.PeerSeq - st.AppliedSeq; st.Gap < 0 {
 			st.Gap = 0
+		}
+		if st.FactsGap = st.PeerFactsSeq - st.FactsAppliedSeq; st.FactsGap < 0 {
+			st.FactsGap = 0
 		}
 	}
 '''
@@ -71,6 +78,9 @@ MUTATIONS = [
         "new": '''	// MUTATION: computed for every role.
 	if st.Gap = st.PeerSeq - st.AppliedSeq; st.Gap < 0 {
 		st.Gap = 0
+	}
+	if st.FactsGap = st.PeerFactsSeq - st.FactsAppliedSeq; st.FactsGap < 0 {
+		st.FactsGap = 0
 	}
 ''',
         "must_fail": "TestAShortfallIsOnlyReportedWhereItMeansSomething",
@@ -85,6 +95,9 @@ MUTATIONS = [
 	if role != config.HARoleStandby {
 		if st.Gap = st.PeerSeq - st.AppliedSeq; st.Gap < 0 {
 			st.Gap = 0
+		}
+		if st.FactsGap = st.PeerFactsSeq - st.FactsAppliedSeq; st.FactsGap < 0 {
+			st.FactsGap = 0
 		}
 	}
 ''',

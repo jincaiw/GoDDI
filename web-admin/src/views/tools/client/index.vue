@@ -1,190 +1,209 @@
 <script setup lang="ts">
-import { ref, reactive, h } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSelect, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
+import { reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { Link as TLink, MessagePlugin } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
 import {
-  executeDNSQuery, listDNSZones, createDNSRecord,
-  type DNSQueryResponse, type DNSQueryAnswer, type DNSZone,
-} from '@/service/api/goddi/dns'
-import { usePermission } from '@/composables/usePermission'
+  createDNSRecord,
+  executeDNSQuery,
+  listDNSZones,
+  type DNSQueryAnswer,
+  type DNSQueryResponse,
+  type DNSZone
+} from '@/service/api/goddi/dns';
+import { usePermission } from '@/composables/usePermission';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DNSClientPage' });
 
-const querying = ref(false)
-const queryResult = ref<DNSQueryResponse | null>(null)
+const { t } = useI18n();
+const perm = usePermission();
 
-const queryForm = reactive({
-  name: '',
-  type: 'A',
-  upstream: '',
-})
+const querying = ref(false);
+const queryResult = ref<DNSQueryResponse | null>(null);
 
-const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(type => ({ label: type, value: type }))
+const queryForm = reactive({ name: '', type: 'A', upstream: '' });
+const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SOA', 'SRV', 'TXT', 'ANY'].map(v => ({ label: v, value: v }));
 
-const showImport = ref(false)
-const importing = ref(false)
-const zoneOptions = ref<{ label: string; value: string }[]>([])
-const importForm = reactive({ zone_id: '', name: '', type: 'A', value: '', ttl: 3600 })
+const showImport = ref(false);
+const importing = ref(false);
+const importFormRef = ref<FormInstanceFunctions | null>(null);
+const zoneOptions = ref<Array<{ label: string; value: string }>>([]);
+const importForm = reactive({ zone_id: '', name: '', type: 'A', value: '', ttl: 3600 });
 
-const answerColumns = [
-  { title: () => t('dns.records.recordName'), key: 'name' },
-  { title: () => t('dns.records.recordType'), key: 'type', width: 80 },
-  { title: () => t('dns.records.recordValue'), key: 'data' },
-  { title: () => t('dns.zones.ttl'), key: 'ttl', width: 80 },
+const importRules = {
+  zone_id: [{ required: true, message: t('dns.zones.title') + ' required', type: 'error' }],
+  name: [{ required: true, message: t('dns.records.recordName') + ' required', type: 'error' }],
+  value: [{ required: true, message: t('dns.records.recordValue') + ' required', type: 'error' }]
+};
+
+const answerColumns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('dns.records.recordName'), ellipsis: true },
+  { colKey: 'type', title: t('dns.records.recordType'), width: 100 },
+  { colKey: 'data', title: t('dns.records.recordValue'), ellipsis: true },
+  { colKey: 'ttl', title: t('dns.zones.ttl'), width: 90 },
   {
-    title: () => t('common.actions'),
-    key: 'actions',
-    width: 90,
-    render: (row: DNSQueryAnswer) => h(
-      NButton,
-      {
-        size: 'small',
-        text: true,
-        type: 'primary',
-        disabled: !perm.canWrite('dns'),
-        onClick: () => openImport(row),
-      },
-      { default: () => t('dns.client.importToZone') },
-    ),
-  },
-]
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 110,
+    cell: (h, { row }) =>
+      h(
+        TLink,
+        { theme: 'primary', disabled: !perm.canWrite('dns'), onClick: () => void openImport(row as DNSQueryAnswer) },
+        () => t('dns.client.importToZone')
+      )
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
 
 async function handleQuery() {
-  if (!perm.canRead('dns')) return
+  if (!perm.canRead('dns')) return;
   if (!queryForm.name) {
-    message.warning('Please enter a domain name')
-    return
+    void MessagePlugin.warning('Please enter a domain name');
+    return;
   }
-  querying.value = true
+  querying.value = true;
   try {
     queryResult.value = await executeDNSQuery({
       name: queryForm.name,
       type: queryForm.type,
-      upstream: queryForm.upstream || undefined,
-    })
-  } catch (err: unknown) {
-    // Drop any previously displayed result so the failure isn't shown next
-    // to stale answers from a prior successful query.
-    queryResult.value = null
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+      upstream: queryForm.upstream || undefined
+    });
+  } catch (err) {
+    // Drop stale results so a failure is not shown beside an old answer.
+    queryResult.value = null;
+    msgError(err);
   } finally {
-    querying.value = false
+    querying.value = false;
   }
 }
 
 async function openImport(row: DNSQueryAnswer) {
-  if (!perm.canWrite('dns')) return
-  importForm.name = row.name
-  importForm.type = row.type
-  importForm.value = row.data
-  importForm.ttl = row.ttl || 3600
-  showImport.value = true
-  // Lazy-load the zone picker once per modal session.
+  if (!perm.canWrite('dns')) return;
+  Object.assign(importForm, {
+    zone_id: '',
+    name: row.name,
+    type: row.type,
+    value: row.data,
+    ttl: row.ttl || 3600
+  });
+  showImport.value = true;
   if (zoneOptions.value.length === 0) {
     try {
-      const result = await listDNSZones({ page: 1, page_size: 100 })
+      const result = await listDNSZones({ page: 1, page_size: 100 });
       zoneOptions.value = (result.data ?? [])
         .filter((z: DNSZone) => z.type !== 'allowed' && z.type !== 'blocked')
-        .map((z: DNSZone) => ({ label: z.name, value: z.id }))
-    } catch (err: unknown) {
-      message.error(err instanceof Error ? err.message : t('common.failed'))
+        .map((z: DNSZone) => ({ label: z.name, value: z.id }));
+    } catch (err) {
+      msgError(err);
     }
   }
 }
 
 async function handleImportSubmit() {
-  if (!perm.canWrite('dns')) return
-  if (!importForm.zone_id || !importForm.name || !importForm.value) {
-    message.warning(t('common.required'))
-    return
-  }
-  importing.value = true
+  if (!perm.canWrite('dns')) return;
+  const valid = await importFormRef.value?.validate();
+  if (valid !== true) return;
+
+  importing.value = true;
   try {
     await createDNSRecord(importForm.zone_id, {
       name: importForm.name,
       type: importForm.type,
       value: importForm.value,
-      ttl: importForm.ttl,
-    })
-    message.success(t('common.createSuccess'))
-    showImport.value = false
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+      ttl: importForm.ttl
+    });
+    void MessagePlugin.success(t('common.createSuccess'));
+    showImport.value = false;
+  } catch (err) {
+    msgError(err);
   } finally {
-    importing.value = false
+    importing.value = false;
   }
 }
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dns.client.title')" />
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dns.client.title') }}</h2>
+    </TCard>
 
-    <NCard>
-      <NForm :model="queryForm" label-placement="left" label-width="100px" inline>
-        <NFormItem :label="t('dns.client.queryName')">
-          <NInput v-model:value="queryForm.name" placeholder="example.com" style="width: 240px;" />
-        </NFormItem>
-        <NFormItem :label="t('dns.client.queryType')">
-          <NSelect v-model:value="queryForm.type" :options="typeOptions" style="width: 120px;" />
-        </NFormItem>
-        <NFormItem :label="t('dns.client.upstream')">
-          <NInput v-model:value="queryForm.upstream" placeholder="Optional" style="width: 200px;" clearable />
-        </NFormItem>
-        <NFormItem>
-          <NButton type="primary" :loading="querying" :disabled="!perm.canRead('dns')" @click="handleQuery">{{ t('dns.client.execute') }}</NButton>
-        </NFormItem>
-      </NForm>
-    </NCard>
+    <TCard :bordered="false">
+      <TForm :data="queryForm" layout="inline" @submit="handleQuery">
+        <TFormItem :label="t('dns.client.queryName')">
+          <TInput v-model="queryForm.name" placeholder="example.com" style="width: 240px" @enter="handleQuery" />
+        </TFormItem>
+        <TFormItem :label="t('dns.client.queryType')">
+          <TSelect v-model="queryForm.type" :options="typeOptions" style="width: 130px" />
+        </TFormItem>
+        <TFormItem :label="t('dns.client.upstream')">
+          <TInput v-model="queryForm.upstream" placeholder="Optional" clearable style="width: 200px" />
+        </TFormItem>
+        <TFormItem>
+          <TButton theme="primary" type="submit" :loading="querying" :disabled="!perm.canRead('dns')">
+            {{ t('dns.client.execute') }}
+          </TButton>
+        </TFormItem>
+      </TForm>
+    </TCard>
 
-    <NCard v-if="queryResult" :title="t('dns.client.response')" style="margin-top: 16px;">
-      <NDescriptions :column="2" label-placement="left" style="margin-bottom: 16px;">
-        <NDescriptionsItem :label="t('dns.client.queryTime')">{{ (queryResult.duration / 1e6).toFixed(2) }}ms</NDescriptionsItem>
-        <NDescriptionsItem :label="t('dns.client.server')">{{ queryResult.upstream }}</NDescriptionsItem>
-      </NDescriptions>
+    <TCard v-if="queryResult" :bordered="false" :title="t('dns.client.response')">
+      <TDescriptions :column="2" class="result-meta">
+        <TDescriptionsItem :label="t('dns.client.queryTime')">
+          {{ (queryResult.duration / 1e6).toFixed(2) }}ms
+        </TDescriptionsItem>
+        <TDescriptionsItem :label="t('dns.client.server')">{{ queryResult.upstream }}</TDescriptionsItem>
+      </TDescriptions>
+      <TTable :columns="answerColumns" :data="queryResult.answers || []" row-key="name" size="small" stripe hover />
+    </TCard>
 
-      <NDataTable
-        :columns="answerColumns"
-        :data="queryResult.answers || []"
-        :bordered="false"
-        size="small"
-      />
-    </NCard>
-
-    <!-- Import answer into a local zone (Technitium DNS Client parity) -->
-    <NModal v-if="showImport" v-model:show="showImport" preset="card" :title="t('dns.client.importToZone')" style="width: 480px;">
-      <NForm :model="importForm" label-placement="left" label-width="100px">
-        <NFormItem :label="t('dns.zones.title')">
-          <NSelect
-            v-model:value="importForm.zone_id"
-            :options="zoneOptions"
-            filterable
-            :placeholder="t('dns.client.selectZone')"
-            style="width: 100%;"
-          />
-        </NFormItem>
-        <NFormItem :label="t('dns.records.recordName')">
-          <NInput v-model:value="importForm.name" />
-        </NFormItem>
-        <NFormItem :label="t('dns.records.recordType')">
-          <NInput v-model:value="importForm.type" disabled />
-        </NFormItem>
-        <NFormItem :label="t('dns.records.recordValue')">
-          <NInput v-model:value="importForm.value" type="textarea" :rows="2" />
-        </NFormItem>
-        <NFormItem :label="t('dns.zones.ttl')">
-          <NInputNumber v-model:value="importForm.ttl" :min="0" />
-        </NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showImport = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="importing" :disabled="!perm.canWrite('dns')" @click="handleImportSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showImport"
+      :header="t('dns.client.importToZone')"
+      :confirm-btn="{ loading: importing, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="520px"
+      @confirm="handleImportSubmit"
+    >
+      <TForm ref="importFormRef" :data="importForm" :rules="importRules" label-align="top">
+        <TFormItem :label="t('dns.zones.title')" name="zone_id">
+          <TSelect v-model="importForm.zone_id" :options="zoneOptions" filterable :placeholder="t('dns.client.selectZone')" />
+        </TFormItem>
+        <TFormItem :label="t('dns.records.recordName')" name="name">
+          <TInput v-model="importForm.name" />
+        </TFormItem>
+        <TFormItem :label="t('dns.records.recordType')">
+          <TInput v-model="importForm.type" disabled />
+        </TFormItem>
+        <TFormItem :label="t('dns.records.recordValue')" name="value">
+          <TTextarea v-model="importForm.value" :autosize="{ minRows: 2, maxRows: 4 }" />
+        </TFormItem>
+        <TFormItem :label="t('dns.zones.ttl')">
+          <TInputNumber v-model="importForm.ttl" :min="0" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.result-meta {
+  margin-bottom: 16px;
+}
+</style>

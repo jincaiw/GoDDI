@@ -68,24 +68,39 @@ CASES = [
     {
         "label": "R4 an observation no longer moves the allocation status",
         "file": ADDR / "address.go",
-        "old": "\tif changed {\n\t\tres, err := tx.Exec(`UPDATE ipam_addresses SET status=?",
-        "new": "\tif false && changed {\n\t\tres, err := tx.Exec(`UPDATE ipam_addresses SET status=?",
+        # address.go now guards with an early `if !changed { return }` instead
+        # of wrapping the UPDATE in `if changed {`; mutate the guard so the
+        # observation never reaches the allocation-status UPDATE at all.
+        "old": (
+            "\tif !changed {\n"
+            "\t\treturn false, nil\n"
+            "\t}\n"
+            "\tres, err := tx.Exec(`UPDATE ipam_addresses SET status=?, updated_at=datetime('now') WHERE id = ? AND status = ?`"
+        ),
+        "new": (
+            # `true || !changed` keeps `changed` referenced so the mutated tree
+            # still builds; the branch is always taken either way.
+            "\tif true || !changed {\n"
+            "\t\treturn false, nil\n"
+            "\t}\n"
+            "\tres, err := tx.Exec(`UPDATE ipam_addresses SET status=?, updated_at=datetime('now') WHERE id = ? AND status = ?`"
+        ),
         "test": "TestIPAMLinkage_AckAllocatesTheAddress",
         "pkg": PKG_DHCP,
     },
     {
         "label": "R5 an observation no longer writes the audit row",
         "file": ADDR / "address.go",
+        # The observe history row is now written as a single-statement call.
+        # Drop it entirely; `_ = reason` keeps the mutated tree compiling after
+        # the only remaining use of `reason` disappears with the row.
         "old": (
-            "\t\tif err := insertHistoryTx(tx, historyEntry{\n"
-            "\t\t\tSpaceID: current.SpaceID, SubnetID: current.SubnetID, IPAddress: canonical,\n"
-            '\t\t\tAction: "observe", OldStatus: string(current.Status), NewStatus: string(newStatus),\n'
-            "\t\t\tActor: obs.Actor, Reason: reason, Source: defaultSource(obs.Source),\n"
-            "\t\t}); err != nil {\n"
-            "\t\t\treturn false, err\n"
-            "\t\t}"
+            "\tif err := insertHistoryTx(tx, historyEntry{SpaceID: current.SpaceID, SubnetID: current.SubnetID, IPAddress: canonical,\n"
+            '\t\tAction: "observe", OldStatus: string(current.Status), NewStatus: string(newStatus), Actor: obs.Actor, Reason: reason, Source: defaultSource(obs.Source)}); err != nil {\n'
+            "\t\treturn false, err\n"
+            "\t}"
         ),
-        "new": "\t\t_ = reason // history intentionally dropped for this check",
+        "new": "\t_ = reason // history intentionally dropped for this check",
         "test": "TestObserveBySpaceIP",
         "pkg": PKG_ADDR,
     },
@@ -126,8 +141,10 @@ CASES = [
     {
         "label": "R9 the expiry sweep stops reporting the leases it swept",
         "file": DHCP / "server.go",
-        "old": "\t\ts.observeLease(LeaseObservedExpire, l)\n\t\tif l.Status != lease.LeaseStatusActive",
-        "new": "\t\t// observation intentionally dropped\n\t\tif l.Status != lease.LeaseStatusActive",
+        # The sweep no longer calls observeLease and tests the status in the
+        # same two adjacent lines; mutate only the observation line.
+        "old": "\t\ts.observeLease(LeaseObservedExpire, l)\n",
+        "new": "\t\t// observation intentionally dropped\n",
         "test": "TestIPAMLinkage_ExpirySweepFreesTheObservation",
         "pkg": PKG_DHCP,
     },

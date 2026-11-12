@@ -1,1 +1,0 @@
-import{x as e}from"./router-D4TiCGth.js";function t(t){return e(`/logs/audit`,t)}export{t};

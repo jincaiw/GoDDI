@@ -156,7 +156,8 @@ func TestReservedExtensionsDocumentTheir501Contract(t *testing.T) {
 		"POST /cluster":           "预留扩展：当前版本不提供多节点集群协调",
 		"GET /apps":               "预留扩展：当前版本不提供应用市场运行时",
 		"POST /apps/{id}/install": "预留扩展：当前版本不提供应用市场运行时",
-		"GET /dhcp/ha":            "预留扩展：当前版本不提供该配置 API",
+		// GET /dhcp/ha left the 501 contract in round 285: it is now a
+		// read-only status API. Six reserved extensions remain.
 	}
 	for key, description := range want {
 		parts := regexp.MustCompile(`^([A-Z]+) (.+)$`).FindStringSubmatch(key)
@@ -170,6 +171,24 @@ func TestReservedExtensionsDocumentTheir501Contract(t *testing.T) {
 		}
 		if got := op.Responses["501"].Description; got != description {
 			t.Errorf("%s 501 description = %q, want %q", key, got, description)
+		}
+	}
+
+	// The read-only HA status API must be documented as 200, not 501, and
+	// must never grow a mutating verb.
+	ha, ok := doc.Paths["/dhcp/ha"]["get"]
+	if !ok {
+		t.Fatal("OpenAPI is missing GET /dhcp/ha")
+	}
+	if desc := ha.Responses["200"].Description; !strings.Contains(desc, "只读") {
+		t.Errorf("GET /dhcp/ha 200 description = %q, want a read-only status description", desc)
+	}
+	if _, exists := ha.Responses["501"]; exists {
+		t.Error("GET /dhcp/ha still documents a 501 response")
+	}
+	for _, verb := range []string{"put", "post", "delete"} {
+		if _, exists := doc.Paths["/dhcp/ha"][verb]; exists {
+			t.Errorf("GET /dhcp/ha must stay read-only, but OpenAPI documents %s", verb)
 		}
 	}
 }

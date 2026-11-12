@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
@@ -135,7 +136,37 @@ func InstallAppHandler(w http.ResponseWriter, r *http.Request) {
 
 // --- DHCP HA ---
 
-// GetDHCPHAConfig handles GET /api/v1/dhcp/ha
+// dhcpHAStatusProvider is installed by the process that owns the HA pair. It
+// is a read-only snapshot: the API never mutates HA state, and the peer token
+// and other secrets are never exposed. A process without HA reports
+// ha_enabled=false rather than a 501 -- the absence of HA is a fact, not a
+// missing feature.
+var (
+	dhcpHAStatusMu       sync.RWMutex
+	dhcpHAStatusProvider func() map[string]any
+)
+
+// RegisterDHCPHAStatusProvider installs the read-only HA status source. It is
+// called once during wiring, before any request can arrive.
+func RegisterDHCPHAStatusProvider(fn func() map[string]any) {
+	dhcpHAStatusMu.Lock()
+	defer dhcpHAStatusMu.Unlock()
+	dhcpHAStatusProvider = fn
+}
+
+// GetDHCPHAConfig handles GET /api/v1/dhcp/ha: the same role/state/sequence
+// facts `goddi ha status` prints and `/ready` uses, as a read-only API.
 func GetDHCPHAConfig(w http.ResponseWriter, r *http.Request) {
-	notImplementedExtension(w)
+	dhcpHAStatusMu.RLock()
+	provider := dhcpHAStatusProvider
+	dhcpHAStatusMu.RUnlock()
+	if provider == nil {
+		response.OK(w, map[string]any{
+			"ha_enabled": false,
+			"role":       "standalone",
+			"state":      "disabled",
+		})
+		return
+	}
+	response.OK(w, provider())
 }

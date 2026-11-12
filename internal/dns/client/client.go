@@ -149,8 +149,16 @@ func (c *DNSClient) Query(name string, qtype uint16, upstream string) (*QueryRes
 	return result, duration, nil
 }
 
-// validateUpstreamAddress rejects loopback, link-local, and private IPs to
-// mitigate SSRF. It accepts either a host:port form or a bare IP literal.
+// validateUpstreamAddress rejects loopback, unspecified, link-local and
+// private IPs to mitigate SSRF. It accepts either a host:port form or a bare
+// IP literal.
+//
+// This is the last line of defence inside Query: the API handler has a richer
+// guard that also resolves hostnames, but it is bypassed when
+// dns.allow_private_upstream is on (the default), so this literal-IP check
+// must cover the same address classes as handler.isPrivateIP. Hostname
+// resolution is deliberately left to the handler to avoid a second lookup on
+// every query.
 func validateUpstreamAddress(addr string) error {
 	var host string
 	if h, _, err := net.SplitHostPort(addr); err == nil {
@@ -160,7 +168,8 @@ func validateUpstreamAddress(addr string) error {
 		host = strings.TrimSuffix(addr, ".")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() {
+		if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsPrivate() {
 			return fmt.Errorf("blocked address range: %s", addr)
 		}
 	}

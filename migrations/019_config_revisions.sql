@@ -21,7 +21,7 @@
 -- record that a reload is owed, and the worker replays it, instead of leaving a
 -- configuration in the database that the resolver never learned about.
 --
--- Ownership/generation semantics deliberately mirror dhcp_dns_events
+-- Ownership/generation semantics pin a record to the exact lease and generation
 -- (migration 018): ordered drain, bounded retry with backoff, and terminal
 -- failures kept visible rather than deleted.
 

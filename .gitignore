@@ -76,3 +76,7 @@ docker-compose.local.yml
 
 # Local build output
 bin/
+
+# Container build staging (Dockerfile.ha)
+/.ha-goddi-bin
+/.ha-web-dist/

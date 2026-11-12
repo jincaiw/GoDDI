@@ -388,11 +388,13 @@ func GetDNSSECStatus(w http.ResponseWriter, r *http.Request) {
 // dnssecExperimentalNote explains what enabling DNSSEC currently does and,
 // more importantly, what it does not do. It is surfaced in API responses and
 // in the UI so operators are never left with a false sense of security.
-const dnssecExperimentalNote = "DNSSEC 为实验功能：当前仅标记区域并生成密钥，权威应答尚未携带 RRSIG/DNSKEY，校验方会判定为 Bogus"
+const dnssecExperimentalNote = "DNSSEC 为实验功能：正向应答、NSEC/NSEC3 否定证明已签名，但无父区 DS 链式信任，请勿视为生产就绪"
 
 // dnssecFeatureEnabled reports whether the experimental DNSSEC feature gate is
-// on. It is disabled by default (see config.DNSSECConfig) because signing is
-// not implemented yet.
+// on. Signing (DNSKEY, positive-answer RRSIGs and NSEC denial proof) is
+// implemented (both NSEC and NSEC3 denial) but stays off by default: a
+// parent-side DS chain of trust is still out of scope, so this must not be
+// read as a production-ready DNSSEC deployment.
 func dnssecFeatureEnabled() bool {
 	return DNSServices != nil && DNSServices.Config != nil && DNSServices.Config.DNS.DNSSEC.Enabled
 }
@@ -400,10 +402,11 @@ func dnssecFeatureEnabled() bool {
 // EnableDNSSEC enables DNSSEC for a zone.
 // POST /api/v1/dns/zones/{id}/dnssec/enable
 //
-// EXPERIMENTAL: this marks the zone as DNSSEC-enabled and generates KSK/ZSK,
-// but the zone is not actually signed yet — no RRSIG or NSEC records are
-// produced, so validating resolvers will treat answers as Bogus. The endpoint
-// is gated behind dns.dnssec.enabled until real signing lands.
+// EXPERIMENTAL: this marks the zone as DNSSEC-enabled and generates KSK/ZSK.
+// With dns.dnssec.enabled the responder serves DNSKEY, positive-answer
+// RRSIGs and NSEC/NSEC3 denial proof. The zone still has no parent DS, so
+// a validating resolver can still treat it as Bogus. The endpoint stays
+// gated behind dns.dnssec.enabled.
 func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 	if DNSServices == nil || DNSServices.DB == nil {
 		response.InternalError(w, "DNS服务未初始化")

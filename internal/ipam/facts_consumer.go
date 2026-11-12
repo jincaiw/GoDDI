@@ -23,14 +23,17 @@ var (
 // facts.Envelope. SpaceID is resolved by the authoritative producer; keeping it
 // in the payload lets the consumer project without querying DHCP tables.
 type LeaseObservationFact struct {
-	Action    string `json:"action"`
-	LeaseID   string `json:"lease_id"`
-	ScopeID   string `json:"scope_id"`
-	SpaceID   string `json:"space_id"`
-	IP        string `json:"ip"`
-	MAC       string `json:"mac"`
-	Hostname  string `json:"hostname"`
-	Tombstone bool   `json:"tombstone,omitempty"`
+	Action   string `json:"action"`
+	LeaseID  string `json:"lease_id"`
+	ScopeID  string `json:"scope_id"`
+	SpaceID  string `json:"space_id"`
+	IP       string `json:"ip"`
+	MAC      string `json:"mac"`
+	Hostname string `json:"hostname"`
+	// Generation is present in payloads from the round 273 writer onward;
+	// older payloads decode to 0 and the consumers treat 0 conservatively.
+	Generation int64 `json:"generation"`
+	Tombstone  bool  `json:"tombstone,omitempty"`
 }
 
 // FactsConsumer is a restartable IPAM projection consumer. Callers explicitly

@@ -19,10 +19,6 @@
 -- ---------------------------------------------------------------------------
 -- The lease push covers a lease's state. It does not cover:
 --
---   dhcp_dns_events  the work the DNS side has not done yet. Until it is copied
---                    up, a DNS process in another file system cannot know a
---                    record is owed, and the split deployment has no DDNS at
---                    all.
 --   dhcp_logs        the event log the console shows. It was only ever copied
 --                    during the one-off takeover, so in a split deployment the
 --                    console's view of DHCP activity stops at the upgrade.
@@ -40,34 +36,6 @@ ALTER TABLE dns_records ADD COLUMN authored_locally INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_dp_dns_records_authored_locally ON dns_records(authored_locally);
 
-CREATE TABLE IF NOT EXISTS dhcp_dns_event_dirty (
-    event_id  INTEGER PRIMARY KEY,
-    queued_at DATETIME NOT NULL DEFAULT (datetime('now'))
-);
-
--- +goose StatementBegin
-CREATE TRIGGER IF NOT EXISTS trg_dp_dns_event_dirty_insert
-AFTER INSERT ON dhcp_dns_events
-BEGIN
-    INSERT INTO dhcp_dns_event_dirty (event_id, queued_at)
-    VALUES (NEW.id, datetime('now'))
-    ON CONFLICT(event_id) DO UPDATE SET queued_at = datetime('now');
-END;
--- +goose StatementEnd
-
--- The retry state is not something the DNS side is told about -- it keeps its
--- own -- but a row whose status changed is a row this store has already sent
--- once, and re-sending it is cheap next to the alternative of a consumer
--- retrying an event the producer has already abandoned.
--- +goose StatementBegin
-CREATE TRIGGER IF NOT EXISTS trg_dp_dns_event_dirty_update
-AFTER UPDATE ON dhcp_dns_events
-BEGIN
-    INSERT INTO dhcp_dns_event_dirty (event_id, queued_at)
-    VALUES (NEW.id, datetime('now'))
-    ON CONFLICT(event_id) DO UPDATE SET queued_at = datetime('now');
-END;
--- +goose StatementEnd
 
 -- dhcp_logs is append-only: nothing in the codebase updates or deletes a row.
 -- A trigger for the other two events would be dead weight that reads as
@@ -138,10 +106,7 @@ DROP TRIGGER IF EXISTS trg_dp_dns_record_dirty_delete;
 DROP TRIGGER IF EXISTS trg_dp_dns_record_dirty_update;
 DROP TRIGGER IF EXISTS trg_dp_dns_record_dirty_insert;
 DROP TRIGGER IF EXISTS trg_dp_dhcp_log_dirty_insert;
-DROP TRIGGER IF EXISTS trg_dp_dns_event_dirty_update;
-DROP TRIGGER IF EXISTS trg_dp_dns_event_dirty_insert;
 DROP TABLE IF EXISTS dns_record_dirty;
 DROP TABLE IF EXISTS dhcp_log_dirty;
-DROP TABLE IF EXISTS dhcp_dns_event_dirty;
 DROP INDEX IF EXISTS idx_dp_dns_records_authored_locally;
 ALTER TABLE dns_records DROP COLUMN authored_locally;

@@ -1,257 +1,485 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted, onUnmounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
+import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
 import {
-  listBlockLists, createBlockList, deleteBlockList, listBlockRules, addBlockRule, deleteBlockRule,
+  addBlockRule,
+  createBlockList,
+  deleteBlockList,
+  deleteBlockRule,
   flushBlockLists,
-  getBlockingStatus, temporaryDisableBlocking, refreshBlockList,
-  type BlockList, type BlockRule, type BlockingStatus,
-} from '@/service/api/goddi/dns'
+  getBlockingStatus,
+  listBlockLists,
+  listBlockRules,
+  refreshBlockList,
+  temporaryDisableBlocking,
+  type BlockList,
+  type BlockRule,
+  type BlockingStatus
+} from '@/service/api/goddi/dns';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DNSBlockedPage' });
 
-// Block Lists
-const blockListLoading = ref(false)
-const blockListSubmitting = ref(false)
-const blockLists = ref<BlockList[]>([])
-const selectedBlockList = ref<BlockList | null>(null)
-const showBlockListModal = ref(false)
-const showBlockRuleModal = ref(false)
-const showFlushConfirm = ref(false)
-const blockListForm = reactive({ name: '', type: 'custom', url: '', enabled: true })
-const blockRuleForm = reactive({ pattern: '', match_type: 'suffix', response_type: 'NXDOMAIN', response_data: '', enabled: true })
+const { t } = useI18n();
+const perm = usePermission();
 
-// Temporary disable blocking
-const blockingStatus = ref<BlockingStatus | null>(null)
-const disableMinutes = ref<number>(10)
-const disableMinutesOptions = [5, 10, 15, 30, 60, 120, 240].map(m => ({ label: `${m} min`, value: m }))
-const refreshingId = ref<string | null>(null)
-let statusTimer: ReturnType<typeof setInterval> | null = null
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const listFormRef = ref<FormInstanceFunctions | null>(null);
+const ruleFormRef = ref<FormInstanceFunctions | null>(null);
+const showList = ref(false);
+const showRule = ref(false);
+const listSubmitting = ref(false);
+const ruleSubmitting = ref(false);
+const refreshingId = ref<string | null>(null);
+
+const selectedList = ref<BlockList | null>(null);
+const blockRules = ref<BlockRule[]>([]);
+const ruleLoading = ref(false);
+
+const listForm = reactive({ name: '', type: 'custom', url: '', enabled: true });
+const ruleForm = reactive({ pattern: '', match_type: 'suffix', response_type: 'NXDOMAIN', response_data: '', enabled: true });
+
+const blockingStatus = ref<BlockingStatus | null>(null);
+const disableMinutes = ref<number>(10);
+const disableOptions = [5, 10, 15, 30, 60, 120, 240].map(m => ({ label: `${m} min`, value: m }));
+let statusTimer: ReturnType<typeof setInterval> | null = null;
+
+const matchOptions = [
+  { label: 'Exact', value: 'exact' },
+  { label: 'Suffix', value: 'suffix' },
+  { label: 'Wildcard', value: 'wildcard' },
+  { label: 'Regex', value: 'regex' }
+];
+const responseOptions = [
+  { label: 'NXDOMAIN', value: 'NXDOMAIN' },
+  { label: 'NODATA', value: 'NODATA' },
+  { label: 'REFUSED', value: 'REFUSED' },
+  { label: 'DROP', value: 'DROP' },
+  { label: 'Custom IP', value: 'CUSTOM_IP' }
+];
+
+const listRules = {
+  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+};
+const ruleRules = {
+  pattern: [{ required: true, message: t('dns.security.pattern') + ' required', type: 'error' }]
+};
 
 function formatTime(value: string | null): string {
-  if (!value) return '-'
-  const d = new Date(value)
-  return isNaN(d.getTime()) ? value : d.toLocaleString()
+  if (!value) return '-';
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value : d.toLocaleString();
 }
 
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
+
+const listColumns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('common.name') },
+  {
+    colKey: 'type',
+    title: t('common.type'),
+    width: 110,
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as BlockList).type))
+  },
+  { colKey: 'entry_count', title: 'Rules', width: 90 },
+  {
+    colKey: 'last_fetch',
+    title: t('dns.security.lastFetch'),
+    width: 190,
+    cell: (h, { row }) => {
+      const r = row as BlockList;
+      if (r.type !== 'external') return '-';
+      if (!r.last_fetch_at) return h(TTag, { size: 'small' }, () => t('dns.security.neverFetched'));
+      return h(TSpace, { size: 'small', align: 'center' }, () => [
+        h(
+          TTag,
+          { size: 'small', theme: r.last_fetch_status === 'ok' ? 'success' : 'danger', variant: 'light' },
+          () => (r.last_fetch_status === 'ok' ? 'OK' : t('dns.security.fetchFailed'))
+        ),
+        h('span', { class: 'fetch-time' }, formatTime(r.last_fetch_at))
+      ]);
+    }
+  },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as BlockList).enabled) })
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 220,
+    cell: (h, { row }) => {
+      const r = row as BlockList;
+      return h(TSpace, { size: 'small' }, () => [
+        h(TLink, { theme: 'primary', onClick: () => void selectList(r) }, () => 'Rules'),
+        ...(r.type === 'external'
+          ? [
+              h(
+                TLink,
+                {
+                  theme: 'primary',
+                  disabled: !perm.canWrite('dns'),
+                  loading: refreshingId.value === r.id,
+                  onClick: () => void handleRefresh(r.id)
+                },
+                () => t('dns.security.refresh')
+              )
+            ]
+          : []),
+        h(
+          TLink,
+          { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDeleteList(r.id) },
+          () => t('common.delete')
+        )
+      ]);
+    }
+  }
+];
+
+const ruleColumns: PrimaryTableCol[] = [
+  { colKey: 'pattern', title: t('dns.security.pattern'), ellipsis: true },
+  {
+    colKey: 'match_type',
+    title: t('dns.security.matchType'),
+    width: 120,
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as BlockRule).match_type))
+  },
+  {
+    colKey: 'response_type',
+    title: t('dns.security.responseType'),
+    width: 130,
+    cell: (h, { row }) =>
+      h(
+        TTag,
+        { size: 'small', theme: (row as BlockRule).response_type === 'DROP' ? 'danger' : 'warning', variant: 'light' },
+        () => String((row as BlockRule).response_type)
+      )
+  },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as BlockRule).enabled) })
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 90,
+    cell: (h, { row }) => {
+      const r = row as BlockRule;
+      return h(
+        TLink,
+        { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => void handleDeleteRule(r.list_id, r.id) },
+        () => t('common.delete')
+      );
+    }
+  }
+];
+
 async function loadBlockingStatus() {
-  try { blockingStatus.value = await getBlockingStatus() } catch { /* ignore */ }
+  try {
+    blockingStatus.value = await getBlockingStatus();
+  } catch {
+    // Status banner is advisory; ignore polling failures.
+  }
 }
 
 async function handleTemporaryDisable() {
-  if (!perm.canWrite('dns')) return
+  if (!perm.canWrite('dns')) return;
   try {
-    blockingStatus.value = await temporaryDisableBlocking(disableMinutes.value)
-    message.success(t('dns.security.disableSuccess'))
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    blockingStatus.value = await temporaryDisableBlocking(disableMinutes.value);
+    void MessagePlugin.success(t('dns.security.disableSuccess'));
+  } catch (err) {
+    msgError(err);
+  }
 }
 
 async function handleResumeBlocking() {
-  if (!perm.canWrite('dns')) return
+  if (!perm.canWrite('dns')) return;
   try {
-    await temporaryDisableBlocking(0)
-    blockingStatus.value = await getBlockingStatus()
-    message.success(t('dns.security.resumeSuccess'))
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await temporaryDisableBlocking(0);
+    blockingStatus.value = await getBlockingStatus();
+    void MessagePlugin.success(t('dns.security.resumeSuccess'));
+  } catch (err) {
+    msgError(err);
+  }
 }
 
-async function handleRefreshBlockList(id: string) {
-  if (!perm.canWrite('dns')) return
-  refreshingId.value = id
+async function handleRefresh(id: string) {
+  if (!perm.canWrite('dns')) return;
+  refreshingId.value = id;
   try {
-    await refreshBlockList(id)
-    message.success(t('dns.security.refreshSuccess'))
-    loadBlockLists()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { refreshingId.value = null }
+    await refreshBlockList(id);
+    void MessagePlugin.success(t('dns.security.refreshSuccess'));
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    refreshingId.value = null;
+  }
 }
 
-const blockListColumns = [
-  { title: () => t('common.name'), key: 'name' },
-  { title: () => t('common.type'), key: 'type', render: (row: BlockList) => h(NTag, { size: 'small' }, { default: () => row.type }) },
-  { title: 'Rules', key: 'entry_count', width: 80 },
-  { title: () => t('dns.security.lastFetch'), key: 'last_fetch', width: 140, render: (row: BlockList) => {
-    if (row.type !== 'external') return '-'
-    if (!row.last_fetch_at) return h(NTag, { size: 'small' }, { default: () => t('dns.security.neverFetched') })
-    const status = row.last_fetch_status === 'ok'
-      ? h(NTag, { size: 'small', type: 'success' }, { default: () => 'OK' })
-      : h(NTag, { size: 'small', type: 'error' }, { default: () => t('dns.security.fetchFailed') })
-    return h(NSpace, { size: 4, align: 'center' }, { default: () => [status, h('span', { style: 'font-size: 12px; color: var(--n-text-color-3, #888);' }, formatTime(row.last_fetch_at!))] })
-  } },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockList) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: BlockList) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, onClick: () => { selectedBlockList.value = row; loadBlockRules(row.id) } }, { default: () => 'Rules' }),
-      ...(row.type === 'external' ? [
-        h(NButton, { size: 'small', text: true, type: 'primary', loading: refreshingId.value === row.id, disabled: !perm.canWrite('dns'), onClick: () => handleRefreshBlockList(row.id) }, { default: () => t('dns.security.refresh') }),
-      ] : []),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockList(row.id) }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
-
-// Block Rules
-const blockRuleLoading = ref(false)
-const blockRules = ref<BlockRule[]>([])
-
-const blockRuleColumns = [
-  { title: () => t('dns.security.pattern'), key: 'pattern' },
-  { title: () => t('dns.security.matchType'), key: 'match_type', render: (row: BlockRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
-  { title: () => t('dns.security.responseType'), key: 'response_type', render: (row: BlockRule) => h(NTag, { size: 'small', type: row.response_type === 'DROP' ? 'error' : 'warning' }, { default: () => row.response_type }) },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: BlockRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: BlockRule) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDeleteBlockRule(row.list_id, row.id) }, { default: () => t('common.delete') }) },
-]
-
-// Load functions
-async function loadBlockLists() {
-  blockListLoading.value = true
-  try { blockLists.value = (await listBlockLists()).data } finally { blockListLoading.value = false }
+async function selectList(row: BlockList) {
+  selectedList.value = row;
+  await loadBlockRules(row.id);
 }
 
 async function loadBlockRules(listId: string) {
-  blockRuleLoading.value = true
-  try { blockRules.value = (await listBlockRules(listId)).data } finally { blockRuleLoading.value = false }
-}
-
-// Handlers
-function openCreateBlockList() {
-  if (!perm.canWrite('dns')) return
-  Object.assign(blockListForm, { name: '', type: 'custom', url: '', enabled: true })
-  showBlockListModal.value = true
-}
-
-async function handleCreateBlockList() {
-  if (!perm.canWrite('dns')) return
-  blockListSubmitting.value = true
+  ruleLoading.value = true;
   try {
-    await createBlockList(blockListForm)
-    message.success(t('common.createSuccess'))
-    showBlockListModal.value = false
-    loadBlockLists()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { blockListSubmitting.value = false }
+    blockRules.value = (await listBlockRules(listId)).data;
+  } catch (err) {
+    msgError(err);
+  } finally {
+    ruleLoading.value = false;
+  }
 }
 
-async function handleDeleteBlockList(id: string) {
-  if (!perm.canDelete('dns')) return
-  try { await deleteBlockList(id); message.success(t('common.deleteSuccess')); loadBlockLists() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+function openCreateList() {
+  if (!perm.canWrite('dns')) return;
+  Object.assign(listForm, { name: '', type: 'custom', url: '', enabled: true });
+  showList.value = true;
 }
 
-async function handleAddBlockRule() {
-  if (!perm.canWrite('dns')) return
-  if (!selectedBlockList.value) return
+async function handleCreateList() {
+  if (!perm.canWrite('dns')) return;
+  const valid = await listFormRef.value?.validate();
+  if (valid !== true) return;
+  listSubmitting.value = true;
   try {
-    await addBlockRule(selectedBlockList.value.id, blockRuleForm)
-    message.success(t('common.createSuccess'))
-    showBlockRuleModal.value = false
-    loadBlockRules(selectedBlockList.value.id)
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await createBlockList(listForm);
+    void MessagePlugin.success(t('common.createSuccess'));
+    showList.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    listSubmitting.value = false;
+  }
 }
 
-async function handleDeleteBlockRule(listId: string, ruleId: string) {
-  if (!perm.canDelete('dns')) return
-  try { await deleteBlockRule(listId, ruleId); message.success(t('common.deleteSuccess')); if (selectedBlockList.value) loadBlockRules(selectedBlockList.value.id) } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+function confirmDeleteList(id: string) {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteBlockList(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        selectedList.value = null;
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
-async function handleFlush() {
-  if (!perm.canDelete('dns')) return
-  showFlushConfirm.value = false
+function openRule() {
+  if (!perm.canWrite('dns') || !selectedList.value) return;
+  Object.assign(ruleForm, {
+    pattern: '',
+    match_type: 'suffix',
+    response_type: 'NXDOMAIN',
+    response_data: '',
+    enabled: true
+  });
+  showRule.value = true;
+}
+
+async function handleAddRule() {
+  if (!perm.canWrite('dns') || !selectedList.value) return;
+  const valid = await ruleFormRef.value?.validate();
+  if (valid !== true) return;
+  ruleSubmitting.value = true;
   try {
-    const res = await flushBlockLists()
-    message.success(`${t('dns.security.flushSuccess')} (${res.flushed})`)
-    selectedBlockList.value = null
-    loadBlockLists()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await addBlockRule(selectedList.value.id, ruleForm);
+    void MessagePlugin.success(t('common.createSuccess'));
+    showRule.value = false;
+    await loadBlockRules(selectedList.value.id);
+  } catch (err) {
+    msgError(err);
+  } finally {
+    ruleSubmitting.value = false;
+  }
+}
+
+async function handleDeleteRule(listId: string, ruleId: string) {
+  if (!perm.canDelete('dns')) return;
+  try {
+    await deleteBlockRule(listId, ruleId);
+    void MessagePlugin.success(t('common.deleteSuccess'));
+    if (selectedList.value) await loadBlockRules(selectedList.value.id);
+  } catch (err) {
+    msgError(err);
+  }
+}
+
+function confirmFlush() {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('dns.security.flush'),
+    body: t('dns.security.flushConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        const res = await flushBlockLists();
+        void MessagePlugin.success(`${t('dns.security.flushSuccess')} (${res.flushed})`);
+        selectedList.value = null;
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
 onMounted(() => {
-  loadBlockLists()
-  loadBlockingStatus()
-  statusTimer = setInterval(loadBlockingStatus, 30000)
-})
-
+  void loadBlockingStatus();
+  statusTimer = setInterval(loadBlockingStatus, 30000);
+});
 onUnmounted(() => {
-  if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
-})
+  if (statusTimer) clearInterval(statusTimer);
+});
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dns.security.blockedTitle')">
-      <NSpace>
-        <NButton v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</NButton>
-        <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateBlockList">{{ t('dns.security.createBlockList') }}</NButton>
-      </NSpace>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dns.security.blockedTitle') }}</h2>
+      <TSpace size="small">
+        <TButton v-if="perm.canDelete('dns')" theme="danger" variant="outline" @click="confirmFlush">
+          {{ t('dns.security.flush') }}
+        </TButton>
+        <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openCreateList">
+          <template #icon><TIcon name="add" /></template>
+          {{ t('dns.security.createBlockList') }}
+        </TButton>
+      </TSpace>
+    </TCard>
 
-    <!-- Temporary disable blocking banner -->
-    <NAlert v-if="blockingStatus && blockingStatus.disabled_until" type="warning" style="margin-bottom: 12px;" closable>
-      <NSpace align="center">
-        <span>{{ t('dns.security.blockingDisabledUntil') }} <strong>{{ formatTime(blockingStatus.disabled_until) }}</strong></span>
-        <NButton v-if="perm.canWrite('dns')" size="small" @click="handleResumeBlocking">{{ t('dns.security.resumeBlocking') }}</NButton>
-      </NSpace>
-    </NAlert>
-    <NCard v-else size="small" style="margin-bottom: 12px;">
-      <NSpace align="center">
+    <TAlert
+      v-if="blockingStatus && blockingStatus.disabled_until"
+      theme="warning"
+      :message="`${t('dns.security.blockingDisabledUntil')} ${formatTime(blockingStatus.disabled_until)}`"
+      close
+    >
+      <template #operation>
+        <TButton v-if="perm.canWrite('dns')" size="small" @click="handleResumeBlocking">
+          {{ t('dns.security.resumeBlocking') }}
+        </TButton>
+      </template>
+    </TAlert>
+    <TCard v-else :bordered="false" class="disable-bar">
+      <TSpace size="small" align="center">
         <span>{{ t('dns.security.temporaryDisable') }}</span>
-        <NSelect v-model:value="disableMinutes" :options="disableMinutesOptions" style="width: 140px;" />
-        <NButton v-if="perm.canWrite('dns')" size="small" type="warning" @click="handleTemporaryDisable">{{ t('dns.security.disableNow') }}</NButton>
-      </NSpace>
-    </NCard>
+        <TSelect v-model="disableMinutes" :options="disableOptions" style="width: 130px" />
+        <TButton v-if="perm.canWrite('dns')" size="small" theme="warning" @click="handleTemporaryDisable">
+          {{ t('dns.security.disableNow') }}
+        </TButton>
+      </TSpace>
+    </TCard>
 
-    <NCard>
-      <NDataTable :columns="blockListColumns" :data="blockLists" :loading="blockListLoading" :row-key="(row: BlockList) => row.id" />
+    <RemoteTable ref="tableRef" :columns="listColumns" :fetcher="listBlockLists" :show-pagination="false" />
 
-      <NCard v-if="selectedBlockList" :title="`${selectedBlockList.name} - Rules`" style="margin-top: 16px;">
-        <template #header-extra>
-          <NButton v-if="perm.canWrite('dns')" size="small" @click="showBlockRuleModal = true">{{ t('dns.security.addBlockRule') }}</NButton>
-        </template>
-        <NDataTable :columns="blockRuleColumns" :data="blockRules" :loading="blockRuleLoading" :row-key="(row: BlockRule) => row.id" size="small" />
-      </NCard>
-    </NCard>
-
-    <!-- Block List Modal -->
-    <NModal v-if="showBlockListModal" v-model:show="showBlockListModal" preset="card" :title="t('dns.security.createBlockList')" style="width: 450px;">
-      <NForm :model="blockListForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('common.name')"><NInput v-model:value="blockListForm.name" /></NFormItem>
-        <NFormItem :label="t('common.type')"><NSelect v-model:value="blockListForm.type" :options="[{ label: 'Custom', value: 'custom' }, { label: 'External', value: 'external' }]" /></NFormItem>
-        <NFormItem v-if="blockListForm.type === 'external'" label="URL"><NInput v-model:value="blockListForm.url" placeholder="https://example.com/blocklist.txt" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="blockListForm.enabled" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showBlockListModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="blockListSubmitting" :disabled="!perm.canWrite('dns')" @click="handleCreateBlockList">{{ t('common.save') }}</NButton>
-        </NSpace>
+    <TCard v-if="selectedList" :bordered="false" :title="`${selectedList.name} - Rules`">
+      <template #actions>
+        <TButton v-if="perm.canWrite('dns')" size="small" theme="primary" @click="openRule">
+          {{ t('dns.security.addBlockRule') }}
+        </TButton>
       </template>
-    </NModal>
+      <TTable :columns="ruleColumns" :data="blockRules" :loading="ruleLoading" row-key="id" size="small" stripe hover />
+    </TCard>
 
-    <!-- Block Rule Modal -->
-    <NModal v-if="showBlockRuleModal" v-model:show="showBlockRuleModal" preset="card" :title="t('dns.security.addBlockRule')" style="width: 450px;">
-      <NForm :model="blockRuleForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('dns.security.pattern')"><NInput v-model:value="blockRuleForm.pattern" /></NFormItem>
-        <NFormItem :label="t('dns.security.matchType')"><NSelect v-model:value="blockRuleForm.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></NFormItem>
-        <NFormItem :label="t('dns.security.responseType')"><NSelect v-model:value="blockRuleForm.response_type" :options="[{ label: 'NXDOMAIN', value: 'NXDOMAIN' }, { label: 'NODATA', value: 'NODATA' }, { label: 'REFUSED', value: 'REFUSED' }, { label: 'DROP', value: 'DROP' }, { label: 'Custom IP', value: 'CUSTOM_IP' }]" /></NFormItem>
-        <NFormItem v-if="blockRuleForm.response_type === 'CUSTOM_IP'" label="IP"><NInput v-model:value="blockRuleForm.response_data" placeholder="0.0.0.0" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="blockRuleForm.enabled" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showBlockRuleModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :disabled="!perm.canWrite('dns')" @click="handleAddBlockRule">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showList"
+      :header="t('dns.security.createBlockList')"
+      :confirm-btn="{ loading: listSubmitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleCreateList"
+    >
+      <TForm ref="listFormRef" :data="listForm" :rules="listRules" label-align="top">
+        <TFormItem :label="t('common.name')" name="name">
+          <TInput v-model="listForm.name" />
+        </TFormItem>
+        <TFormItem :label="t('common.type')" name="type">
+          <TSelect
+            v-model="listForm.type"
+            :options="[{ label: 'Custom', value: 'custom' }, { label: 'External', value: 'external' }]"
+          />
+        </TFormItem>
+        <TFormItem v-if="listForm.type === 'external'" label="URL">
+          <TInput v-model="listForm.url" placeholder="https://example.com/blocklist.txt" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')">
+          <TSwitch v-model="listForm.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <ConfirmDialog
-      :show="showFlushConfirm"
-      :message="t('dns.security.flushConfirm')"
-      @confirm="handleFlush"
-      @cancel="showFlushConfirm = false"
-    />
+    <TDialog
+      v-model:visible="showRule"
+      :header="t('dns.security.addBlockRule')"
+      :confirm-btn="{ loading: ruleSubmitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="500px"
+      @confirm="handleAddRule"
+    >
+      <TForm ref="ruleFormRef" :data="ruleForm" :rules="ruleRules" label-align="top">
+        <TFormItem :label="t('dns.security.pattern')" name="pattern">
+          <TInput v-model="ruleForm.pattern" />
+        </TFormItem>
+        <TFormItem :label="t('dns.security.matchType')">
+          <TSelect v-model="ruleForm.match_type" :options="matchOptions" />
+        </TFormItem>
+        <TFormItem :label="t('dns.security.responseType')">
+          <TSelect v-model="ruleForm.response_type" :options="responseOptions" />
+        </TFormItem>
+        <TFormItem v-if="ruleForm.response_type === 'CUSTOM_IP'" label="IP">
+          <TInput v-model="ruleForm.response_data" placeholder="0.0.0.0" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')">
+          <TSwitch v-model="ruleForm.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.disable-bar :deep(.t-card__body) {
+  padding: 12px 16px;
+}
+:deep(.fetch-time) {
+  font-size: 12px;
+  color: #9ca3af;
+}
+</style>

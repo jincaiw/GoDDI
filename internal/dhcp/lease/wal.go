@@ -23,8 +23,15 @@ type WALEvent struct {
 	Seq      int64        `json:"seq"`
 	Op       string       `json:"op"`
 	Mutation MutationKind `json:"mutation,omitempty"`
-	Lease    *Lease       `json:"lease,omitempty"`
-	LeaseID  string       `json:"lease_id,omitempty"`
+	// Before/After are both carried so a projection can rebuild the exact
+	// fact envelope for the mutation (generation rules need the prior state),
+	// not just the resulting lease snapshot.
+	Before  *Lease `json:"before,omitempty"`
+	Lease   *Lease `json:"lease,omitempty"`
+	LeaseID string `json:"lease_id,omitempty"`
+	// SpaceID is resolved before the durable append so a space-resolution
+	// failure fails the request, matching the synchronous facts seam.
+	SpaceID string `json:"space_id,omitempty"`
 }
 
 const (

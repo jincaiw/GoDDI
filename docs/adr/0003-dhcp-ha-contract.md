@@ -246,3 +246,14 @@ dhcp_ha:
 3. **未做**：`ha status` 对**运行中**进程的探测（因此才有第 9 条如实报 `unknown`）；本机 store 之外任何位置的冗余判定。
 4. **审计是本机的。** 算子动作写的是本机库的审计表；两台机器的审计需要在采集侧合并，产品不做跨节点审计聚合。
 
+
+## 容器化双节点演练的补充发现（round 246–265 附录）
+
+2 容器（独立网络命名空间/数据卷）双节点演练 15 个场景 + 监控/告警证据链（台账 §1ca 系列）对本合同的三点实证与两点修正：
+1. **实证**：镜像水位持久化、fail-closed 状态机（mirror 死亡 → paused，promising=0）、防脑裂（primary 死亡 standby 永不自行提升）、操作员接管/fence/rejoin、SIGKILL（exit 137）后的 WAL 恢复与持久水位恢复——全部按本合同设计工作。
+2. **双 primary 危险态实测确认**：**未 fence 的旧 primary 直接重启 = 双 primary**（本轮真实发生：旧 primary 未 fence 重启 → `role_in_force: primary` 双实例并存）；纠正须先在其数据卷上 `ha fence` 再重启。takeover 的 `--old-primary-cannot-write` 断言（"A dead primary and a partitioned one are both silent to this node, so only a person can tell them apart"）因此不可省略——**fence 必须先行**。
+3. **控制库只读的三层语义**：仅主库文件只读时 WAL 模式写仍经 `-wal` 成功（「只读文件」≠「只读库」）；非 root 用户 + 全目录只读 → sqlitepolicy 连接钩子拒绝 → **应用拒绝启动**（最强 fail-closed）；恢复需 chown 回 goddi 属主。
+4. **degrade 审批语义**：`ha degrade --confirm`（单副本 ACK，promising=1）/ `--undo --confirm`（立即撤回）/ 镜像追平自动清除——三种转换均要求或触发显式确认，与「所有改变服务行为的操作都需要确认」一致。
+
+5. **`goddi ha degrade` 的确认语义已在容器环境实证**：grant/undo 均要求 `--confirm`（撤回同样改变服务行为）；镜像死亡时 grant 使 promising 0→1（单副本 ACK），镜像追平时自动清除。拾取窗口非精确秒级（运行服务轮询）。
+6. **W09 第 1 条（无自动 promote）在容器环境再次确认**：primary 被 SIGKILL/停止后 standby 持续重连 60+ 秒，0 条 promote 日志，/ready=degraded——防脑裂契约不仅写在代码里，也在最接近真实的故障注入下成立。

@@ -48,6 +48,14 @@ const ROUTE_META: Partial<Record<RouteKey, Partial<RouteMeta>>> = {
                   "action": "read"
             }
       },
+      "dns_dnssec": {
+            "icon": "mdi:key-chain",
+            "order": 5,
+            "permission": {
+                  "resource": "dns",
+                  "action": "read"
+            }
+      },
       "dns_cache": {
             "icon": "mdi:database-clock",
             "order": 4,
@@ -71,6 +79,14 @@ const ROUTE_META: Partial<Record<RouteKey, Partial<RouteMeta>>> = {
       "dhcp": {
             "icon": "mdi:lan",
             "order": 4
+      },
+      "dhcp_ha": {
+            "icon": "mdi:server-network",
+            "order": 5,
+            "permission": {
+                  "resource": "dhcp",
+                  "action": "read"
+            }
       },
       "dhcp_scopes": {
             "icon": "mdi:map",
@@ -233,7 +249,11 @@ const ROUTE_META: Partial<Record<RouteKey, Partial<RouteMeta>>> = {
 export function setupElegantRouter() {
   return ElegantVueRouter({
     layouts: {
-      base: 'src/layouts/base-layout/index.vue',
+      // Staged TDesign migration: the Starter-style shell is the active base
+      // layout for all existing pages. Every page stays reachable inside its
+      // <RouterView /> while each page is migrated from Naive UI to TDesign.
+      // See docs/tdesign-migration.md.
+      base: 'src/layouts/tdesign-layout/index.vue',
       blank: 'src/layouts/blank-layout/index.vue'
     },
     routePathTransformer(routeName, routePath) {

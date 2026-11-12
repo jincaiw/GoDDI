@@ -1,106 +1,250 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listIPAMSpaces, createIPAMSpace, updateIPAMSpace, deleteIPAMSpace, type IPAMSpace, type CreateIPAMSpaceRequest } from '@/service/api/goddi/ipam'
+import { onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import {
+  DialogPlugin,
+  Link as TLink,
+  MessagePlugin,
+  Space as TSpace
+} from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol, PageInfo } from 'tdesign-vue-next';
+import { usePermission } from '@/composables/usePermission';
+import {
+  createIPAMSpace,
+  deleteIPAMSpace,
+  listIPAMSpaces,
+  updateIPAMSpace,
+  type CreateIPAMSpaceRequest,
+  type IPAMSpace
+} from '@/service/api/goddi/ipam';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'IPAMSpacesPage' });
 
-const loading = ref(false)
-const submitting = ref(false)
-const spaces = ref<IPAMSpace[]>([])
-const showModal = ref(false)
-const showDeleteConfirm = ref(false)
-const deletingId = ref('')
-const editing = ref<IPAMSpace | null>(null)
+/**
+ * TDesign reference page for the staged console migration.
+ *
+ * This is the template every remaining page will be migrated to. It covers the
+ * full pattern with real backend calls: remote-paginated table, create/edit
+ * form in a dialog with validation, delete confirmation, RBAC gating, loading
+ * and error handling, and i18n. The API layer (`service/api/goddi/client.ts`)
+ * and the auth store are reused unchanged, so JWT/CSRF handling, the 401
+ * refresh queue and the {code,message,data} envelope stay identical.
+ *
+ * Single-node scope: this page talks to the local control API only. Multi-node
+ * (HA / replication) UI is deliberately deferred; see docs/tdesign-migration.md.
+ */
 
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-const formData = reactive<CreateIPAMSpaceRequest>({ name: '', description: '' })
+const { t } = useI18n();
+const perm = usePermission();
 
-const columns = [
-  { title: () => t('common.name'), key: 'name' },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('common.createdAt'), key: 'created_at', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: IPAMSpace) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('ipam'), onClick: () => { if (!perm.canWrite('ipam')) return; editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('ipam'), onClick: () => { if (!perm.canDelete('ipam')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
+const loading = ref(false);
+const submitting = ref(false);
+const rows = ref<IPAMSpace[]>([]);
+const showDialog = ref(false);
+const editing = ref<IPAMSpace | null>(null);
 
-async function loadData() {
-  loading.value = true
-  try {
-    const result = await listIPAMSpaces({ page: pagination.page, page_size: pagination.pageSize })
-    spaces.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+const pagination = reactive({
+  current: 1,
+  pageSize: 20,
+  total: 0,
+  showPageSize: true,
+  pageSizeOptions: [10, 20, 50]
+});
+
+const formData = reactive<CreateIPAMSpaceRequest>({ name: '', description: '' });
+const formRef = ref<FormInstanceFunctions | null>(null);
+
+const formRules = {
+  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+};
+
+const columns: PrimaryTableCol<IPAMSpace>[] = [
+  { colKey: 'name', title: t('common.name'), minWidth: 160 },
+  { colKey: 'description', title: t('common.description'), ellipsis: true },
+  { colKey: 'created_at', title: t('common.createdAt'), width: 180 },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 180,
+    cell: (h, { row }) =>
+      h(TSpace, { size: 'small' }, () => [
+        h(
+          TLink,
+          {
+            theme: 'primary',
+            disabled: !perm.canWrite('ipam'),
+            onClick: () => openEdit(row as IPAMSpace)
+          },
+          () => t('common.edit')
+        ),
+        h(
+          TLink,
+          {
+            theme: 'danger',
+            disabled: !perm.canDelete('ipam'),
+            onClick: () => confirmDelete(row as IPAMSpace)
+          },
+          () => t('common.delete')
+        )
+      ])
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
+async function loadData() {
+  loading.value = true;
+  try {
+    const result = await listIPAMSpaces({ page: pagination.current, page_size: pagination.pageSize });
+    rows.value = result.data;
+    pagination.total = result.meta.total;
+  } catch (err) {
+    msgError(err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+function handlePageChange(pageInfo: PageInfo) {
+  pagination.current = pageInfo.current;
+  pagination.pageSize = pageInfo.pageSize;
+  void loadData();
+}
 
 function openCreate() {
-  if (!perm.canWrite('ipam')) return
-  editing.value = null
-  Object.assign(formData, { name: '', description: '' })
-  showModal.value = true
+  if (!perm.canWrite('ipam')) return;
+  editing.value = null;
+  Object.assign(formData, { name: '', description: '' });
+  showDialog.value = true;
+}
+
+function openEdit(row: IPAMSpace) {
+  if (!perm.canWrite('ipam')) return;
+  editing.value = row;
+  Object.assign(formData, { name: row.name, description: row.description });
+  showDialog.value = true;
 }
 
 async function handleSubmit() {
-  if (!perm.canWrite('ipam')) return
-  submitting.value = true
+  if (!perm.canWrite('ipam')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editing.value) { await updateIPAMSpace(editing.value.id, formData); message.success(t('common.updateSuccess')) }
-    else { await createIPAMSpace(formData); message.success(t('common.createSuccess')) }
-    showModal.value = false; editing.value = null; loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { submitting.value = false }
+    if (editing.value) {
+      await updateIPAMSpace(editing.value.id, formData);
+      void MessagePlugin.success(t('common.updateSuccess'));
+    } else {
+      await createIPAMSpace(formData);
+      void MessagePlugin.success(t('common.createSuccess'));
+    }
+    showDialog.value = false;
+    editing.value = null;
+    await loadData();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('ipam')) return
-  try { await deleteIPAMSpace(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showDeleteConfirm.value = false
+function confirmDelete(row: IPAMSpace) {
+  if (!perm.canDelete('ipam')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: `${t('common.deleteConfirm')} (${row.name})`,
+    theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
+    onConfirm: async () => {
+      try {
+        await deleteIPAMSpace(row.id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await loadData();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
-onMounted(loadData)
+onMounted(loadData);
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('ipam.spaces.title')">
-      <NButton v-if="perm.canWrite('ipam')" type="primary" @click="openCreate">{{ t('ipam.spaces.createSpace') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <div class="td-page-title">
+        <h2>{{ t('ipam.spaces.title') }}</h2>
+        <TTag theme="primary" variant="light">TDesign</TTag>
+      </div>
+      <TButton v-if="perm.canWrite('ipam')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('ipam.spaces.createSpace') }}
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="spaces"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: IPAMSpace) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <TCard :bordered="false">
+      <TTable
+        row-key="id"
+        :data="rows"
+        :columns="columns"
+        :loading="loading"
+        :pagination="{
+          current: pagination.current,
+          pageSize: pagination.pageSize,
+          total: pagination.total,
+          showPageSize: pagination.showPageSize,
+          pageSizeOptions: pagination.pageSizeOptions
+        }"
+        stripe
+        hover
+        @page-change="handlePageChange"
+      />
+    </TCard>
 
-    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('ipam.spaces.editSpace') : t('ipam.spaces.createSpace')" preset="card" style="width: 450px;">
-      <NForm :model="formData" label-placement="left" label-width="80px">
-        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('ipam')" @click="handleSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+    <TDialog
+      v-model:visible="showDialog"
+      :header="editing ? t('ipam.spaces.editSpace') : t('ipam.spaces.createSpace')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleSubmit"
+    >
+      <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
+        <TFormItem :label="t('common.name')" name="name">
+          <TInput v-model="formData.name" :placeholder="t('common.name')" />
+        </TFormItem>
+        <TFormItem :label="t('common.description')" name="description">
+          <TTextarea v-model="formData.description" :placeholder="t('common.description')" :autosize="{ minRows: 3 }" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.td-page-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.td-page-title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+</style>

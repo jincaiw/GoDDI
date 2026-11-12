@@ -52,19 +52,11 @@ What the batch's earlier numbering used to cover, and why the cases are gone:
     database. That is a stronger guarantee than a test -- the compiler holds it
     -- and the part that is still falsifiable is the process assembly, which
     scripts/w07_role_smoke_check.py asserts by starting the binary.
-  * (ex R17) "the DDNS applier reads the binding from the lease store". A Stores
-    value is built with Same() in every construction that exists -- main.go
-    passes Same(dnsStore.DB) and the tests pass Same(db) -- so swapping the two
-    fields cannot change any observable behaviour, and a case that swapped them
-    would report a verified revert over a no-op. The rule that replaced it is
-    covered by R29: the applier publishes from the event's own snapshot when the
-    lease replica has not arrived yet.
-  * "the DDNS consumer is woken when an event is queued". It is not, and cannot
-    be: the consumer is another process, on another file system, and the only
-    way it learns of the entry is that this store's push reaches the control
-    database and its own poll reads it. R32 pins the wake-up that does exist --
-    the one to this process's own outbox push -- and the consumer's 1s drain is
-    a constant no test can make fail by removing it.
+  * (ex R17/R27/R29/R32) the legacy DDNS event push, its outbox wake and the
+    tests that pinned them were retired with the legacy queue (round 286-287).
+    The unified facts chain is now the only DNS producer; those mutation cases
+    are gone rather than re-anchored, because the shapes they guarded no longer
+    exist.
 
 R19-R22 cover the record write guard: the console refuses to edit, delete or
 batch-delete a record the data plane authored, and still writes the records the
@@ -94,6 +86,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 DP = ROOT / "internal/dataplane"
+POLICY = ROOT / "internal/sqlitepolicy/connection.go"
 DP_MIG = DP / "migrations/001_dataplane.sql"
 SYNC = DP / "sync.go"
 TRANSFER = DP / "transfer.go"
@@ -124,23 +117,23 @@ CASES = [
     # the test fails at Open rather than at a later assertion.
     {
         "label": "R1 the lease store opens with synchronous=NORMAL",
-        "file": DP / "store.go",
-        "old": '\t{"synchronous", "2"},',
-        "new": '\t{"synchronous", "1"},',
+        "file": POLICY,
+        "old": '"PRAGMA synchronous = FULL",',
+        "new": '"PRAGMA synchronous = NORMAL",',
         "test": "TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest",
     },
     {
         "label": "R2 the lease store opens on the rollback journal",
-        "file": DP / "store.go",
-        "old": '\t{"journal_mode", "wal"},',
-        "new": '\t{"journal_mode", "delete"},',
+        "file": POLICY,
+        "old": '"PRAGMA journal_mode = WAL",',
+        "new": '"PRAGMA journal_mode = DELETE",',
         "test": "TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest",
     },
     {
         "label": "R3 the lease store opens with foreign keys off",
-        "file": DP / "store.go",
-        "old": '\t{"foreign_keys", "1"},',
-        "new": '\t{"foreign_keys", "0"},',
+        "file": POLICY,
+        "old": '"PRAGMA foreign_keys = ON",',
+        "new": '"PRAGMA foreign_keys = OFF",',
         "test": "TestOpenAppliesTheDurabilitySettingsThatMakeAnAckHonest",
     },
     # -- the replica schema -------------------------------------------------
@@ -338,19 +331,22 @@ CASES = [
     {
         "label": "R20 the console deletes a record the data plane owns",
         "file": ZONE_RECORD,
+        # assertEditable moved to ownership.go and the following line in
+        # DeleteRecord is now `tx, err := m.db.Begin()`; anchor there so the
+        # call in DeleteRecord (not UpdateRecord / BatchDelete) is mutated.
         "old": (
             "\tif err := m.assertEditable(id); err != nil {\n"
             "\t\treturn err\n"
             "\t}\n"
             "\n"
-            "\t// Get record to know which zone to update serial for."
+            "\ttx, err := m.db.Begin()"
         ),
         "new": (
             "\tif err := error(nil); err != nil {\n"
             "\t\treturn err\n"
             "\t}\n"
             "\n"
-            "\t// Get record to know which zone to update serial for."
+            "\ttx, err := m.db.Begin()"
         ),
         "test": "TestTheConsoleRefusesToDeleteARecordTheDataPlaneOwns",
         "pkg": PKG_HANDLER,
@@ -416,20 +412,10 @@ CASES = [
     {
         "label": "R25 a downward sync overwrites a locally bumped serial",
         "file": SYNC,
-        "old": (
-            "\tif d == DomainDNS {\n"
-            "\t\tif err := reapplyLocalSerials(tx); err != nil {\n"
-            "\t\t\treturn false, nil, 0, err\n"
-            "\t\t}\n"
-            "\t}"
-        ),
-        "new": (
-            "\tif false && d == DomainDNS {\n"
-            "\t\tif err := reapplyLocalSerials(tx); err != nil {\n"
-            "\t\t\treturn false, nil, 0, err\n"
-            "\t\t}\n"
-            "\t}"
-        ),
+        # The DomainDNS block now also snapshots served zones after the serial
+        # restore, so pin just the call line and disable the restore in place.
+        "old": "\t\tif err := reapplyLocalSerials(tx); err != nil {\n",
+        "new": "\t\tif err := error(nil); err != nil {\n",
         "test": "TestALocallyBumpedSerialSurvivesADownwardSync",
     },
     # R26 makes the serial push unconditional. The bound is replaced by a
@@ -448,13 +434,6 @@ CASES = [
     # R27 carries the consumer's own state back up with the payload. The
     # producer cannot observe the consumer, so an event the DNS side already
     # processed is reported to the console as pending again.
-    {
-        "label": "R27 the event push overwrites another consumer's state",
-        "file": TRANSFER,
-        "old": "\t\tON CONFLICT(id) DO NOTHING`,",
-        "new": "\t\tON CONFLICT(id) DO UPDATE SET status = 'pending'`,",
-        "test": "TestTheOutboxPushCannotResetAnotherConsumersState",
-    },
     # R28 restores the criterion the split had to abandon: a record is an
     # orphan when its lease row is absent. The lease table here is a replica,
     # and absence means "the update has not arrived yet", not "the binding is
@@ -479,14 +458,6 @@ CASES = [
     # record is the one written from a lagging lease replica, where the lease's
     # end was not visible; nothing else will ever fill the expiry in, so the
     # name outlives the binding that justified it.
-    {
-        "label": "R29 a record published without an expiry is never completed",
-        "file": DNS_LINK,
-        "old": "\t\t          AND r.expires_at IS NOT NULL\n",
-        "new": "",
-        "test": "TestTheOutboxCrossesToTheDNSPlaneAndPublishesWithoutTheLeaseReplica",
-        "pkg": PKG_DHCP_SERVER,
-    },
     # R30 and R31 disable the two halves of the supersede rule. Without them a
     # replayed create resurrects a name that a later renewal, or a teardown,
     # has already taken away.
@@ -511,14 +482,6 @@ CASES = [
     # answered and its own name resolving. R32-R35 pin the two ways it is not
     # paid in full: the near side wakes its own loop instead of waiting, and the
     # signal survives arriving before that loop starts.
-    {
-        "label": "R32 a queued DNS change does not wake the outbox push",
-        "file": DHCP_SERVER,
-        "old": "\tif err == nil {\n\t\ts.wakeOutbox()\n\t}",
-        "new": "\tif false && err == nil {\n\t\ts.wakeOutbox()\n\t}",
-        "test": "TestQueueingADNSChangeWakesTheOutboxPush",
-        "pkg": PKG_DHCP_SERVER,
-    },
     {
         "label": "R33 a wake does not run a pass",
         "file": RUNNER,

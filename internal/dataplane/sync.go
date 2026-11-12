@@ -22,13 +22,6 @@ const (
 	DomainDHCP Domain = "dhcp"
 	// DomainDNS is the DNS data plane's zones and records.
 	DomainDNS Domain = "dns"
-	// DomainDDNS is the queue of DNS changes a DHCP process owes the DNS side.
-	//
-	// It is its own domain because it is not configuration: it is a log, it
-	// grows at the rate clients arrive and leave, and its rows carry the
-	// consumer's retry state. Riding along with either configuration domain
-	// would make every lease renewal look like a zone edit.
-	DomainDDNS Domain = "ddns"
 	// DomainLeases is the lease replica, which the DNS side needs to answer
 	// "does the binding behind this record still exist?".
 	//
@@ -36,6 +29,11 @@ const (
 	// nothing to do with each other, and a DNS process has no use for scopes
 	// changing at the rate clients renew.
 	DomainLeases Domain = "leases"
+	// DomainFacts is the unified facts inbox replica: the lease plane's
+	// durable facts, relayed into the control inbox and replicated here so a
+	// DNS process can project lease-driven record changes from the unified
+	// chain. It is a log, not configuration.
+	DomainFacts Domain = "facts"
 )
 
 // replaceMode says how a replica table is brought up to date.
@@ -115,15 +113,36 @@ var dnsTables = []table{
 		"port", "enabled", "comment", "tags", "tag", "flag", "owner", "owner_ref",
 		"owner_generation", "expires_at", "authored_locally", "created_at", "updated_at",
 	}},
+	// The AXFR/IXFR handler reads this table from the store it serves from.
+	// Without it, a DNS data plane would deny every transfer (the query fails
+	// on a missing table) even though the control database has the grants.
+	{name: "dns_zone_transfer", key: "id", mode: replaceWhole, columns: []string{
+		"id", "zone_id", "allowed_cidr", "tsig_key_name", "created_at",
+	}},
+	// RRSIGs are minted on the query path from the data-plane copy of the
+	// keys. Private keys stay encrypted at rest; no FK so the wholesale
+	// dns_zones replacement cannot cascade them away.
+	{name: "dns_dnssec_keys", key: "id", mode: replaceWhole, columns: []string{
+		"id", "zone_id", "key_type", "algorithm", "public_key",
+		"private_key_ciphertext", "key_tag", "enabled", "created_at",
+	}},
+	// The RFC 2136 update handler checks these policies on the query path,
+	// from dnsDataDB. Without the projection the query fails and every
+	// signed UPDATE is refused.
+	{name: "dns_dynamic_update_policies", key: "id", mode: replaceWhole, columns: []string{
+		"id", "zone_id", "name", "pattern", "action", "tsig_key_name",
+		"enabled", "created_at", "updated_at",
+	}},
 }
 
-// ddnsTables carries the outbox. Only the payload travels: status, attempts and
-// next_attempt_at are the consumer's, and overwriting them with another
-// process's view of the queue is how a retry counter silently resets.
-var ddnsTables = []table{
-	{name: "dhcp_dns_events", key: "id", mode: appendNewer, columns: []string{
-		"id", "lease_id", "generation", "action", "scope_id", "ip_address",
-		"mac_address", "hostname", "created_at",
+// factsTables carries the unified facts inbox copy. Only the producer-owned
+// payload travels: status, attempts, next_attempt_at and last_error are the
+// consumer's own state, and overwriting them with another process's view would
+// reset a retry counter or mark an unconsumed fact done.
+var factsTables = []table{
+	{name: "dhcp_ipam_observation_events", key: "id", mode: appendNewer, columns: []string{
+		"id", "event_id", "version", "entity", "action", "generation",
+		"sequence", "source", "occurred_at", "payload_version", "payload", "created_at",
 	}},
 }
 
@@ -141,8 +160,8 @@ func TablesFor(d Domain) []table {
 		return dhcpTables
 	case DomainDNS:
 		return dnsTables
-	case DomainDDNS:
-		return ddnsTables
+	case DomainFacts:
+		return factsTables
 	case DomainLeases:
 		return leaseTables
 	default:
@@ -850,8 +869,8 @@ func (s *Store) HasReplica(d Domain) (bool, error) {
 		return s.hasRows("dhcp_scopes")
 	case DomainDNS:
 		return s.hasRows("dns_zones")
-	case DomainDDNS:
-		return s.hasRows("dhcp_dns_events")
+	case DomainFacts:
+		return s.hasRows("dhcp_ipam_observation_events")
 	case DomainLeases:
 		return s.hasRows("dhcp_leases")
 	default:

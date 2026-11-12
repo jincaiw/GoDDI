@@ -65,11 +65,6 @@ func (r *Replicator) TakeOverLeases(ctx context.Context) (int, error) {
 		columns []string
 	}{
 		{"dhcp_leases", leaseTransferColumns},
-		{"dhcp_dns_events", []string{
-			"id", "lease_id", "generation", "action", "scope_id", "ip_address",
-			"mac_address", "hostname", "attempts", "next_attempt_at", "last_error",
-			"status", "created_at", "updated_at",
-		}},
 		{"dhcp_logs", []string{"id", "scope_id", "mac_address", "ip_address", "event_type", "message", "created_at"}},
 	} {
 		rows, err := readAll(ctx, r.control, table{name: spec.table, columns: spec.columns})
@@ -216,6 +211,29 @@ func (r *Replicator) Push(ctx context.Context, limit int) (PushResult, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// columnIndex resolves a transfer column's position once, so the push reads
+	// the scope, address and status by name rather than by a magic offset that
+	// would silently drift if the column list changed.
+	columnIndex := func(name string) int {
+		for i, c := range leaseTransferColumns {
+			if c == name {
+				return i
+			}
+		}
+		return -1
+	}
+	scopeIdx, ipIdx, statusIdx := columnIndex("scope_id"), columnIndex("ip_address"), columnIndex("status")
+	leasePushStatus := func(v interface{}) string {
+		switch x := v.(type) {
+		case string:
+			return x
+		case []byte:
+			return string(x)
+		default:
+			return ""
+		}
+	}
+
 	deleteStmt, err := tx.Prepare(`DELETE FROM dhcp_leases WHERE id = ?`)
 	if err != nil {
 		return res, fmt.Errorf("dataplane: preparing the replica delete: %w", err)
@@ -233,6 +251,22 @@ func (r *Replicator) Push(ctx context.Context, limit int) (PushResult, error) {
 	}
 	defer upsertStmt.Close()
 
+	// A lease the store now holds for an address may be a different lease id
+	// than the projection's row for that address (the IP was released, expired
+	// and handed out again). The projection's partial unique index holds at
+	// most one active/offered row per (scope, address), so that stale holder
+	// has to leave the held set before the new one can take its place. Without
+	// this the insert collides, is refused, and the address is stuck: the
+	// projection keeps showing the old holder and no new lease for it ever
+	// lands. Expiring the stale row is safe because the lease store is the
+	// authority -- a row it does not hold active cannot be held active here.
+	supersedeStmt, err := tx.Prepare(`UPDATE dhcp_leases SET status = 'expired'
+		WHERE scope_id = ? AND ip_address = ? AND id <> ? AND status IN ('active', 'offered')`)
+	if err != nil {
+		return res, fmt.Errorf("dataplane: preparing the stale-holder supersede: %w", err)
+	}
+	defer supersedeStmt.Close()
+
 	// A row the control database will not take is recorded and skipped, not
 	// returned on. Returning here is what made one unacceptable lease stall the
 	// entire queue: every marker in the batch stayed, so the next pass read the
@@ -246,13 +280,51 @@ func (r *Replicator) Push(ctx context.Context, limit int) (PushResult, error) {
 				continue
 			}
 			res.Deleted++
-		} else {
+			done = append(done, p.id)
+			continue
+		}
+		status := ""
+		if statusIdx >= 0 && statusIdx < len(p.values) {
+			status = leasePushStatus(p.values[statusIdx])
+		}
+		if status != "active" && status != "offered" {
 			if _, err := upsertStmt.Exec(p.values...); err != nil {
 				refused = append(refused, pushFailure{key: p.id, err: err})
 				continue
 			}
 			res.Upserted++
+			done = append(done, p.id)
+			continue
 		}
+		// Supersede any stale holder, then insert the new one, atomically: a
+		// failed insert must roll the supersede back with it, or the address
+		// would read as free in the projection while the lease store still
+		// holds it.
+		if _, err := tx.Exec("SAVEPOINT lease_push_row"); err != nil {
+			return res, fmt.Errorf("dataplane: opening the per-row savepoint: %w", err)
+		}
+		superseded := false
+		if scopeIdx >= 0 && ipIdx >= 0 && scopeIdx < len(p.values) && ipIdx < len(p.values) {
+			if _, err := supersedeStmt.Exec(p.values[scopeIdx], p.values[ipIdx], p.id); err != nil {
+				_, _ = tx.Exec("ROLLBACK TO lease_push_row")
+				_, _ = tx.Exec("RELEASE lease_push_row")
+				refused = append(refused, pushFailure{key: p.id, err: err})
+				continue
+			}
+			superseded = true
+		}
+		if _, err := upsertStmt.Exec(p.values...); err != nil {
+			if superseded {
+				_, _ = tx.Exec("ROLLBACK TO lease_push_row")
+			}
+			_, _ = tx.Exec("RELEASE lease_push_row")
+			refused = append(refused, pushFailure{key: p.id, err: err})
+			continue
+		}
+		if _, err := tx.Exec("RELEASE lease_push_row"); err != nil {
+			return res, fmt.Errorf("dataplane: releasing the per-row savepoint: %w", err)
+		}
+		res.Upserted++
 		done = append(done, p.id)
 	}
 	res.Refused = len(refused)
@@ -422,7 +494,6 @@ func (r *Replicator) pendingLeases(ctx context.Context, limit int) ([]pendingLea
 var upwardQueues = []struct{ table, key string }{
 	{"dhcp_ipam_observation_event_dirty", "event_id"},
 	{"dhcp_lease_dirty", "lease_id"},
-	{"dhcp_dns_event_dirty", "event_id"},
 	{"dhcp_log_dirty", "log_id"},
 	{"dns_record_dirty", "record_id"},
 	{"dns_zone_serial_dirty", "zone_id"},
@@ -712,25 +783,6 @@ func upsertStatement(tableName string, columns []string, key string) string {
 		key, upsertAssignments(columns, key))
 }
 
-// eventPushColumns are the columns an outbox row travels with: the payload the
-// producer decided, and nothing else.
-//
-// The consumer's own columns -- status, attempts, next_attempt_at, last_error
-// -- are deliberately absent, and they are absent from the push rather than
-// from the table because two planes now hold a copy of this queue. The DHCP
-// plane authors the payload; each DNS plane keeps its own progress through it.
-// Copying an attempt counter made in one file system over another's is how a
-// retry silently resets or an event is silently re-delivered.
-//
-// The consequence is worth stating plainly rather than hiding: the control
-// database's copy of this queue records what was owed, not what was done. It is
-// the payload's rendezvous, and completion is per-consumer state held in the
-// store that did the work.
-var eventPushColumns = []string{
-	"id", "lease_id", "generation", "action", "scope_id", "ip_address",
-	"mac_address", "hostname", "created_at",
-}
-
 var logPushColumns = []string{
 	"id", "scope_id", "mac_address", "ip_address", "event_type", "message", "created_at",
 }
@@ -740,94 +792,6 @@ var recordPushColumns = []string{
 	"id", "zone_id", "name", "type", "value", "ttl", "priority", "weight",
 	"port", "enabled", "comment", "tags", "tag", "flag", "owner", "owner_ref",
 	"owner_generation", "expires_at", "authored_locally", "created_at", "updated_at",
-}
-
-// PushEvents copies queued outbox entries up to the control database.
-//
-// This is what makes the split deployment have DDNS at all: the DNS process in
-// another file system cannot see this store, so an entry that is not copied up
-// is a name that will never be published. Like the lease push it is off the
-// request path, and an empty queue is a no-op that touches nothing.
-//
-// A row that is already there is left exactly as it is. This is the producer's
-// rule and it is the whole reason the conflict clause is a no-op rather than an
-// update: the producer cannot observe the consumer, so anything it wrote would
-// be a guess about state it does not own. In particular it must not report an
-// event back to pending because its own local copy has never been consumed.
-func (r *Replicator) PushEvents(ctx context.Context, limit int) (int, error) {
-	if r.control == nil {
-		return 0, ErrControlUnavailable
-	}
-	if limit <= 0 {
-		limit = pushBatchDefault
-	}
-
-	pending, err := r.pendingRows(ctx, pendingQuery{
-		markerTable: "dhcp_dns_event_dirty",
-		markerKey:   "event_id",
-		sourceTable: "dhcp_dns_events",
-		sourceKey:   "id",
-		columns:     eventPushColumns,
-		limit:       limit,
-	})
-	if err != nil {
-		return 0, err
-	}
-	if len(pending) == 0 {
-		return 0, nil
-	}
-
-	tx, err := r.control.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("%w: beginning the event push: %v", ErrControlUnavailable, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.Prepare(fmt.Sprintf(`
-		INSERT INTO dhcp_dns_events (%s) VALUES (%s)
-		ON CONFLICT(id) DO NOTHING`,
-		strings.Join(eventPushColumns, ", "),
-		strings.TrimSuffix(strings.Repeat("?, ", len(eventPushColumns)), ", ")))
-	if err != nil {
-		return 0, fmt.Errorf("dataplane: preparing the event insert: %w", err)
-	}
-	defer stmt.Close()
-
-	done := make([]string, 0, len(pending))
-	var refused []pushFailure
-	n := 0
-	for _, p := range pending {
-		// An entry is never deleted -- the log is append-only -- so a marker
-		// whose row is missing is a fault, not a deletion. Skip it rather than
-		// write a null row, and let the marker be cleared so it cannot block
-		// the queue.
-		if p.gone {
-			done = append(done, p.key)
-			continue
-		}
-		res, err := stmt.Exec(p.values...)
-		if err != nil {
-			refused = append(refused, pushFailure{key: p.key, err: err})
-			continue
-		}
-		done = append(done, p.key)
-		// Counted from the rows the control database actually took: a re-push
-		// of an entry that is already there moves nothing, and reporting it as
-		// moved would make the log line a fiction.
-		if affected, err := res.RowsAffected(); err == nil {
-			n += int(affected)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return n, fmt.Errorf("dataplane: committing the event push: %w", err)
-	}
-	if err := r.clearMarkers("dhcp_dns_event_dirty", "event_id", done); err != nil {
-		return n, err
-	}
-	if err := r.recordPushFailures("dhcp_dns_event_dirty", "event_id", refused); err != nil {
-		return n, err
-	}
-	return n, nil
 }
 
 // zoneSerialColumns are the columns a serial push needs.
@@ -1182,15 +1146,6 @@ func (r *Replicator) PushRecords(ctx context.Context, limit int) (PushResult, er
 func (r *Replicator) PendingRecords() (int, error) {
 	var n int
 	if err := r.store.QueryRow(`SELECT COUNT(*) FROM dns_record_dirty`).Scan(&n); err != nil {
-		return 0, err
-	}
-	return n, nil
-}
-
-// PendingEvents counts the outbox entries owed to the DNS side.
-func (r *Replicator) PendingEvents() (int, error) {
-	var n int
-	if err := r.store.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_event_dirty`).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil

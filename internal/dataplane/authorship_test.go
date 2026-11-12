@@ -130,93 +130,10 @@ func TestTheControlPlanesCopyOfALocalRecordDoesNotComeBack(t *testing.T) {
 // The event stream.
 // ---------------------------------------------------------------------------
 
-func insertControlEvent(t *testing.T, db *sql.DB, leaseID, action string) int64 {
-	t.Helper()
-	res, err := db.Exec(`INSERT INTO dhcp_dns_events (lease_id, generation, action, scope_id, ip_address, hostname)
-		VALUES (?, 1, ?, 's1', '10.0.0.5', 'host1')`, leaseID, action)
-	if err != nil {
-		t.Fatalf("insert control event: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("last insert id: %v", err)
-	}
-	return id
-}
-
 // TestTheOutboxIsAppendedRatherThanReplaced pins the one table that is a log.
 //
 // Replacing it wholesale would be wrong twice: the consumer's retry counter
 // would reset on every pass, and every pass would re-deliver the whole history.
-func TestTheOutboxIsAppendedRatherThanReplaced(t *testing.T) {
-	control, store, rep := newZonePair(t)
-	ctx := context.Background()
-
-	first := insertControlEvent(t, control, "l1", "create")
-	if _, err := rep.Sync(ctx, DomainDDNS); err != nil {
-		t.Fatalf("first sync: %v", err)
-	}
-	if got := countLocal(t, store, `SELECT COUNT(*) FROM dhcp_dns_events`); got != 1 {
-		t.Fatalf("events copied = %d, want 1", got)
-	}
-
-	// The consumer has worked on it and failed twice.
-	if _, err := store.Exec(`
-		UPDATE dhcp_dns_events SET status = 'pending', attempts = 3, last_error = 'boom'
-		WHERE id = ?`, first); err != nil {
-		t.Fatalf("record consumer state: %v", err)
-	}
-
-	insertControlEvent(t, control, "l2", "delete")
-	if _, err := rep.Sync(ctx, DomainDDNS); err != nil {
-		t.Fatalf("second sync: %v", err)
-	}
-
-	if got := countLocal(t, store, `SELECT COUNT(*) FROM dhcp_dns_events`); got != 2 {
-		t.Errorf("events after the second pass = %d, want 2", got)
-	}
-	var attempts int
-	var lastError string
-	if err := store.QueryRow(`SELECT attempts, last_error FROM dhcp_dns_events WHERE id = ?`, first).
-		Scan(&attempts, &lastError); err != nil {
-		t.Fatalf("read back consumer state: %v", err)
-	}
-	if attempts != 3 || lastError != "boom" {
-		t.Errorf("the consumer's own retry state was overwritten: attempts=%d last_error=%q", attempts, lastError)
-	}
-}
-
-// TestTheOutboxDoesNotReplayWhatItAlreadyHas covers the id filter directly: a
-// second pass over an unchanged revision must add nothing, and a row the store
-// already holds must not be re-inserted even if it arrives again.
-func TestTheOutboxDoesNotReplayWhatItAlreadyHas(t *testing.T) {
-	control, store, rep := newZonePair(t)
-	ctx := context.Background()
-
-	id := insertControlEvent(t, control, "l1", "create")
-	if _, err := rep.Sync(ctx, DomainDDNS); err != nil {
-		t.Fatalf("first sync: %v", err)
-	}
-	// Force a second pass by touching the revision the way a later insert
-	// would: a new row, then check the old one was not duplicated.
-	insertControlEvent(t, control, "l2", "create")
-	if _, err := rep.Sync(ctx, DomainDDNS); err != nil {
-		t.Fatalf("second sync: %v", err)
-	}
-	if got := countLocal(t, store, `SELECT COUNT(*) FROM dhcp_dns_events WHERE id = ?`, id); got != 1 {
-		t.Errorf("event %d appears %d times, want 1", id, got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// The counters.
-// ---------------------------------------------------------------------------
-
-// TestOnlyTheControlPlaneWritesMoveTheDnsRevision is the loop guard.
-//
-// A DNS process both reads its records from the control database and writes to
-// it. If the counter moved on the rows it pushed up, it would fetch back what
-// it had just sent, every pass, forever.
 func TestOnlyTheControlPlaneWritesMoveTheDnsRevision(t *testing.T) {
 	control := newControlDB(t)
 
@@ -278,43 +195,6 @@ func TestTheLeaseCounterIsItsOwn(t *testing.T) {
 // ---------------------------------------------------------------------------
 // The upward queues.
 // ---------------------------------------------------------------------------
-
-func TestTheOutboxReachesTheControlDatabase(t *testing.T) {
-	control, store, rep := newZonePair(t)
-	ctx := context.Background()
-
-	if _, err := store.Exec(`INSERT INTO dhcp_dns_events
-		(lease_id, generation, action, scope_id, ip_address, hostname)
-		VALUES ('l1', 2, 'create', 's1', '10.0.0.5', 'host1')`); err != nil {
-		t.Fatalf("queue an event: %v", err)
-	}
-
-	moved, err := rep.PushEvents(ctx, 0)
-	if err != nil {
-		t.Fatalf("push events: %v", err)
-	}
-	if moved != 1 {
-		t.Errorf("events moved = %d, want 1", moved)
-	}
-	var leaseID, action string
-	var generation int64
-	if err := control.QueryRow(
-		`SELECT lease_id, action, generation FROM dhcp_dns_events`).Scan(&leaseID, &action, &generation); err != nil {
-		t.Fatalf("read the pushed event: %v", err)
-	}
-	if leaseID != "l1" || action != "create" || generation != 2 {
-		t.Errorf("the pushed event is wrong: lease=%q action=%q generation=%d", leaseID, action, generation)
-	}
-	if n, err := rep.PendingEvents(); err != nil || n != 0 {
-		t.Errorf("PendingEvents = %d, %v; want 0, nil", n, err)
-	}
-
-	// Nothing owed, nothing touched.
-	moved, err = rep.PushEvents(ctx, 0)
-	if err != nil || moved != 0 {
-		t.Errorf("a second push moved %d rows (%v), want 0", moved, err)
-	}
-}
 
 func TestTheEventLogReachesTheControlDatabase(t *testing.T) {
 	control, store, rep := newZonePair(t)
@@ -445,7 +325,7 @@ func TestARecordTheControlPlaneAuthoredIsNotPushedBack(t *testing.T) {
 func TestHasAnyReplicaAnswersForTheWholeStore(t *testing.T) {
 	control, store, rep := newZonePair(t)
 
-	has, err := store.HasAnyReplica([]Domain{DomainDDNS, DomainDNS})
+	has, err := store.HasAnyReplica([]Domain{DomainDNS})
 	if err != nil {
 		t.Fatalf("HasAnyReplica on an empty store: %v", err)
 	}
@@ -458,7 +338,7 @@ func TestHasAnyReplicaAnswersForTheWholeStore(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 
-	has, err = store.HasAnyReplica([]Domain{DomainDDNS, DomainDNS})
+	has, err = store.HasAnyReplica([]Domain{DomainDNS})
 	if err != nil {
 		t.Fatalf("HasAnyReplica after a sync: %v", err)
 	}
@@ -479,7 +359,7 @@ func TestADnsStoreDoesNotTakeOverLeases(t *testing.T) {
 	controlLease(t, control, "l1", "s1", "10.0.0.10")
 
 	runner := NewRunner(NewReplicator(control, store), RunnerConfig{
-		Domains: []Domain{DomainDHCP, DomainDNS, DomainDDNS},
+		Domains: []Domain{DomainDHCP, DomainDNS},
 		// PushLeases is what says "this store owns leases".
 	})
 	if err := runner.Prime(context.Background()); err != nil {
@@ -607,41 +487,3 @@ func controlSerial(t *testing.T, db *sql.DB, zoneID string) int64 {
 // each one that works through it. The producer cannot observe a consumer, so a
 // push that overwrote the state would be a guess about work it does not own --
 // and the guess would always be "not done yet".
-func TestTheOutboxPushCannotResetAnotherConsumersState(t *testing.T) {
-	control, store, rep := newZonePair(t)
-	ctx := context.Background()
-
-	// An entry the consumer has already finished.
-	if _, err := control.Exec(`INSERT INTO dhcp_dns_events
-		(id, lease_id, generation, action, scope_id, ip_address, hostname,
-		 attempts, status, last_error)
-		VALUES (5, 'l1', 1, 'create', 's1', '10.0.0.5', 'host1', 3, 'done', '')`); err != nil {
-		t.Fatalf("seed a finished entry: %v", err)
-	}
-
-	// The producer's own copy of the same entry, still pending.
-	if _, err := store.Exec(`INSERT INTO dhcp_dns_events
-		(id, lease_id, generation, action, scope_id, ip_address, hostname)
-		VALUES (5, 'l1', 1, 'create', 's1', '10.0.0.5', 'host1')`); err != nil {
-		t.Fatalf("queue the entry: %v", err)
-	}
-
-	moved, err := rep.PushEvents(ctx, 0)
-	if err != nil {
-		t.Fatalf("push events: %v", err)
-	}
-	if moved != 0 {
-		t.Errorf("an entry that was already there was reported as moved (%d), want 0", moved)
-	}
-
-	var status, lastError string
-	var attempts int
-	if err := control.QueryRow(
-		`SELECT status, attempts, last_error FROM dhcp_dns_events WHERE id = 5`).
-		Scan(&status, &attempts, &lastError); err != nil {
-		t.Fatalf("read the entry back: %v", err)
-	}
-	if status != "done" || attempts != 3 {
-		t.Errorf("the push reset the consumer's state: status=%q attempts=%d, want done/3", status, attempts)
-	}
-}

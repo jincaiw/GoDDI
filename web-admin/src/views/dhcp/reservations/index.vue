@@ -1,120 +1,220 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSwitch, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listDHCPScopes } from '@/service/api/goddi/dhcp'
-import { listDHCPReservations, createDHCPReservation, updateDHCPReservation, deleteDHCPReservation, type DHCPReservation, type CreateDHCPReservationRequest } from '@/service/api/goddi/dhcp'
+import { onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  createDHCPReservation,
+  deleteDHCPReservation,
+  listDHCPReservations,
+  listDHCPScopes,
+  updateDHCPReservation,
+  type CreateDHCPReservationRequest,
+  type DHCPReservation
+} from '@/service/api/goddi/dhcp';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
-const scopeOptions = ref<Array<{ label: string; value: string }>>([])
+defineOptions({ name: 'DHCPReservationsPage' });
+
+const { t } = useI18n();
+const perm = usePermission();
+
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showDialog = ref(false);
+const submitting = ref(false);
+const editing = ref<DHCPReservation | null>(null);
+const scopeOptions = ref<Array<{ label: string; value: string }>>([]);
+
+const formData = reactive<CreateDHCPReservationRequest & { description: string }>({
+  ip_address: '',
+  mac_address: '',
+  hostname: '',
+  scope_id: '',
+  enabled: true,
+  description: ''
+});
+
+const formRules = {
+  ip_address: [{ required: true, message: t('dhcp.leases.ip') + ' required', type: 'error' }],
+  mac_address: [{ required: true, message: t('dhcp.leases.mac') + ' required', type: 'error' }],
+  scope_id: [{ required: true, message: t('dhcp.options.scopeRequired'), type: 'error' }]
+};
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'ip_address', title: t('dhcp.leases.ip'), width: 150 },
+  { colKey: 'mac_address', title: t('dhcp.leases.mac'), width: 170 },
+  { colKey: 'hostname', title: t('dhcp.leases.hostname'), ellipsis: true },
+  { colKey: 'scope_name', title: t('dhcp.leases.scope'), ellipsis: true },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as DHCPReservation).enabled) })
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 160,
+    cell: (h, { row }) => {
+      const r = row as DHCPReservation;
+      return h(TSpace, { size: 'small' }, () => [
+        h(TLink, { theme: 'primary', disabled: !perm.canWrite('dhcp'), onClick: () => openEdit(r) }, () => t('common.edit')),
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+      ]);
+    }
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
 
 async function loadScopes() {
-  try { scopeOptions.value = (await listDHCPScopes({ page_size: 100 })).data.map(s => ({ label: `${s.name} (${s.subnet})`, value: s.id })) }
-  catch (err) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-}
-
-const loading = ref(false)
-const submitting = ref(false)
-const reservations = ref<DHCPReservation[]>([])
-const showModal = ref(false)
-const showDeleteConfirm = ref(false)
-const deletingId = ref('')
-const editing = ref<DHCPReservation | null>(null)
-
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-const formData = reactive<CreateDHCPReservationRequest & { description: string }>({ ip_address: '', mac_address: '', hostname: '', scope_id: '', enabled: true, description: '' })
-
-const columns = [
-  { title: () => t('dhcp.leases.ip'), key: 'ip_address' },
-  { title: () => t('dhcp.leases.mac'), key: 'mac_address' },
-  { title: () => t('dhcp.leases.hostname'), key: 'hostname' },
-  { title: () => t('dhcp.leases.scope'), key: 'scope_name' },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DHCPReservation) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 160, render: (row: DHCPReservation) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dhcp'), onClick: () => { if (!perm.canWrite('dhcp')) return; editing.value = row; Object.assign(formData, row); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { if (!perm.canDelete('dhcp')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
-
-async function loadData() {
-  loading.value = true
   try {
-    const result = await listDHCPReservations({ page: pagination.page, page_size: pagination.pageSize })
-    reservations.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+    scopeOptions.value = (await listDHCPScopes({ page_size: 100 })).data.map(s => ({
+      label: `${s.name} (${s.subnet})`,
+      value: s.id
+    }));
+  } catch (err) {
+    msgError(err);
+  }
 }
-
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
 
 function openCreate() {
-  if (!perm.canWrite('dhcp')) return
-  editing.value = null
-  Object.assign(formData, { ip_address: '', mac_address: '', hostname: '', scope_id: '', enabled: true, description: '' })
-  showModal.value = true
+  if (!perm.canWrite('dhcp')) return;
+  editing.value = null;
+  Object.assign(formData, {
+    ip_address: '',
+    mac_address: '',
+    hostname: '',
+    scope_id: '',
+    enabled: true,
+    description: ''
+  });
+  showDialog.value = true;
+}
+
+function openEdit(row: DHCPReservation) {
+  if (!perm.canWrite('dhcp')) return;
+  editing.value = row;
+  Object.assign(formData, {
+    ip_address: row.ip_address,
+    mac_address: row.mac_address,
+    hostname: row.hostname,
+    scope_id: row.scope_id,
+    enabled: row.enabled,
+    description: row.description
+  });
+  showDialog.value = true;
 }
 
 async function handleSubmit() {
-  if (!perm.canWrite('dhcp')) return
-  if (!formData.scope_id) { message.error(t('dhcp.options.scopeRequired')); return }
-  submitting.value = true
+  if (!perm.canWrite('dhcp')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editing.value) { await updateDHCPReservation(editing.value.id, formData); message.success(t('common.updateSuccess')) }
-    else { await createDHCPReservation(formData); message.success(t('common.createSuccess')) }
-    showModal.value = false; editing.value = null; loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { submitting.value = false }
+    if (editing.value) {
+      await updateDHCPReservation(editing.value.id, formData);
+      void MessagePlugin.success(t('common.updateSuccess'));
+    } else {
+      await createDHCPReservation(formData);
+      void MessagePlugin.success(t('common.createSuccess'));
+    }
+    showDialog.value = false;
+    editing.value = null;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('dhcp')) return
-  try { await deleteDHCPReservation(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showDeleteConfirm.value = false
+function confirmDelete(id: string) {
+  if (!perm.canDelete('dhcp')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteDHCPReservation(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
-onMounted(() => { loadData(); loadScopes() })
+onMounted(loadScopes);
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dhcp.reservations.title')">
-      <NButton v-if="perm.canWrite('dhcp')" type="primary" @click="openCreate">{{ t('dhcp.reservations.createReservation') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dhcp.reservations.title') }}</h2>
+      <TButton v-if="perm.canWrite('dhcp')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('dhcp.reservations.createReservation') }}
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="reservations"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DHCPReservation) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listDHCPReservations" />
 
-    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('dhcp.reservations.editReservation') : t('dhcp.reservations.createReservation')" preset="card" style="width: 500px;">
-      <NForm :model="formData" label-placement="left" label-width="80px">
-        <NFormItem :label="t('dhcp.leases.ip')"><NInput v-model:value="formData.ip_address" /></NFormItem>
-        <NFormItem :label="t('dhcp.leases.mac')"><NInput v-model:value="formData.mac_address" /></NFormItem>
-        <NFormItem :label="t('dhcp.leases.hostname')"><NInput v-model:value="formData.hostname" /></NFormItem>
-        <NFormItem :label="t('dhcp.leases.scope')" required><NSelect v-model:value="formData.scope_id" :options="scopeOptions" filterable /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="formData.enabled" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dhcp')" @click="handleSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+    <TDialog
+      v-model:visible="showDialog"
+      :header="editing ? t('dhcp.reservations.editReservation') : t('dhcp.reservations.createReservation')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="520px"
+      @confirm="handleSubmit"
+    >
+      <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
+        <TFormItem :label="t('dhcp.leases.ip')" name="ip_address">
+          <TInput v-model="formData.ip_address" />
+        </TFormItem>
+        <TFormItem :label="t('dhcp.leases.mac')" name="mac_address">
+          <TInput v-model="formData.mac_address" />
+        </TFormItem>
+        <TFormItem :label="t('dhcp.leases.hostname')" name="hostname">
+          <TInput v-model="formData.hostname" />
+        </TFormItem>
+        <TFormItem :label="t('dhcp.leases.scope')" name="scope_id">
+          <TSelect v-model="formData.scope_id" :options="scopeOptions" filterable />
+        </TFormItem>
+        <TFormItem :label="t('common.descriptions')" name="description">
+          <TTextarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')" name="enabled">
+          <TSwitch v-model="formData.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+</style>

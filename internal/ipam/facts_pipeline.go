@@ -3,7 +3,9 @@ package ipam
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/jasonwa/goddi/internal/facts"
 )
@@ -14,6 +16,10 @@ import (
 type FactsPipelineOptions struct {
 	Enabled         bool
 	ConsumerOptions FactsConsumerOptions
+	// Relay, when set, is the data-plane relay that copies the lease plane's
+	// producer outbox into the consumer inbox. The pipeline runs its tick
+	// loop alongside the consumer and stops it before stopping the consumer.
+	Relay *facts.Relay
 	// BeforeStart is an optional producer-side readiness gate. The caller uses
 	// it to finish lease/WAL recovery before the control-side consumer starts.
 	// A non-nil error keeps the pipeline unstarted and fail-closed.
@@ -31,6 +37,9 @@ type FactsPipeline struct {
 	consumer        *FactsConsumer
 	consumerUsed    bool
 	beforeStart     func(context.Context) error
+	relay           *facts.Relay
+	relayCancel     context.CancelFunc
+	relayDone       chan struct{}
 	startMu         sync.Mutex
 	started         bool
 }
@@ -52,6 +61,7 @@ func NewFactsPipeline(linkage *Linkage, outbox *facts.ObservationOutbox, options
 		outbox:          outbox,
 		consumerOptions: options.ConsumerOptions,
 		beforeStart:     options.BeforeStart,
+		relay:           options.Relay,
 	}
 	if !options.Enabled {
 		return pipeline, nil
@@ -101,6 +111,22 @@ func (p *FactsPipeline) Start(ctx context.Context) error {
 	if err := p.consumer.Start(ctx); err != nil {
 		return err
 	}
+	if p.relay != nil {
+		relayCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		p.relayCancel = cancel
+		p.relayDone = make(chan struct{})
+		go func() {
+			defer close(p.relayDone)
+			// A relay tick error is durable-state-safe (each event commits
+			// atomically); the loop logs and retries rather than failing the
+			// pipeline.
+			if err := p.relay.Run(relayCtx, time.Second, func(err error) {
+				slog.Warn("ipam facts relay: tick failed; the durable state is safe and will retry", "error", err)
+			}); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("ipam facts relay: loop ended", "error", err)
+			}
+		}()
+	}
 	p.consumerUsed = true
 	p.started = true
 	return nil
@@ -124,6 +150,18 @@ func (p *FactsPipeline) Stop(ctx context.Context) error {
 	defer p.startMu.Unlock()
 	if !p.started {
 		return nil
+	}
+	if p.relayCancel != nil {
+		p.relayCancel()
+		if p.relayDone != nil {
+			select {
+			case <-p.relayDone:
+			case <-time.After(2 * time.Second):
+				// The relay's next tick finishes or the process exits; its
+				// state is atomic per event either way.
+			}
+		}
+		p.relayCancel = nil
 	}
 	err := p.consumer.Stop(ctx)
 	if errors.Is(err, ErrFactsConsumerFailed) {

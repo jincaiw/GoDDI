@@ -2,6 +2,7 @@ import { computed, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { defineStore } from 'pinia';
 import { useLoading } from '@sa/hooks';
+import { NotifyPlugin } from 'tdesign-vue-next';
 import { fetchGetUserInfo, fetchLogin, fetchLogout } from '@/service/api';
 import type { UserInfo } from '@/service/api/goddi/auth';
 import { $t } from '@/locales';
@@ -130,7 +131,7 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
       const safeRedirect = redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('\\') ? redirect : '/';
       await router.push(safeRedirect);
 
-      window.$notification?.success({
+      NotifyPlugin.success({
         title: $t('page.login.common.loginSuccess'),
         content: $t('page.login.common.welcomeBack', { userName: userInfo.userName }),
         duration: 4500

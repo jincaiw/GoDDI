@@ -47,7 +47,7 @@ func (q Quota) Enabled() bool {
 // Breach is one bound that has been crossed.
 type Breach struct {
 	// What names the measurement: "leases", "store_bytes", or a queue name
-	// for a backlog ("lease_changes", "dns_events", "dhcp_logs", "records",
+	// for a backlog ("lease_changes", "dhcp_logs", "records",
 	// "zone_serials").
 	What string
 	// Used is the measurement and Limit its bound, in the unit What implies.

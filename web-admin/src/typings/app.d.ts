@@ -4,9 +4,6 @@ declare namespace App {
   namespace Theme {
     type ColorPaletteNumber = import('@sa/color').ColorPaletteNumber;
 
-    /** NaiveUI theme overrides that can be specified in preset */
-    type NaiveUIThemeOverride = import('naive-ui').GlobalThemeOverrides;
-
     /** Theme setting */
     interface ThemeSetting {
       /** Theme scheme */
@@ -280,9 +277,6 @@ declare namespace App {
       /** I18n key */
       i18nKey?: I18n.I18nKey | null;
     };
-
-    /** Form rule */
-    type FormRule = import('naive-ui').FormItemRule;
 
     /** The global dropdown key */
     type DropdownKey = 'closeCurrent' | 'closeOther' | 'closeLeft' | 'closeRight' | 'closeAll' | 'pin' | 'unpin';
@@ -564,6 +558,14 @@ declare namespace App {
       };
       dashboard: {
         title: string;
+        hour: string;
+        day: string;
+        week: string;
+        month: string;
+        year: string;
+        dnsQueryTrend: string;
+        dnsStats: string;
+        rcodeDistribution: string;
         dnsQueriesToday: string;
         cacheHitRate: string;
         activeLeases: string;
@@ -711,6 +713,37 @@ declare namespace App {
           notAvailable: string;
           hint: string;
         }
+        dnssec: {
+          title: string;
+          experimentalHint: string;
+          zone: string;
+          selectZone: string;
+          status: string;
+          keyCount: string;
+          keyLifecycle: string;
+          keyTag: string;
+          keyId: string;
+          digestType: string;
+          digest: string;
+          algorithm: string;
+          keyType: string;
+          createdAt: string;
+          enable: string;
+          disable: string;
+          rotate: string;
+          generateKey: string;
+          promote: string;
+          deleteKeyConfirm: string;
+          noKeys: string;
+          dsTitle: string;
+          noDs: string;
+          dsHint: string;
+          nsec3Title: string;
+          iterations: string;
+          salt: string;
+          optout: string;
+          nsec3Hint: string;
+        };
         security: {
           title: string;
           blockLists: string;
@@ -1260,6 +1293,25 @@ declare namespace App {
           right: string;
           unFixed: string;
         };
+      };
+      haStatus: {
+        subtitle: string;
+        standalone: string;
+        autoOn: string;
+        autoOff: string;
+        state: string;
+        redundant: string;
+        promising: string;
+        nodeId: string;
+        configuredRole: string;
+        roleInForce: string;
+        sequence: string;
+        acknowledged: string;
+        peerApplied: string;
+        peerFacts: string;
+        peerLastSeen: string;
+        source: string;
+        readOnly: string;
       };
     };
 

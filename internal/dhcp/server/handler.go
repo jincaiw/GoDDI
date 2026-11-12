@@ -216,6 +216,10 @@ func (s *Server) HandleDiscover(msg *dhcpv4.DHCPv4, ifaceName string, serverIP n
 		resp.Options.Update(opt)
 	}
 
+	// RFC 2131 §4.3.1 requires the Server Identifier (option 54) in DHCPOFFER
+	// and DHCPACK. WithServerIP only sets siaddr (the next-server field).
+	applyServerIdentifier(resp, serverIP)
+
 	// Step 5: Log event.
 	if s.eventLogger != nil {
 		_ = s.eventLogger.LogDHCPEvent(dhcpinternal.EventOffer, sc.ID, mac, targetIP, "OFFER sent")
@@ -404,6 +408,16 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		}
 	}
 
+	// Never bind an infrastructure address. The pool check above normally
+	// excludes the server's and gateway's own addresses, but the RENEWING path
+	// deliberately skips the pool bounds so a statically configured host can
+	// renew an in-subnet address. That allowance must not let any client claim
+	// the DHCP server's own address or the scope's gateway: those are never a
+	// client binding, and recording one would shadow the infrastructure itself.
+	if infra, why := s.isInfrastructureAddress(sc, requestedIP); infra {
+		return s.buildNAKWithMsg(msg, serverIP, why), nil
+	}
+
 	// Look up whatever currently holds the address: a confirmed binding or an
 	// outstanding reservation both make it unavailable to another client.
 	held, err := s.leaseMgr.GetHeldLeaseByIP(requestedIP.String())
@@ -417,6 +431,22 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	if held != nil && held.MACAddress != mac {
 		return s.buildNAKWithMsg(msg, serverIP,
 			fmt.Sprintf("IP %s is held by another client", requestedIP)), nil
+	}
+
+	// The pool bounds govern allocation, not the confirmation of a binding
+	// the client already has, so a statically configured host may renew an
+	// in-subnet/out-of-pool address. When the operator has chosen
+	// "existing-binding-only" that allowance is withdrawn for addresses with
+	// no held lease and no operator-created reservation: such a claim would
+	// create a brand-new binding for an address the pool never allocated.
+	// In-pool renewals are unaffected either way.
+	if s.strictOutOfPoolRenewal() && state == requestRenewing && held == nil && reservID == "" {
+		startIP := net.ParseIP(sc.StartIP)
+		endIP := net.ParseIP(sc.EndIP)
+		if startIP != nil && endIP != nil && !ipInRange(requestedIP, startIP, endIP) {
+			return s.buildNAKWithMsg(msg, serverIP,
+				fmt.Sprintf("renewing out-of-pool address %s requires an existing binding", requestedIP)), nil
+		}
 	}
 
 	// INIT-REBOOT with nothing holding the address: either we never knew this
@@ -467,7 +497,6 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	// Commit the binding BEFORE building the ACK: the client treats the ACK as
 	// authoritative, so the state it relies on must already be durable.
 	var bound *lease.Lease
-	factsCommitted := false
 	factsMutationCommitted := false
 	observed := LeaseObservedBind
 	factsCfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(sc.ID, requestedIP.String())
@@ -479,7 +508,6 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		if useFacts {
 			bound, err = factsCfg.Caller.BindLease(context.Background(), "", factsCfg.Source, spaceID,
 				sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
-			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
 			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.CreateLease(sc.ID, requestedIP.String(), mac, hostname, leaseDuration)
@@ -491,7 +519,6 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		// Promote the reservation made by the matching DISCOVER.
 		if useFacts {
 			bound, err = factsCfg.Caller.ActivateLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
-			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
 			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.ActivateLease(held.ID, leaseDuration)
@@ -502,7 +529,6 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	default:
 		if useFacts {
 			bound, err = factsCfg.Caller.RenewLease(context.Background(), "", factsCfg.Source, spaceID, held.ID, leaseDuration)
-			factsCommitted = err == nil && factsCfg.DNSOutboxAtomic
 			factsMutationCommitted = err == nil
 		} else {
 			bound, err = s.leaseMgr.RenewLease(held.ID, leaseDuration)
@@ -603,15 +629,9 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		resp.Options.Update(opt)
 	}
 
-	// Queue the DNS publish. The binding is already durable at this point, so a
-	// failure to queue must not fail the request: the client is entitled to its
-	// ACK, and the reconciler will publish the record on its next pass.
-	if sc.DNSUpdates && bound != nil && !factsCommitted {
-		if err := s.enqueueDNSEvent(bound, dhcpinternal.DNSEventCreate); err != nil {
-			slog.Error("DHCP: failed to queue DNS update",
-				"lease_id", bound.ID, "hostname", hostname, "error", err)
-		}
-	}
+	// RFC 2131 §4.3.1 requires the Server Identifier (option 54) in DHCPOFFER
+	// and DHCPACK. WithServerIP only sets siaddr (the next-server field).
+	applyServerIdentifier(resp, serverIP)
 
 	// Report the binding to IPAM. Like the DNS queue above, this must not fail
 	// the request: the client is entitled to its ACK, and the reconciler
@@ -624,6 +644,33 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 	}
 
 	return resp, nil
+}
+
+// applyServerIdentifier sets the RFC 2131 Server Identifier (option 54) on a
+// DHCPOFFER/DHCPACK. WithServerIP only sets siaddr, so without this a client
+// has no server identifier to quote back in its DHCPREQUEST. A non-IPv4 server
+// address is left alone rather than emitting a malformed option.
+func applyServerIdentifier(resp *dhcpv4.DHCPv4, serverIP net.IP) {
+	if sid := serverIP.To4(); sid != nil {
+		resp.Options.Update(dhcpv4.OptServerIdentifier(sid))
+	}
+}
+
+// isInfrastructureAddress reports whether ip is one of the DHCP server's own
+// served addresses or the scope's configured gateway. Such addresses are never
+// a legitimate client binding, so no REQUEST state may bind them.
+func (s *Server) isInfrastructureAddress(sc *scope.Scope, ip net.IP) (bool, string) {
+	for _, own := range s.serverIPs {
+		if own != nil && own.Equal(ip) {
+			return true, fmt.Sprintf("IP %s is a DHCP server address", ip)
+		}
+	}
+	if sc != nil && sc.Router != "" {
+		if r := net.ParseIP(sc.Router); r != nil && r.Equal(ip) {
+			return true, fmt.Sprintf("IP %s is the scope gateway", ip)
+		}
+	}
+	return false, ""
 }
 
 // buildNAKWithMsg builds a NAK response and logs the rejection reason. Unlike
@@ -649,17 +696,10 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 		return fmt.Errorf("no active lease for MAC %s", mac)
 	}
 
-	// Find scope to check DNSUpdates flag before DNS cleanup.
-	sc, err := s.scopeMgr.GetScope(l.ScopeID)
-	if err != nil {
-		return fmt.Errorf("scope not found for lease: %w", err)
-	}
-
 	// The facts caller is an explicit opt-in branch. Once configured, every
 	// RELEASE must use it; identity or facts failure is returned directly and
 	// never falls back to the legacy mutation.
 	var released *lease.Lease
-	factsCommitted := false
 	if cfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(l.ScopeID, l.IPAddress); err != nil {
 		return err
 	} else if useFacts {
@@ -670,7 +710,6 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 		if released == nil {
 			return errors.New("dhcp lease facts mutation: caller returned no released lease")
 		}
-		factsCommitted = cfg.DNSOutboxAtomic
 	} else if cfg := s.releaseFacts; cfg != nil {
 		if cfg.Caller == nil || cfg.ResolveSpaceID == nil || strings.TrimSpace(cfg.Source) == "" {
 			return errors.New("dhcp release facts mutation: caller, source, and space resolver are required")
@@ -705,17 +744,6 @@ func (s *Server) HandleRelease(msg *dhcpv4.DHCPv4) error {
 		s.replicateLeaseState(released)
 	} else {
 		s.replicateLeaseStateAfterRelease(l.ID)
-	}
-
-	// Queue DNS cleanup - only if scope has DNSUpdates enabled. The event
-	// carries the generation read before the release, which is the generation
-	// the published record was written at, so a renewal that lands before the
-	// consumer runs keeps its record.
-	if sc.DNSUpdates && !factsCommitted {
-		if err := s.enqueueDNSEvent(l, dhcpinternal.DNSEventDelete); err != nil {
-			slog.Error("DHCP: failed to queue DNS teardown",
-				"lease_id", l.ID, "hostname", l.Hostname, "error", err)
-		}
 	}
 
 	// A RELEASE is the client saying it no longer holds the address, so the
@@ -772,7 +800,6 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 
 	var quarantined *lease.Lease
 	var quarantineErr error
-	factsCommitted := false
 	if cfg, spaceID, useFacts, err := s.resolveLeaseFactSpace(scopeID, requestedIP.String()); err != nil {
 		return err
 	} else if useFacts {
@@ -793,7 +820,6 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 			// facts transition for the same generation.
 			quarantined, quarantineErr = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
 		}
-		factsCommitted = quarantineErr == nil && cfg.DNSOutboxAtomic && existing != nil && existing.Status != lease.LeaseStatusConflict
 	} else {
 		quarantined, quarantineErr = s.leaseMgr.QuarantineIP(scopeID, requestedIP.String(), mac)
 	}
@@ -804,19 +830,6 @@ func (s *Server) HandleDecline(msg *dhcpv4.DHCPv4) error {
 	// negative: this address must not be handed out. A mirror that never heard
 	// it would offer the very address the client just reported as taken.
 	s.replicateLeaseState(quarantined)
-
-	// A declined address must also lose its DNS record: the client has just
-	// told us the binding is wrong, so continuing to publish the name would
-	// hand out an address something else is already using. Queued rather than
-	// written here so it is retried and survives a restart.
-	if quarantined != nil && quarantined.Hostname != "" && !factsCommitted {
-		if sc, err := s.scopeMgr.GetScope(quarantined.ScopeID); err == nil && sc.DNSUpdates {
-			if err := s.enqueueDNSEvent(quarantined, dhcpinternal.DNSEventDelete); err != nil {
-				slog.Error("DHCP: failed to queue DNS teardown for declined address",
-					"lease_id", quarantined.ID, "error", err)
-			}
-		}
-	}
 
 	// Report the DECLINE to IPAM using the address from the message, not from
 	// the lease: a DECLINE can arrive for an address this server never leased
@@ -889,6 +902,10 @@ func (s *Server) HandleInform(msg *dhcpv4.DHCPv4, ifaceName string, serverIP net
 	for _, opt := range dhcpOptions {
 		resp.Options.Update(opt)
 	}
+
+	// RFC 2131 §4.3.1 requires the Server Identifier (option 54) in DHCPOFFER
+	// and DHCPACK. WithServerIP only sets siaddr (the next-server field).
+	applyServerIdentifier(resp, serverIP)
 
 	// Log event.
 	if s.eventLogger != nil {

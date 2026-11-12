@@ -38,6 +38,7 @@ import (
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/cache"
 	"github.com/jasonwa/goddi/internal/dns/client"
+	"github.com/jasonwa/goddi/internal/dns/dnssec"
 	"github.com/jasonwa/goddi/internal/dns/dynamic_update"
 	"github.com/jasonwa/goddi/internal/dns/filter"
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
@@ -306,7 +307,12 @@ func main() {
 			"                            it is accepted.\n" +
 			"  facts gap                cannot be accepted: restore the missing snapshot first.\n" +
 			"The promotion takes effect at the next start. A standby runs no DHCP server, so that\n" +
-			"is not an interruption of anything being served: it is the start of one.",
+			"is not an interruption of anything being served: it is the start of one.\n" +
+			"After the restart this node serves clients from its own configuration: DHCP scope\n" +
+			"definitions are NOT replicated by the lease mirror (config coordination across\n" +
+			"nodes is ADR-0005, not implemented) -- recreate the scopes on this node before\n" +
+			"putting it on the client path. (Container exercise round 247: a DISCOVER after\n" +
+			"takeover answered 'no matching scope' until the scope was recreated.)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runHATakeover(configPath, haTakeoverConfirm, haTakeoverOldStopped, haTakeoverGap)
 		},
@@ -357,6 +363,20 @@ func main() {
 	}
 }
 
+// ErrEnterpriseUnavailable is a temporary fail-closed boundary. The edition
+// selector grants no role, and Enterprise DNS availability is not implemented.
+var ErrEnterpriseUnavailable = errors.New("enterprise edition is unavailable; no service or writes started")
+
+func rejectEnterprise(cfg *config.Config) error {
+	if err := config.ValidateEdition(cfg); err != nil {
+		return err
+	}
+	if cfg.Server.Edition == "enterprise" {
+		return ErrEnterpriseUnavailable
+	}
+	return nil
+}
+
 // runServer initializes and starts the GoDDI server.
 func runServer(configPath string) error {
 	cfg, err := loadRuntimeConfig(configPath)
@@ -372,13 +392,18 @@ func runServer(configPath string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
+
 	// Which planes this process runs.
 	//
 	// The default is still one process doing everything. A split role removes
 	// unrelated listeners, but is not yet full process fault isolation: data
-	// plane roles still open and migrate the control database. The warning
-	// below makes that startup dependency visible instead of implying that a
-	// console restart can never affect the serving process.
+	// plane roles still open and migrate the control database. The note below
+	// makes that startup dependency visible without implying that the serving
+	// path reads the control database: both data planes serve from their own
+	// local stores and keep answering while the console is down.
 	role := cfg.EffectiveRole()
 	controlPlane := cfg.IsControlPlane()
 	servesDNS := cfg.ServesDNS() && cfg.DNS.Enabled
@@ -396,14 +421,14 @@ func runServer(configPath string) error {
 	)
 
 	if !controlPlane {
-		// Stated plainly rather than left for an operator to discover: the
-		// role model is in place, but the serving path of a data-plane process
-		// still reads the control database. Until it reads its own store
-		// instead, a data-plane process needs the control database reachable
-		// when it starts and is not yet isolated from it.
-		slog.Warn("this role does not yet serve from its own local store",
+		// The DNS and DHCP data planes serve from their own local stores: a
+		// control-plane restart does not stop resolution or lease renewal.
+		// They still open and migrate the control database at boot to seed the
+		// replicator, so that database must be reachable when the process
+		// starts. This is a startup dependency, not a serving-path one.
+		slog.Warn("data-plane role needs the control database at startup",
 			"role", role,
-			"detail", "reading the local store on the serving path is the next step; the control database must still be reachable")
+			"detail", "the serving path uses the local data-plane store; the control database is needed to seed/replicate it at boot")
 	}
 
 	// Initialize Prometheus metrics.
@@ -453,7 +478,13 @@ func runServer(configPath string) error {
 
 	// --- Initialize System Settings Manager ---
 	settingsMgr := system.NewManager(db.DB)
-	if err := settingsMgr.EnsureDefaults(); err != nil {
+	// Seed the cache keys from config.yaml rather than the hard-coded
+	// defaultSettings constants. applyPersistedSettings replays every row in
+	// system_settings onto dnsCache a few lines below; if a fresh database had
+	// been seeded with the constants, that replay would overwrite the operator's
+	// explicit `cache:` values. Only missing keys are seeded, so a value later
+	// changed through the UI keeps precedence over config.
+	if err := settingsMgr.EnsureDefaults(cacheSettingOverrides(cfg.Cache)); err != nil {
 		slog.Warn("failed to ensure default settings", "error", err)
 	}
 	slog.Info("System settings manager initialized")
@@ -673,6 +704,17 @@ func runServer(configPath string) error {
 		// resolver is not answering with.
 		dnsSrv.SetAXFRHandler(transfer.NewAXFRHandler(dnsDataDB))
 
+		// Experimental DNSSEC signing. Gated off by default: the responder
+		// reads the replicated dns_dnssec_keys from this same data-plane DB,
+		// so signing never depends on the management database being reachable.
+		// NSEC and NSEC3 denial proof are implemented; the zone still needs
+		// a DS at the parent, so this must not be presented as a complete
+		// DNSSEC implementation yet.
+		if cfg.DNS.DNSSEC.Enabled {
+			dnsSrv.SetDNSSECResponder(dnssec.NewResponder(dnsDataDB, cfg.Security.JWTSecret))
+			slog.Info("DNSSEC signing responder enabled (experimental: no parent DS chain of trust)")
+		}
+
 		// RFC 2136 dynamic updates (TSIG-authenticated).
 		updateHandler := dynamic_update.NewUpdateHandler(dnsDataDB, zoneStore, zoneMgr, recordMgr)
 		updateHandler.SetTSIGSecrets(cfg.DNS.DynamicUpdate.TSIGKeys)
@@ -713,21 +755,26 @@ func runServer(configPath string) error {
 	//	        Listed after scopes and before the outbox, and it is applied in
 	//	        slice order, so a lease is in place before the entry that refers
 	//	        to it is consumed.
-	//	DDNS    the work the DHCP plane owes: the entries this process turns into
-	//	        records. It is a log, not configuration, and it rides on its own
-	//	        counter so lease churn cannot look like a zone edit.
 	var dnsRunner *dataplane.Runner
-	var dnsConsumer *dhcpinternal.DNSConsumer
+	var dnsLink *dhcpinternal.DNSLink
 	if servesDNS {
+		// An all-in-one process (which owns the lease store) already relays
+		// facts straight into this store's inbox; copying them again from the
+		// control database would collide on the unique sequence. Only a split
+		// DNS process -- which has no lease store -- needs the control-side
+		// facts replica domain.
+		dnsDomains := []dataplane.Domain{
+			dataplane.DomainDNS,
+			dataplane.DomainDHCP,
+			dataplane.DomainLeases,
+		}
+		if !servesDHCP {
+			dnsDomains = append(dnsDomains, dataplane.DomainFacts)
+		}
 		runner := dataplane.NewRunner(
 			dataplane.NewReplicator(db.DB, dnsStore),
 			dataplane.RunnerConfig{
-				Domains: []dataplane.Domain{
-					dataplane.DomainDNS,
-					dataplane.DomainDHCP,
-					dataplane.DomainLeases,
-					dataplane.DomainDDNS,
-				},
+				Domains:  dnsDomains,
 				Interval: time.Duration(cfg.EffectiveSyncInterval()) * time.Second,
 				// The records this plane writes for confirmed bindings, and a
 				// dynamic update or an inbound transfer, are all authored here.
@@ -749,9 +796,6 @@ func runServer(configPath string) error {
 							}()
 						}
 					}
-					if d == dataplane.DomainDDNS && dnsConsumer != nil {
-						dnsConsumer.Wake()
-					}
 				},
 			})
 		if err := runner.Prime(context.Background()); err != nil {
@@ -768,11 +812,10 @@ func runServer(configPath string) error {
 	// Its input is this store's replica of the queue, so the DHCP plane may be
 	// restarting while these entries are still applied.
 	if servesDNS {
-		link := dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
-		link.SetNotifyHook(func(zoneName string) {
+		dnsLink = dhcpinternal.NewDNSLink(dhcpinternal.Same(dnsStore.DB), zoneStore)
+		dnsLink.SetNotifyHook(func(zoneName string) {
 			transfer.SendNotifyForZone(dnsDataDB, zoneName)
 		})
-		dnsConsumer = dhcpinternal.NewDNSConsumer(dnsStore.DB, link)
 	}
 
 	// Cache prefetch: hot entries whose remaining TTL drops below the
@@ -798,7 +841,10 @@ func runServer(configPath string) error {
 		slog.Warn("sealed TSIG secrets that were stored in the clear", "count", sealedCount)
 	}
 
-	// RFC 8945 TSIG keys for signed zone transfers on TCP listeners.
+	// RFC 8945 TSIG keys for signed zone transfers and RFC 2136 updates on
+	// the DNS listeners. The listener needs the dynamic-update keys too: it
+	// verifies the TSIG MAC against the raw wire bytes, which the update
+	// handler cannot reproduce by re-packing a compressed message.
 	if dnsSrv != nil {
 		secrets, err := transfer.TSIGSecretMap(db.DB, tsigSealer)
 		if err != nil {
@@ -806,9 +852,22 @@ func runServer(configPath string) error {
 			// REFUSE every transfer signed with it, with nothing in the log to
 			// say why.
 			slog.Error("TSIG keys could not be loaded; signed transfers will be refused", "error", err)
-		} else if secrets != nil {
-			dnsSrv.SetTSIGSecretMap(secrets)
-			slog.Info("TSIG keys loaded", "count", len(secrets))
+		} else {
+			if len(cfg.DNS.DynamicUpdate.TSIGKeys) > 0 {
+				if secrets == nil {
+					secrets = make(map[string]string, len(cfg.DNS.DynamicUpdate.TSIGKeys))
+				}
+				for name, secret := range cfg.DNS.DynamicUpdate.TSIGKeys {
+					key := strings.ToLower(name)
+					if _, exists := secrets[key]; !exists {
+						secrets[key] = secret
+					}
+				}
+			}
+			if len(secrets) > 0 {
+				dnsSrv.SetTSIGSecretMap(secrets)
+				slog.Info("TSIG keys loaded", "count", len(secrets))
+			}
 		}
 	}
 
@@ -987,8 +1046,42 @@ func runServer(configPath string) error {
 	// before the client is told it may use the address. A DHCP-only process
 	// therefore holds no handle to a zone table it must not write to.
 	var dhcpSrv *dhcpserver.Server
+	var walLeaseStore *lease.WALLeaseStore
 	if servesDHCP && !standsAside {
-		dhcpSrv = dhcpserver.New(dhcpStore.DB, cfg.DHCP.Interfaces, dhcpEventLogger)
+		if cfg.DHCP.LeaseStore == "wal" {
+			// HA-safe shape: a standby sets standsAside and never reaches this
+			// block (it does not construct the DHCP server; the mirror writes its
+			// SQLite lease DB directly). A primary may run the WAL store; on a
+			// takeover the promoted node restarts into the primary role and the
+			// WAL store loads its index from the already-mirrored SQLite snapshot.
+			walPath := strings.TrimSpace(cfg.DHCP.LeaseWALPath)
+			if walPath == "" {
+				walPath = filepath.Join(cfg.Server.DataDir, "leases.wal")
+			}
+			walSource := strings.TrimSpace(cfg.DHCPHA.NodeID)
+			if walSource == "" {
+				host, herr := os.Hostname()
+				if herr != nil || strings.TrimSpace(host) == "" {
+					walSource = "dhcp-node"
+				} else {
+					walSource = host
+				}
+			}
+			store, serr := lease.OpenWALLeaseStore(context.Background(), lease.WALLeaseStoreConfig{
+				Path: walPath, DB: dhcpStore.DB, Capacity: 1024, Source: walSource,
+				ResolveSpaceID: func(scopeID, ip string) (string, error) {
+					return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+				},
+			})
+			if serr != nil {
+				return fmt.Errorf("opening WAL lease store: %w", serr)
+			}
+			walLeaseStore = store
+			dhcpSrv = dhcpserver.NewWithLeaseStore(store, dhcpStore.DB, cfg.DHCP.Interfaces, dhcpEventLogger)
+			slog.Info("DHCP lease store: event-sourced WAL", "wal", walPath)
+		} else {
+			dhcpSrv = dhcpserver.New(dhcpStore.DB, cfg.DHCP.Interfaces, dhcpEventLogger)
+		}
 		// The second copy, when there is one. It is installed before Start so
 		// that no REQUEST can arrive in a window where the binding would be
 		// acknowledged without it.
@@ -999,13 +1092,10 @@ func runServer(configPath string) error {
 		// packets are already being served is a window in which the
 		// restriction is not in force.
 		dhcpSrv.SetTrustedRelays(cfg.DHCP.TrustedRelayCIDRs)
-		// A queued DNS change wakes the outbox push instead of waiting for the
-		// loop's next poll. The consumer is in another process and cannot be
-		// woken at all, so this is the one interval of the two the client waits
-		// through that the data plane is able to remove.
-		if dhcpRunner != nil {
-			dhcpSrv.SetOutboxWake(dhcpRunner.Wake)
-		}
+		// Same "before Start" rule as the relay allowlist: a renewal policy
+		// that arrived after packets were flowing would leave a window in
+		// which neither the old nor the new rule was in force.
+		dhcpSrv.SetRenewOutOfPoolPolicy(cfg.DHCP.RenewOutOfPoolPolicy)
 		slog.Info("DHCP server initialized",
 			"interfaces", cfg.DHCP.Interfaces, "lease_store", dhcpStore.DSN())
 	}
@@ -1049,13 +1139,32 @@ func runServer(configPath string) error {
 	// something to compare the IPAM record against.
 	ipamLinkage := ipam.NewLinkage(db.DB)
 	var ipamFactsPipeline *ipam.FactsPipeline
-	if controlPlane && !haEnabled {
+	// The consumer-side assembly: the inbox lives with the projection (the
+	// control database) and the data-plane relay copies the lease plane's
+	// producer outbox into it. The relay runs wherever the lease database
+	// lives (the all-in-one and the DHCP plane); the IPAM consumer runs
+	// wherever the control database lives (the all-in-one and the control
+	// plane) — in a split deployment each half runs in its own process and
+	// the trigger-driven facts revision keeps the DNS plane's replica current.
+	var dhcpFactsProducerOutbox *facts.ObservationOutbox
+	if dhcpStore != nil {
+		dhcpFactsProducerOutbox, _ = facts.NewObservationOutbox(dhcpStore.DB)
+	}
+	if controlPlane {
 		controlInbox, err := facts.NewObservationOutbox(db.DB)
 		if err != nil {
 			return fmt.Errorf("opening control-side DHCP facts inbox: %w", err)
 		}
+		var relay *facts.Relay
+		if dhcpFactsProducerOutbox != nil {
+			relay, err = facts.NewRelay(dhcpFactsProducerOutbox, controlInbox, db.DB)
+			if err != nil {
+				return fmt.Errorf("initializing the DHCP facts relay: %w", err)
+			}
+		}
 		ipamFactsPipeline, err = ipam.NewFactsPipeline(ipamLinkage, controlInbox, ipam.FactsPipelineOptions{
 			Enabled: true,
+			Relay:   relay,
 		})
 		if err != nil {
 			return fmt.Errorf("initializing IPAM facts consumer: %w", err)
@@ -1077,7 +1186,13 @@ func runServer(configPath string) error {
 	// address. Mapped mutations are represented in the durable facts stream and
 	// projected atomically by the control-side consumer.
 	if dhcpSrv != nil {
-		dhcpSrv.SetLeaseObserver(ipamLinkage)
+		// The WAL lease store derives facts from its own durable events, so the
+		// synchronous facts writer seam and the best-effort observer are not
+		// installed; the outbox/metrics/readiness below still read the same
+		// producer table the store writes.
+		if walLeaseStore == nil {
+			dhcpSrv.SetLeaseObserver(ipamLinkage)
+		}
 		// Standbys and fenced nodes serve no DHCP requests and only receive the
 		// primary's facts stream. A primary, including one promoted by takeover,
 		// commits facts with its lease mutations and gates REQUEST/renewal ACKs on
@@ -1105,27 +1220,52 @@ func runServer(configPath string) error {
 					FirstOutstandingSequence: status.FirstOutstandingSequence,
 				}}
 			})
-			writer, err := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
-			if err != nil {
-				return fmt.Errorf("initializing DHCP fact mutation writer: %w", err)
-			}
-			writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(dhcpStore.DB))
-			if dhcpRunner != nil {
-				writer.WithPostCommitWake(dhcpRunner.Wake)
-			}
-			source := strings.TrimSpace(cfg.DHCPHA.NodeID)
-			if source == "" {
-				source, err = os.Hostname()
-				if err != nil || strings.TrimSpace(source) == "" {
-					source = "dhcp-node"
+			_ = allocator
+			// Only the SQLite store uses the synchronous facts writer seam. The
+			// WAL store emits facts from its own projection, so installing this
+			// seam as well would double-publish every mutation.
+			if walLeaseStore == nil {
+				writer, werr := lease.NewFactsMutationWriter(lease.NewManager(dhcpStore.DB), allocator, outbox)
+				if werr != nil {
+					return fmt.Errorf("initializing DHCP fact mutation writer: %w", werr)
 				}
+				if dhcpRunner != nil {
+					writer.WithPostCommitWake(dhcpRunner.Wake)
+				}
+				source := strings.TrimSpace(cfg.DHCPHA.NodeID)
+				if source == "" {
+					host, herr := os.Hostname()
+					if herr != nil || strings.TrimSpace(host) == "" {
+						source = "dhcp-node"
+					} else {
+						source = host
+					}
+				}
+				dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
+					Caller: writer, Source: source,
+					ResolveSpaceID: func(_ string, ip string) (string, error) {
+						return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+					},
+				})
+				// RELEASE routes through the same facts writer so the write and
+				// its durable fact commit in one transaction.
+				dhcpSrv.SetReleaseFactsMutation(&dhcpserver.ReleaseFactsMutationConfig{
+					Caller: writer, Source: source,
+					ResolveSpaceID: func(scopeID, ip string) (string, error) {
+						return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
+					},
+				})
 			}
-			dhcpSrv.SetLeaseFactsMutation(&dhcpserver.LeaseFactsMutationConfig{
-				Caller: writer, Source: source, DNSOutboxAtomic: true,
-				ResolveSpaceID: func(_ string, ip string) (string, error) {
-					return dhcpStore.ResolveIPAMSpaceByIP(context.Background(), ip)
-				},
-			})
+			// The producer-side lag/gap plane: failed events are retained in
+			// the outbox and must never be disguised as health, a pending
+			// backlog is degraded (the facts are not consumed yet), and an
+			// empty outbox is ok. This is the observation opt-in, so the plane
+			// only exists when the observation actually runs.
+			handler.SetPlaneProbe("dhcp_facts", handler.NewCachedProbe(5*time.Second, func() handler.PlaneStatus {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				return handler.DHCPFactsPlane(outbox.Status(ctx))
+			}).Probe)
 		}
 		slog.Info("IPAM: DHCP lease observation enabled")
 	}
@@ -1348,8 +1488,55 @@ func runServer(configPath string) error {
 	if dnsRunner != nil {
 		go dnsRunner.Run(backgroundCtx)
 	}
-	if dnsConsumer != nil {
-		go dnsConsumer.Run(backgroundCtx)
+
+	// The DNS side of the unified facts chain: the relay copies the lease
+	// plane's facts into this store's inbox, and the DNS facts consumer
+	// applies them to the records with the same idempotent ApplyOne the
+	// former legacy queue used. The unified facts chain is now the only DNS
+	// producer. This assembly lives where both planes are
+	// in one process; a split-role deployment relays the inbox through the
+	// control database the way the legacy queue does (the follow-up).
+	if servesDNS {
+		// The DNS plane consumes its local inbox copy. In the all-in-one the
+		// relay fills it from the lease plane in-process; in a split build the
+		// DomainFacts replication fills it from the control inbox, so the
+		// consumer assembles either way.
+		dnsInbox, err := facts.NewObservationOutbox(dnsStore.DB)
+		if err != nil {
+			return fmt.Errorf("opening the DNS facts inbox: %w", err)
+		}
+		dnsFactsConsumer, err := dhcpinternal.NewDNSFactsConsumer(dnsLink, dnsInbox)
+		if err != nil {
+			return fmt.Errorf("initializing the DNS facts consumer: %w", err)
+		}
+		if dhcpFactsProducerOutbox != nil {
+			dnsRelay, err := facts.NewRelay(dhcpFactsProducerOutbox, dnsInbox, dnsStore.DB)
+			if err != nil {
+				return fmt.Errorf("initializing the DNS facts relay: %w", err)
+			}
+			go func() {
+				if err := dnsRelay.Run(backgroundCtx, time.Second, func(err error) {
+					slog.Warn("dns facts relay: tick failed; the durable state is safe and will retry", "error", err)
+				}); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Warn("dns facts relay: loop ended", "error", err)
+				}
+			}()
+		}
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-backgroundCtx.Done():
+					return
+				case <-ticker.C:
+					if _, err := dnsFactsConsumer.Replay(backgroundCtx, 100); err != nil {
+						slog.Warn("dns facts consumer: replay error; facts stay pending for replay", "error", err)
+					}
+				}
+			}
+		}()
+		slog.Info("DNS: unified facts consumer enabled")
 	}
 
 	// IPAM reconciliation.
@@ -1635,6 +1822,38 @@ func runServer(configPath string) error {
 		})
 	}
 
+	// GET /api/v1/dhcp/ha answers the question "what is this node's HA state?"
+	// from the same facts `goddi ha status` and /ready use. Read-only: the
+	// provider never mutates anything and never exposes the peer token.
+	if haEnabled {
+		handler.RegisterDHCPHAStatusProvider(func() map[string]any {
+			state := currentHAState(haRole, haRepl, haMirror)
+			out := map[string]any{
+				"ha_enabled":      true,
+				"node_id":         haCfg.NodeID,
+				"configured_role": haCfg.Role,
+				"role_in_force":   haRole,
+				"state":           state.String(),
+				"redundant":       state.Redundant(),
+				"promising":       state.MayBind(),
+			}
+			if haRepl != nil {
+				out["sequence"] = haRepl.Seq()
+				out["acknowledged_sequence"] = haRepl.AckedSeq()
+				peer := haRepl.PeerWatermarks()
+				out["peer_applied_sequence"] = peer.AppliedSeq
+				out["peer_applied_facts_sequence"] = peer.FactsAppliedSeq
+			}
+			if haMirror != nil {
+				out["applied_sequence"] = haMirror.AppliedSeq()
+				if up, lastSeen := haMirror.LinkSnapshot(); up {
+					out["peer_last_seen"] = lastSeen
+				}
+			}
+			return out
+		})
+	}
+
 	// Publish secondary-zone refresh health, from the database the sweeper
 	// writes to. Reading the control database instead would report the state of
 	// the configuration rather than the state of the transfers, and the two
@@ -1804,6 +2023,14 @@ func runServer(configPath string) error {
 		slog.Info("flushing DHCP event logs...")
 		dhcpEventLogger.Close()
 	}
+	if walLeaseStore != nil {
+		slog.Info("shutting down WAL lease store...")
+		ctx, cancel := newCtx()
+		if err := walLeaseStore.Close(ctx); err != nil {
+			slog.Error("WAL lease store shutdown error (durable events replay on start)", "error", err)
+		}
+		cancel()
+	}
 	if ipamFactsPipeline != nil {
 		slog.Info("shutting down IPAM facts consumer...")
 		ctx, cancel := newCtx()
@@ -1954,6 +2181,10 @@ func runRekey(configPath string, dryRun bool) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	config.ApplyEnvOverrides(cfg)
+	// Even dry-run currently opens a potentially creating/writing database handle.
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
 	applog.InitLogger(cfg.Log.Level)
 
 	if cfg.Security.EncryptionKey == "" {
@@ -2064,6 +2295,10 @@ func runSnapshot(configPath, output string, includes []string, plaintext bool) e
 		return fmt.Errorf("loading config: %w", err)
 	}
 	config.ApplyEnvOverrides(cfg)
+	// Snapshot source access has not been proven side-effect-free for Enterprise.
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
 	applog.InitLogger(cfg.Log.Level)
 
 	// config.Validate is deliberately not called. A backup is most needed when
@@ -2118,6 +2353,10 @@ func runRestore(configPath string, opts rest) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	config.ApplyEnvOverrides(cfg)
+	// Conservatively reject verify as well until the whole path is reviewed.
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
 	applog.InitLogger(cfg.Log.Level)
 	material := securityKeyMaterial(cfg)
 
@@ -2720,6 +2959,14 @@ func openHANode(configPath string, write bool) (*haNode, error) {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	config.ApplyEnvOverrides(cfg)
+	if err := config.ValidateEdition(cfg); err != nil {
+		return nil, err
+	}
+	if write {
+		if err := rejectEnterprise(cfg); err != nil {
+			return nil, err
+		}
+	}
 
 	if !cfg.DHCPHA.Enabled {
 		return nil, ha.ErrHAOff
@@ -2963,6 +3210,9 @@ func runMigrations(configPath string) error {
 	if err := config.Validate(cfg); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
 
 	applog.InitLogger(cfg.Log.Level)
 
@@ -3032,6 +3282,9 @@ func runMigrationStatus(configPath string, check bool) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	config.ApplyEnvOverrides(cfg)
+	if err := config.ValidateEdition(cfg); err != nil {
+		return err
+	}
 
 	// No logger is initialized. This command's output is the report, and log
 	// lines interleaved with it would make the report unreadable to both the
@@ -3076,7 +3329,13 @@ func runMigrationStatus(configPath string, check bool) error {
 	case unrecognised > 0:
 		return fmt.Errorf("有 %d 个已应用的迁移不在本二进制自带之列：该数据库比这个二进制更新，用它继续运行会把 schema 回退到本二进制理解的版本，请改用与其匹配的二进制", unrecognised)
 	case toApply > 0:
-		return fmt.Errorf("有 %d 个迁移待应用；请运行 goddi migrate 应用它们", toApply)
+		// `migrate` deliberately prepares only the control store (see
+		// docs/实施计划-v0.6.0.md W12-b): --status/--check must be able to
+		// inspect a deployment without creating databases. The data-plane
+		// stores are created and migrated by `serve` on its first start.
+		// Without this note the message sends an operator on a fresh install
+		// back to `migrate`, which cannot apply those pending migrations.
+		return fmt.Errorf("有 %d 个迁移待应用；请运行 goddi migrate 应用它们；若待应用项来自 dnsdata/leases 数据面库，它们由首次启动 goddi serve 创建并迁移（migrate 不会创建数据面库）", toApply)
 	}
 	fmt.Println("migrate --check：每个存储都不缺迁移，且没有本二进制不认识的版本。")
 	return nil
@@ -3085,10 +3344,16 @@ func runMigrationStatus(configPath string, check bool) error {
 // migrationStatusOfStore reads one store's migration state without creating or
 // changing anything.
 func migrationStatusOfStore(store migrateStore) database.MigrationStatus {
-	path := strings.TrimSpace(backup.DSNPath(store.dsn))
-	if path == "" {
+	if strings.TrimSpace(store.dsn) == "" {
 		status := database.PendingMigrationStatus(store.fsys, store.set)
 		status.Configured = false
+		return status
+	}
+	path, err := dataplane.ReadOnlyPath(store.dsn)
+	if err != nil {
+		status := database.PendingMigrationStatus(store.fsys, store.set)
+		status.Configured = true
+		status.Err = err
 		return status
 	}
 
@@ -3109,21 +3374,19 @@ func migrationStatusOfStore(store migrateStore) database.MigrationStatus {
 		return status
 	}
 
-	conn, err := sql.Open("sqlite", store.dsn)
+	conn, err := dataplane.OpenReadOnly(config.DataPlaneRole(store.set), store.dsn)
 	if err != nil {
 		status := database.PendingMigrationStatus(store.fsys, store.set)
 		status.Configured = true
 		status.Path = path
-		status.Err = err
+		if !os.IsNotExist(err) {
+			status.Err = err
+		}
 		return status
 	}
 	defer conn.Close()
-	conn.SetMaxOpenConns(1)
 
-	// No PRAGMAs are applied on this path. `PRAGMA journal_mode` writes to the
-	// file header, and the whole job of this command is to report what is on
-	// disk rather than to change it.
-	status := database.MigrationStatusOf(conn, store.fsys, store.set)
+	status := database.MigrationStatusOf(conn.DB, store.fsys, store.set)
 	status.Configured = true
 	status.Path = path
 	return status
@@ -3179,6 +3442,9 @@ func runUnlock(configPath, username, ip string, all bool) error {
 	}
 
 	config.ApplyEnvOverrides(cfg)
+	if err := rejectEnterprise(cfg); err != nil {
+		return err
+	}
 
 	applog.InitLogger(cfg.Log.Level)
 
@@ -3267,6 +3533,19 @@ func parseIntOr(value string, fallback int) int {
 		return n
 	}
 	return fallback
+}
+
+// cacheSettingOverrides mirrors the DNS cache keys in config.yaml into the
+// values used to seed system_settings on a fresh database. The keys must match
+// the ones applySetting reads when it replays settings onto dnsCache.
+func cacheSettingOverrides(c config.CacheConfig) map[string]string {
+	return map[string]string{
+		"dns_cache_serve_stale": strconv.FormatBool(c.ServeStale),
+		"dns_cache_stale_ttl":   strconv.Itoa(c.StaleTTL),
+		"dns_cache_prefetch":    strconv.FormatBool(c.Prefetch),
+		"dns_cache_min_ttl":     strconv.Itoa(c.MinTTL),
+		"dns_cache_max_ttl":     strconv.Itoa(c.MaxTTL),
+	}
 }
 
 // dataPlaneQuota resolves the configured bounds into the shape the data plane

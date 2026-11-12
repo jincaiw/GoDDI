@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import './plugins/assets';
 import { setupVueRootValidator } from 'vite-plugin-vue-transition-root-validator/client';
 import { setupAppVersionNotification, setupDayjs, setupIconifyOffline, setupLoading, setupNProgress } from './plugins';
+import { setupTDesign } from './plugins/tdesign';
 import { setupStore } from './store';
 import { setupRouter } from './router';
 import { getLocale, setupI18n } from './locales';
@@ -17,6 +18,8 @@ async function setupApp() {
   setupDayjs();
 
   const app = createApp(App);
+
+  setupTDesign(app);
 
   setupStore(app);
 

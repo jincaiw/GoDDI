@@ -150,6 +150,21 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'dhcp_ha',
+        path: '/dhcp/ha',
+        component: 'view.dhcp_ha',
+        meta: {
+          title: 'dhcp_ha',
+          i18nKey: 'route.dhcp_ha',
+          icon: 'mdi:server-network',
+          order: 5,
+          permission: {
+            resource: 'dhcp',
+            action: 'read'
+          }
+        }
+      },
+      {
         name: 'dhcp_leases',
         path: '/dhcp/leases',
         component: 'view.dhcp_leases',
@@ -276,6 +291,21 @@ export const generatedRoutes: GeneratedRoute[] = [
           i18nKey: 'route.dns_cache',
           icon: 'mdi:database-clock',
           order: 6,
+          permission: {
+            resource: 'dns',
+            action: 'read'
+          }
+        }
+      },
+      {
+        name: 'dns_dnssec',
+        path: '/dns/dnssec',
+        component: 'view.dns_dnssec',
+        meta: {
+          title: 'dns_dnssec',
+          i18nKey: 'route.dns_dnssec',
+          icon: 'mdi:key-chain',
+          order: 5,
           permission: {
             resource: 'dns',
             action: 'read'

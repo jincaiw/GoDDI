@@ -68,35 +68,6 @@ func seedOfferedLease(t *testing.T, db *sql.DB, manager *Manager) *Lease {
 	return created
 }
 
-type dnsSinkProbe struct {
-	calls int
-	fail  bool
-}
-
-func (p *dnsSinkProbe) EnqueueTx(tx *sql.Tx, l *Lease, action DNSMutationAction) error {
-	if p.fail {
-		p.calls++
-		return errors.New("dns sink unavailable")
-	}
-	var wireAction string
-	switch action {
-	case DNSActionUpsert:
-		wireAction = "create"
-	case DNSActionDelete:
-		wireAction = "delete"
-	default:
-		return errors.New("unsupported dns action")
-	}
-	_, err := tx.Exec(`INSERT INTO dhcp_dns_events
-		(lease_id, generation, action, scope_id, ip_address, mac_address, hostname)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, l.ID, l.Generation, wireAction,
-		l.ScopeID, l.IPAddress, l.MACAddress, l.Hostname)
-	if err == nil {
-		p.calls++
-	}
-	return err
-}
-
 func TestFactsMutationWriterPostCommitWakeRunsOnlyAfterCommit(t *testing.T) {
 	writer, db, manager := newFactsMutationWriter(t)
 	offered := seedOfferedLease(t, db, manager)
@@ -108,13 +79,9 @@ func TestFactsMutationWriterPostCommitWakeRunsOnlyAfterCommit(t *testing.T) {
 	if wakeCalls != 1 {
 		t.Fatalf("wake calls after commit = %d, want 1", wakeCalls)
 	}
-	writer.WithDNSSink(&dnsSinkProbe{fail: true})
-	seedScope(t, db, "scope-2", "lan-2", "192.0.2.0/24", "192.0.2.30", "192.0.2.39")
-	offered, err := manager.ReserveAddress("scope-2", "192.0.2.30", "aa:bb:cc:dd:ee:30", "host-30")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.ActivateLease(context.Background(), "event-wake-fail", "dhcp-node-a", "space-1", offered.ID, time.Hour); err == nil {
+	// A lease that does not exist makes the mutation fail before commit, so
+	// the post-commit wake must still not fire.
+	if _, err := writer.ActivateLease(context.Background(), "event-wake-fail", "dhcp-node-a", "space-1", "no-such-lease", time.Hour); err == nil {
 		t.Fatal("failed mutation unexpectedly succeeded")
 	}
 	if wakeCalls != 1 {
@@ -212,30 +179,6 @@ func TestFactsMutationWriterBindCommitsDirectRequestLeaseAndFactTogether(t *test
 	if eventID == "" || action != string(MutationBind) || sequence != 1 ||
 		!containsAll(payload, "bind", active.ID, "space-1", "192.0.2.20") {
 		t.Fatalf("direct bind fact = id:%q action:%q sequence:%d payload:%s", eventID, action, sequence, payload)
-	}
-}
-
-func TestFactsMutationWriterWithLegacyDNSSinkUsesSameCommit(t *testing.T) {
-	writer, db, manager := newFactsMutationWriter(t)
-	offered := seedOfferedLease(t, db, manager)
-	dns := &dnsSinkProbe{}
-	writer.WithDNSSink(dns)
-	if _, err := writer.ActivateLease(context.Background(), "event-dns-1", "dhcp-node-a", "space-1", offered.ID, time.Hour); err != nil {
-		t.Fatalf("ActivateLease: %v", err)
-	}
-	if dns.calls != 1 {
-		t.Fatalf("dns sink calls = %d, want 1", dns.calls)
-	}
-
-	writer, db, manager = newFactsMutationWriter(t)
-	active := seedActiveLease(t, db, manager)
-	dns = &dnsSinkProbe{}
-	writer.WithDNSSink(dns)
-	if _, err := writer.ReleaseLease(context.Background(), "event-dns-2", "dhcp-node-a", "space-1", active.ID); err != nil {
-		t.Fatalf("ReleaseLease: %v", err)
-	}
-	if dns.calls != 1 {
-		t.Fatalf("dns sink calls = %d, want 1", dns.calls)
 	}
 }
 
@@ -503,42 +446,6 @@ func TestFactsMutationWriterRejectsInvalidStateBeforeSideEffects(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("invalid transition wrote %d facts", count)
-	}
-}
-
-func TestFactsMutationWriterDNSFailureRollsBackAllWrites(t *testing.T) {
-	writer, db, manager := newFactsMutationWriter(t)
-	offered := seedOfferedLease(t, db, manager)
-	writer.WithDNSSink(&dnsSinkProbe{fail: true})
-	if _, err := writer.ActivateLease(context.Background(), "event-dns-fail", "dhcp-node-a", "space-1", offered.ID, time.Hour); err == nil {
-		t.Fatal("DNS failure unexpectedly committed mutation")
-	}
-	stored, err := manager.GetLease(offered.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Status != LeaseStatusOffered || stored.Generation != offered.Generation {
-		t.Fatalf("lease after DNS failure = %+v", stored)
-	}
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("facts after DNS failure = %d", count)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("DNS outbox after DNS failure = %d", count)
-	}
-	allocator, err := facts.NewSequenceAllocator(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := allocator.Current(context.Background()); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("sequence after DNS failure = %v, want sql.ErrNoRows", err)
 	}
 }
 

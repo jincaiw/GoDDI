@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
 	"github.com/jasonwa/goddi/internal/dhcp/lease"
 	"github.com/jasonwa/goddi/internal/facts"
 	"github.com/jasonwa/goddi/internal/ipam"
@@ -163,18 +162,16 @@ type releaseFactsCallerProbe struct {
 	calls     int
 	eventIDs  []string
 	wakeCalls int
+	fail      bool
 }
 
 func (p *releaseFactsCallerProbe) ReleaseLease(ctx context.Context, eventID, source, spaceID, id string) (*lease.Lease, error) {
 	p.calls++
 	p.eventIDs = append(p.eventIDs, eventID)
+	if p.fail {
+		return nil, errors.New("injected facts release failure")
+	}
 	return p.writer.ReleaseLease(ctx, eventID, source, spaceID, id)
-}
-
-type releaseFactsDNSSinkFailure struct{}
-
-func (releaseFactsDNSSinkFailure) EnqueueTx(*sql.Tx, *lease.Lease, lease.DNSMutationAction) error {
-	return errors.New("legacy DNS sink unavailable")
 }
 
 type releaseFactsObserverProbe struct {
@@ -274,13 +271,12 @@ func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
 	resolver, err := ipam.NewScopeIdentityResolver(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
-		Caller: writer, Source: "dhcp-node-a", DNSOutboxAtomic: true,
+		Caller: writer, Source: "dhcp-node-a",
 		ResolveSpaceID: func(scopeID, ip string) (string, error) {
 			identity, err := resolver.Resolve(scopeID, ip)
 			return identity.SpaceID, err
@@ -289,15 +285,12 @@ func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) 
 
 	mac := testMAC(24)
 	dhcpExchange(t, s, mac, "host24")
-	var factsCount, dnsCount int
+	var factsCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
-		t.Fatal(err)
-	}
-	if factsCount != 1 || dnsCount != 1 {
-		t.Fatalf("after REQUEST: facts=%d DNS events=%d, want 1/1", factsCount, dnsCount)
+	if factsCount != 1 {
+		t.Fatalf("after REQUEST: facts=%d, want 1", factsCount)
 	}
 
 	release, err := dhcpv4.New(
@@ -314,11 +307,8 @@ func TestDefaultLeaseFactsWriterCoversRequestAndReleaseAtomically(t *testing.T) 
 	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_ipam_observation_events`).Scan(&factsCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM dhcp_dns_events`).Scan(&dnsCount); err != nil {
-		t.Fatal(err)
-	}
-	if factsCount != 2 || dnsCount != 2 {
-		t.Fatalf("after RELEASE: facts=%d DNS events=%d, want 2/2", factsCount, dnsCount)
+	if factsCount != 2 {
+		t.Fatalf("after RELEASE: facts=%d, want 2", factsCount)
 	}
 }
 
@@ -336,13 +326,12 @@ func TestMappedRequestUsesFactsAwareHAConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer.WithDNSSink(dhcpinternal.NewScopeAwareDNSMutationSink(db))
 	resolver, err := ipam.NewScopeIdentityResolver(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.SetLeaseFactsMutation(&LeaseFactsMutationConfig{
-		Caller: writer, Source: "ha-primary", DNSOutboxAtomic: true,
+		Caller: writer, Source: "ha-primary",
 		ResolveSpaceID: func(scopeID, ip string) (string, error) {
 			identity, err := resolver.Resolve(scopeID, ip)
 			return identity.SpaceID, err
@@ -408,7 +397,7 @@ func TestHandleReleaseFactsOptInCommitsLeaseAndFactBeforePostCommitSideEffects(t
 
 func TestHandleReleaseFactsFailureDoesNotFallbackOrTriggerPostCommitSideEffects(t *testing.T) {
 	s, db, caller, _, _ := newReleaseFactsServer(t)
-	caller.writer.WithDNSSink(releaseFactsDNSSinkFailure{})
+	caller.fail = true
 	mac := testMAC(21)
 	dhcpExchange(t, s, mac, "host21")
 

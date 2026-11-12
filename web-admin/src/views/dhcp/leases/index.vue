@@ -1,101 +1,150 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listDHCPLeases, deleteDHCPLease, type DHCPLease } from '@/service/api/goddi/dhcp'
+import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, MessagePlugin, Tag as TTag, Link as TLink } from 'tdesign-vue-next';
+import type { PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import { deleteDHCPLease, listDHCPLeases, type DHCPLease } from '@/service/api/goddi/dhcp';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DHCPLeasesPage' });
 
-const loading = ref(false)
-const leases = ref<DHCPLease[]>([])
-const searchQuery = ref('')
-const statusFilter = ref<string | null>(null)
-const showReleaseConfirm = ref(false)
-const releasingId = ref('')
+const { t } = useI18n();
+const perm = usePermission();
+
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const searchQuery = ref('');
+const statusFilter = ref<string | undefined>(undefined);
 
 const statusOptions = [
   { label: 'Active', value: 'active' },
   { label: 'Offered', value: 'offered' },
   { label: 'Expired', value: 'expired' },
   { label: 'Released', value: 'released' },
-  { label: 'Conflict', value: 'conflict' },
-]
+  { label: 'Conflict', value: 'conflict' }
+];
 
-// Statuses that are not a confirmed binding must not look like one: an offer is
-// pending, and a conflict is an address held out of the pool after a DECLINE.
-const statusTagType: Record<string, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
+// An offer is pending and a conflict is an address held out of the pool after
+// a DECLINE; neither should look like a confirmed binding.
+const statusTheme: Record<string, 'success' | 'primary' | 'warning' | 'danger' | 'default'> = {
   active: 'success',
-  offered: 'info',
+  offered: 'primary',
   conflict: 'warning',
   expired: 'default',
-  released: 'default',
+  released: 'default'
+};
+
+const params = computed<Record<string, unknown>>(() => {
+  const p: Record<string, unknown> = {};
+  if (searchQuery.value) p.search = searchQuery.value;
+  if (statusFilter.value) p.status = statusFilter.value;
+  return p;
+});
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'ip', title: t('dhcp.leases.ip'), width: 150 },
+  { colKey: 'mac', title: t('dhcp.leases.mac'), width: 170 },
+  { colKey: 'hostname', title: t('dhcp.leases.hostname'), ellipsis: true },
+  { colKey: 'scope_name', title: t('dhcp.leases.scope'), ellipsis: true },
+  {
+    colKey: 'status',
+    title: t('common.status'),
+    width: 110,
+    cell: (h, { row }) =>
+      h(TTag, { size: 'small', theme: statusTheme[(row as DHCPLease).status] ?? 'default', variant: 'light' }, () =>
+        String((row as DHCPLease).status)
+      )
+  },
+  { colKey: 'start_time', title: t('dhcp.leases.startTime'), width: 170 },
+  { colKey: 'end_time', title: t('dhcp.leases.endTime'), width: 170 },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(
+        TLink,
+        {
+          theme: 'danger',
+          disabled: !perm.canDelete('dhcp'),
+          onClick: () => confirmRelease((row as DHCPLease).id)
+        },
+        () => t('dhcp.leases.release')
+      )
+  }
+];
+
+function confirmRelease(id: string) {
+  if (!perm.canDelete('dhcp')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('dhcp.leases.release'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteDHCPLease(id);
+        void MessagePlugin.success(t('common.success'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+      }
+      dlg.hide();
+    }
+  });
 }
-
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-
-const columns = [
-  { title: () => t('dhcp.leases.ip'), key: 'ip' },
-  { title: () => t('dhcp.leases.mac'), key: 'mac' },
-  { title: () => t('dhcp.leases.hostname'), key: 'hostname', ellipsis: { tooltip: true } },
-  { title: () => t('dhcp.leases.scope'), key: 'scope_name' },
-  { title: () => t('common.status'), key: 'status', render: (row: DHCPLease) => h(NTag, { size: 'small', type: statusTagType[row.status] ?? 'default' }, { default: () => row.status }) },
-  { title: () => t('dhcp.leases.startTime'), key: 'start_time', width: 160 },
-  { title: () => t('dhcp.leases.endTime'), key: 'end_time', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: DHCPLease) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dhcp'), onClick: () => { if (!perm.canDelete('dhcp')) return; releasingId.value = row.id; showReleaseConfirm.value = true } }, { default: () => t('dhcp.leases.release') }) },
-]
-
-async function loadData() {
-  loading.value = true
-  try {
-    const params: Record<string, unknown> = { page: pagination.page, page_size: pagination.pageSize }
-    if (searchQuery.value) params.search = searchQuery.value
-    if (statusFilter.value) params.status = statusFilter.value
-    const result = await listDHCPLeases(params)
-    leases.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
-}
-
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
-
-async function handleRelease() {
-  if (!perm.canDelete('dhcp')) return
-  try { await deleteDHCPLease(releasingId.value); message.success(t('common.success')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showReleaseConfirm.value = false
-}
-
-onMounted(loadData)
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dhcp.leases.title')">
-      <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dhcp.leases.title') }}</h2>
+      <TButton variant="outline" @click="tableRef?.reload()">
+        <template #icon><TIcon name="refresh" /></template>
+        {{ t('common.refresh') }}
+      </TButton>
+    </TCard>
 
-    <div class="filter-bar">
-      <NSpace>
-        <NInput v-model:value="searchQuery" :placeholder="t('common.search') + ' IP/MAC'" clearable style="width: 240px;" @keyup.enter="loadData" />
-        <NSelect v-model:value="statusFilter" :options="statusOptions" clearable :placeholder="t('common.status')" style="width: 140px;" @update:value="loadData" />
-      </NSpace>
-    </div>
+    <TCard :bordered="false" class="filter-bar">
+      <TSpace>
+        <TInput
+          v-model="searchQuery"
+          clearable
+          :placeholder="t('common.search') + ' IP/MAC'"
+          style="width: 240px"
+          @enter="tableRef?.reload()"
+        />
+        <TSelect
+          v-model="statusFilter"
+          :options="statusOptions"
+          clearable
+          :placeholder="t('common.status')"
+          style="width: 150px"
+        />
+      </TSpace>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="leases"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: DHCPLease) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
-
-    <ConfirmDialog :show="showReleaseConfirm" :message="t('common.deleteConfirm')" @confirm="handleRelease" @cancel="showReleaseConfirm = false" />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listDHCPLeases" :params="params" />
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.filter-bar :deep(.t-card__body) {
+  padding: 12px 20px;
+}
+</style>

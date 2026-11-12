@@ -174,29 +174,6 @@ CREATE INDEX IF NOT EXISTS idx_dp_dhcp_leases_mac_address ON dhcp_leases(mac_add
 CREATE INDEX IF NOT EXISTS idx_dp_dhcp_leases_status ON dhcp_leases(status);
 CREATE INDEX IF NOT EXISTS idx_dp_dhcp_leases_lease_end ON dhcp_leases(lease_end);
 
--- The durable DNS outbox. It lives here, next to the lease it describes, so
--- "the binding is committed and the update is owed" is one transaction.
-CREATE TABLE IF NOT EXISTS dhcp_dns_events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    lease_id        TEXT    NOT NULL,
-    generation      INTEGER NOT NULL,
-    action          TEXT    NOT NULL,
-    scope_id        TEXT    NOT NULL DEFAULT '',
-    ip_address      TEXT    NOT NULL DEFAULT '',
-    mac_address     TEXT    NOT NULL DEFAULT '',
-    hostname        TEXT    NOT NULL DEFAULT '',
-    attempts        INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    last_error      TEXT    NOT NULL DEFAULT '',
-    status          TEXT    NOT NULL DEFAULT 'pending',
-    created_at      DATETIME NOT NULL DEFAULT (datetime('now')),
-    updated_at      DATETIME NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_dp_dhcp_dns_events_pending
-    ON dhcp_dns_events(status, next_attempt_at, id);
-CREATE INDEX IF NOT EXISTS idx_dp_dhcp_dns_events_lease ON dhcp_dns_events(lease_id);
-
 -- The event log is written from the request path, so it belongs on the request
 -- path's database: a control database that is locked or unreachable must not be
 -- able to slow a client's DISCOVER down.
@@ -295,7 +272,6 @@ DROP TABLE IF EXISTS dataplane_meta;
 DROP TABLE IF EXISTS dataplane_sync_state;
 DROP TABLE IF EXISTS dhcp_lease_dirty;
 DROP TABLE IF EXISTS dhcp_logs;
-DROP TABLE IF EXISTS dhcp_dns_events;
 DROP TABLE IF EXISTS dhcp_leases;
 DROP TABLE IF EXISTS dns_records;
 DROP TABLE IF EXISTS dns_zones;

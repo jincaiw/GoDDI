@@ -64,6 +64,7 @@ NEW_IP = "203.0.113.8"
 DNS_EVENT_LEASE_ID = "w14h-dns-event"
 DNS_EVENT_HOSTNAME = "event-host"
 DNS_EVENT_IP = "10.9.0.70"
+FACT_EVENT_ID = "w14h-fact-event"
 
 SCOPE_NAME = "w14h-drill-scope"
 SCOPE_SUBNET = "10.9.0.0/24"
@@ -480,32 +481,35 @@ def local_dns_a_values(dns_db):
     return {r[0] for r in rows}
 
 
-def pending_dns_events(db_path):
+def pending_facts(db_path):
+    # Unified facts chain: the only durable DNS work queue in the new
+    # architecture. The producer's copy stays pending; only the delivery
+    # marker is cleared after a successful push.
     try:
         rows = query_rows(
             db_path,
-            "SELECT lease_id, action, status FROM dhcp_dns_events "
-            "WHERE status = 'pending' ORDER BY id",
+            "SELECT event_id, action, status FROM dhcp_ipam_observation_events "
+            "WHERE status = 'pending' ORDER BY sequence",
         )
     except sqlite3.Error:
         return None
     return rows
 
 
-def all_dns_events(db_path):
+def all_facts(db_path):
     try:
         rows = query_rows(
             db_path,
-            "SELECT lease_id, action, status FROM dhcp_dns_events ORDER BY id",
+            "SELECT event_id, action, status FROM dhcp_ipam_observation_events ORDER BY sequence",
         )
     except sqlite3.Error:
         return None
     return rows
 
 
-def dirty_dns_event_ids(db_path):
+def dirty_fact_ids(db_path):
     try:
-        rows = query_rows(db_path, "SELECT event_id FROM dhcp_dns_event_dirty")
+        rows = query_rows(db_path, "SELECT event_id FROM dhcp_ipam_observation_event_dirty")
     except sqlite3.Error:
         return None
     return {r[0] for r in rows}
@@ -693,22 +697,36 @@ def section_outage(checks, ports, control, dns, dhcp, data, state, lock):
               (DNS_EVENT_LEASE_ID, state["scope_id"], DNS_EVENT_IP, "02:00:00:00:14:04",
                DNS_EVENT_HOSTNAME + "." + ZONE, "2026-09-11T00:00:00Z",
                "2030-01-01T00:00:00Z", "2026-09-11T00:00:00Z"))
+    # One durable fact for the same binding. The DNS side derives the record
+    # from it (DNSFactsConsumer), so the unified chain is the only DNS work
+    # queue. The sequence continues the local stream so the DNS consumer's
+    # +1 watermark check never sees a gap.
+    seq_row = query_rows(
+        data["leases_db"],
+        "SELECT COALESCE(MAX(sequence), 0) + 1 FROM dhcp_ipam_observation_events")
+    fact_sequence = int(seq_row[0][0]) if seq_row else 1
+    fact_payload = json.dumps({
+        "action": "bind", "lease_id": DNS_EVENT_LEASE_ID,
+        "scope_id": state["scope_id"], "space_id": "w14h-drill",
+        "ip": DNS_EVENT_IP, "mac": "02:00:00:00:14:04",
+        "hostname": DNS_EVENT_HOSTNAME + "." + ZONE, "generation": 1,
+    })
     write_row(data["leases_db"],
-              "INSERT INTO dhcp_dns_events (lease_id, generation, action, scope_id, ip_address,"
-              " mac_address, hostname) VALUES (?, 1, 'create', ?, ?, ?, ?)",
-              (DNS_EVENT_LEASE_ID, state["scope_id"], DNS_EVENT_IP,
-               "02:00:00:00:14:04", DNS_EVENT_HOSTNAME + "." + ZONE))
+              "INSERT INTO dhcp_ipam_observation_events (event_id, version, entity, action,"
+              " generation, sequence, source, occurred_at, payload_version, payload)"
+              " VALUES (?, 1, 'dhcp_lease', 'bind', 1, ?, 'w14h-drill', datetime('now'), 1, ?)",
+              (FACT_EVENT_ID, fact_sequence, fact_payload))
 
     dirty = local_dirty(data["leases_db"])
     checks.check("停机期间产生的租约留下了待上行标记", dirty is not None and LEASE_QUEUED_ID in dirty,
                  f"dirty={dirty}")
-    local_events = pending_dns_events(data["leases_db"])
-    checks.check("DHCP→DNS 事件在本地 outbox 中待上行",
-                 local_events is not None and any(r[0] == DNS_EVENT_LEASE_ID for r in local_events),
-                 f"pending events={local_events}")
-    checks.check("控制库暂时没有该 DHCP→DNS 事件",
-                 not any(r[0] == DNS_EVENT_LEASE_ID for r in (all_dns_events(data["control_db"]) or [])),
-                 f"control events={all_dns_events(data['control_db'])}")
+    local_events = pending_facts(data["leases_db"])
+    checks.check("统一 facts 事件在本地待上行",
+                 local_events is not None and any(r[0] == FACT_EVENT_ID for r in local_events),
+                 f"pending facts={local_events}")
+    checks.check("控制库暂时没有该 facts 事件",
+                 not any(r[0] == FACT_EVENT_ID for r in (all_facts(data["control_db"]) or [])),
+                 f"control facts={all_facts(data['control_db'])}")
 
     # 等一次推送尝试失败（busy_timeout 5s + 退避），再断言控制库还没有它。
     ok, _ = wait_until(lambda: (M_PUSH_REFUSED in dhcp.log(), None), timeout=25)
@@ -762,10 +780,10 @@ def section_restart(checks, ports, control_node, dns, dhcp, data, state, lock, p
                  f"控制库中仍没有 {LEASE_QUEUED_ID}")
 
     ok, _ = wait_until(
-        lambda: (any(r[0] == DNS_EVENT_LEASE_ID for r in (all_dns_events(data["control_db"]) or [])), None),
+        lambda: (any(r[0] == FACT_EVENT_ID for r in (all_facts(data["control_db"]) or [])), None),
         timeout=45)
-    checks.check("DHCP→DNS 事件在控制库恢复后完成上行", ok,
-                 f"控制库 events={all_dns_events(data['control_db'])}")
+    checks.check("统一 facts 事件在控制库恢复后完成上行", ok,
+                 f"控制库 facts={all_facts(data['control_db'])}")
 
     def queue_empty():
         d = local_dirty(data["leases_db"])
@@ -774,24 +792,23 @@ def section_restart(checks, ports, control_node, dns, dhcp, data, state, lock, p
     ok, d = wait_until(queue_empty, timeout=30)
     checks.check("本地待上行队列回到 0", ok, f"dirty={d}")
 
-    # DHCP 本地事件是 append-only 事实源：成功上行只清除 dirty marker，事件本身
-    # 仍保留为 pending，供 DNS 副本下行后由 DNSConsumer 消费；不能把「本地事件行」
-    # 误判成「本地上行队列」，否则会错误要求生产者删除它。
+    # The producer's fact row is append-only: a successful push clears only
+    # the delivery marker. The DNS side consumes its own copy through the
+    # unified facts chain (DomainFacts replication + DNSFactsConsumer).
     def event_dirty_cleared():
         rows = query_rows(data["leases_db"],
-                          "SELECT COUNT(*) FROM dhcp_dns_event_dirty d "
-                          "JOIN dhcp_dns_events e ON e.id = d.event_id "
-                          "WHERE e.lease_id = ?", (DNS_EVENT_LEASE_ID,))
+                          "SELECT COUNT(*) FROM dhcp_ipam_observation_event_dirty "
+                          "WHERE event_id = ?", (FACT_EVENT_ID,))
         return int(rows[0][0]) == 0, rows
 
     ok, _ = wait_until(event_dirty_cleared, timeout=30)
-    checks.check("DHCP 本地 DNS 事件成功上行后 dirty 标记清空", ok,
-                 f"event_dirty={dirty_dns_event_ids(data['leases_db'])}")
-    local_event_rows = all_dns_events(data["leases_db"])
-    checks.check("DHCP 本地 DNS 事件事实行仍保留且未被生产者删除",
+    checks.check("统一 facts 事件成功上行后 delivery 标记清空", ok,
+                 f"fact_dirty={dirty_fact_ids(data['leases_db'])}")
+    local_event_rows = all_facts(data["leases_db"])
+    checks.check("DHCP 本地 facts 事实行仍保留且未被生产者删除",
                  local_event_rows is not None and any(
-                     r[0] == DNS_EVENT_LEASE_ID and r[2] == "pending" for r in local_event_rows),
-                 f"local events={local_event_rows}")
+                     r[0] == FACT_EVENT_ID for r in local_event_rows),
+                 f"local facts={local_event_rows}")
 
     def dns_event_applied():
         rows = query_rows(data["dns_db"],
@@ -868,8 +885,8 @@ def caveats():
     不可写持续几小时/几天后队列会不会涨破、退避会不会退化，这里没有测。
   * 下行同步的验证靠轮询本地副本 + 真 UDP 查询，覆盖的是 1s 轮询这个默认节奏；把
     sync_interval_seconds 调大后客户端等待变长的量级，这里没有测。
-  * 直接写库种租约与直接插入 DHCP→DNS 事件绕过了 DHCP 服务端的 lease.Manager /
-    enqueueDNSEvent（唯一合法写者）。它们复用了同样的持久化表和上行/下行链路，但不
+  * 直接写库种租约与直接插入统一 facts 事件绕过了 DHCP 服务端的 lease.Manager /
+    FactsMutationWriter（唯一合法写者）。它们复用了同样的持久化表和上行/下行链路，但不
     等同于一次真实 DHCP REQUEST/ACK；字段（client_id、generation 等）是脚本手填的。
   * 控制进程重启用的是同一 data_dir 与端口，验证的是进程重启；不是升级/迁移过程、
     也不是控制库文件本身丢失或损坏后的恢复。

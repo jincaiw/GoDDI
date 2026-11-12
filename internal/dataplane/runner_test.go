@@ -221,7 +221,7 @@ func seedLeasesAtTheCeiling(t *testing.T, store *Store, n int) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	for _, table := range []string{"dhcp_lease_dirty", "dhcp_dns_event_dirty", "dhcp_log_dirty"} {
+	for _, table := range []string{"dhcp_lease_dirty", "dhcp_log_dirty"} {
 		if _, err := store.Exec("DELETE FROM " + table); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}

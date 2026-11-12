@@ -1,3 +1,31 @@
+/*
+ * STALE AGAINST THE CURRENT UI (see docs/audit/IMPLEMENTATION-STATUS.md §1av/§1ba).
+ *
+ * This spec was written against the pre-TDesign console (soybean shell, Naive
+ * UI components, English-only labels). The TDesign migration replaced all of
+ * that, so its selectors (.n-*, [aria-label=...], old button labels) no longer
+ * match and the suite fails wholesale. It is NOT run by CI's green path.
+ *
+ * Disposition of what it covered:
+ *   - route rendering without runtime errors  -> test/browser/batch2-batch15
+ *     (every page, 0 console/page errors);
+ *   - read-only role write denial             -> server-side pin in
+ *     internal/api/rbac_coverage_test.go + UI half in test/browser/batch16;
+ *   - lifecycle CRUD across modules           -> test/browser/batch3-batch8
+ *     create-e2e steps (zones/forwarders/scopes/groups/users/roles/tokens/
+ *     reservations/security policies/allow rules — each has a
+ *     "created end-to-end" step); DHCP options and backup are RENDER-checked
+ *     by batch4 only, their lifecycles being pinned server-side
+ *     (internal/dhcp/option: 11 tests incl. layering and wire encoding;
+ *     backup/restore: api.spec + release_flow_test.go);
+ *   - pagination cross-page semantics         -> internal/api/handler/
+ *     ipam_pagination_test.go;
+ *   - mobile/visual states of the old shell   -> obsolete with the shell.
+ *
+ * If browser coverage beyond test/browser/ is ever needed again, rewrite the
+ * selectors against the TDesign console (see the revived siblings:
+ * ipam-console.fixture.spec.ts and config-versions.spec.ts).
+ */
 import { request as playwrightRequest, test, expect, type Locator, type Page } from '@playwright/test'
 
 // The language switch is a hover-triggered dropdown. The test body reloads

@@ -101,6 +101,13 @@ func checkMigration(name, body string) migrationVerdict {
 		return verdict
 	}
 
+	// An explicit, audited exception: a "retire" migration is allowed to drop
+	// objects without recreating them. The new architecture has no legacy
+	// table to preserve, and the user has explicitly opted out of historical
+	// data compatibility. Every other migration still goes through the full
+	// expand/contract rules below.
+	retireAllowed := strings.Contains(body, "migration-contract: retire-allowed")
+
 	up := blockAfter(body, gooseUpDirective, gooseDownDirective)
 
 	// Comments are removed before the body is split into statements, and that
@@ -159,11 +166,18 @@ func checkMigration(name, body string) migrationVerdict {
 				"检查器不认识的语句，请先补充规则再提交："+firstLine(entry.text))
 
 		case classContract:
-			// R2.
+			// R2. Retire migrations are the explicit exception.
+			if retireAllowed {
+				continue
+			}
 			verdict.violations = append(verdict.violations,
 				"Up 里出现破坏性语句（"+firstLine(entry.text)+"）；破坏性动作必须放到后续发布的迁移里")
 
 		case classReplaceDrop:
+			// R3. Retire migrations are the explicit exception.
+			if retireAllowed {
+				continue
+			}
 			kind := droppedKind(entry.text)
 			if kind == "" {
 				verdict.violations = append(verdict.violations,

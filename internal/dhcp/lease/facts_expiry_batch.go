@@ -27,32 +27,23 @@ func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source strin
 		return nil, errors.New("lease facts expiry: nil context")
 	}
 
-	tx, err := w.manager.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("lease facts expiry: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	candidates, err := expiredCandidatesTx(ctx, tx)
+	// Select candidates and resolve their IPAM spaces BEFORE opening the write
+	// transaction. The lease store is a single-connection handle
+	// (SetMaxOpenConns(1)) and the space resolver reads that same store, so
+	// resolving inside the transaction would block forever on the one
+	// connection the transaction holds. Resolving up front also keeps the
+	// "one bad mapping fails the whole batch" guarantee without a half-applied
+	// update: a resolver error returns before any write happens.
+	candidates, err := expiredCandidates(ctx, w.manager.db)
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) == 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("lease facts expiry: commit empty batch: %w", err)
-		}
 		return nil, nil
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?
-		WHERE status IN (?, ?, ?) AND julianday(lease_end) <= julianday('now')`,
-		string(LeaseStatusExpired), string(LeaseStatusActive), string(LeaseStatusOffered), string(LeaseStatusConflict)); err != nil {
-		return nil, fmt.Errorf("lease facts expiry: update batch: %w", err)
-	}
-
+	spaces := make(map[string]string, len(candidates))
 	for _, before := range candidates {
-		after := *before
-		after.Status = LeaseStatusExpired
 		spaceID, err := spaceIDFor(before)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -62,6 +53,44 @@ func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source strin
 		}
 		if strings.TrimSpace(spaceID) == "" {
 			return nil, fmt.Errorf("lease facts expiry: empty space for %s", before.ID)
+		}
+		spaces[before.ID] = spaceID
+	}
+
+	tx, err := w.manager.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("lease facts expiry: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type expiredPair struct{ before, after *Lease }
+	var expired []*Lease
+	var pairs []expiredPair
+	for _, before := range candidates {
+		// Re-check eligibility inside the transaction: the row may have been
+		// renewed or released between the read above and this write. Only a row
+		// this statement actually expires earns a fact and an audit entry.
+		res, err := tx.ExecContext(ctx, `UPDATE dhcp_leases SET status=?
+			WHERE id=? AND status IN (?, ?, ?) AND julianday(lease_end) <= julianday('now')`,
+			string(LeaseStatusExpired), before.ID,
+			string(LeaseStatusActive), string(LeaseStatusOffered), string(LeaseStatusConflict))
+		if err != nil {
+			return nil, fmt.Errorf("lease facts expiry: update %s: %w", before.ID, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("lease facts expiry: rows affected %s: %w", before.ID, err)
+		}
+		if n == 0 {
+			continue
+		}
+		after := *before
+		after.Status = LeaseStatusExpired
+		expired = append(expired, &after)
+		pairs = append(pairs, expiredPair{before: before, after: &after})
+		spaceID, mapped := spaces[before.ID]
+		if !mapped {
+			continue
 		}
 		identity, err := w.Identity(source, spaceID, MutationExpire, &after)
 		if err != nil {
@@ -74,17 +103,18 @@ func (w *FactsMutationWriter) ExpireFactsBatch(ctx context.Context, source strin
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("lease facts expiry: commit: %w", err)
 	}
-	for _, before := range candidates {
-		after := *before
-		after.Status = LeaseStatusExpired
-		w.manager.auditExpire(before, &after)
+	for _, p := range pairs {
+		w.manager.auditExpire(p.before, p.after)
 	}
 	w.notifyPostCommit()
-	return candidates, nil
+	return expired, nil
 }
 
-func expiredCandidatesTx(ctx context.Context, tx *sql.Tx) ([]*Lease, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, scope_id, ip_address, mac_address, hostname, client_id,
+// expiredCandidates reads the leases eligible for expiry using a plain (non
+// transactional) query so the single store connection is released before the
+// caller opens its write transaction and before any resolver touches the store.
+func expiredCandidates(ctx context.Context, db *sql.DB) ([]*Lease, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, scope_id, ip_address, mac_address, hostname, client_id,
 		lease_start, lease_end, status, last_seen, generation FROM dhcp_leases
 		WHERE status IN (?, ?, ?) AND julianday(lease_end) <= julianday('now')`,
 		string(LeaseStatusActive), string(LeaseStatusOffered), string(LeaseStatusConflict))

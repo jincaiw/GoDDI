@@ -1,141 +1,244 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NTag, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listGroups, createGroup, updateGroup, deleteGroup, assignGroupRoles, type Group, type CreateGroupRequest } from '@/service/api/goddi/user'
-import { listRoles, type Role } from '@/service/api/goddi/user'
+import { onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  assignGroupRoles,
+  createGroup,
+  deleteGroup,
+  listGroups,
+  listRoles,
+  updateGroup,
+  type CreateGroupRequest,
+  type Group,
+  type Role
+} from '@/service/api/goddi/user';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'AdminGroupsPage' });
 
-const loading = ref(false)
-const submitting = ref(false)
-const groups = ref<Group[]>([])
-const showModal = ref(false)
-const showDeleteConfirm = ref(false)
-const showRolesModal = ref(false)
-const deletingId = ref('')
-const editing = ref<Group | null>(null)
-const allRoles = ref<Role[]>([])
-const selectedRoles = ref<string[]>([])
-const assigningGroupId = ref('')
+const { t } = useI18n();
+const perm = usePermission();
 
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-const formData = reactive<CreateGroupRequest>({ name: '', description: '' })
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showDialog = ref(false);
+const showRoles = ref(false);
+const submitting = ref(false);
+const editing = ref<Group | null>(null);
+const allRoles = ref<Role[]>([]);
+const selectedRoles = ref<string[]>([]);
+const assigningGroupId = ref('');
 
-const columns = [
-  { title: () => t('common.name'), key: 'name' },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('admin.users.roles'), key: 'roles', render: (row: Group) => h(NSpace, { size: 'small' }, { default: () => (row.roles || []).map(r => h(NTag, { size: 'small', type: 'info' }, { default: () => r.name })) }) },
-  { title: () => t('common.actions'), key: 'actions', width: 220, render: (row: Group) => h(NSpace, null, {
-    default: () => [
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group'), onClick: () => { if (!perm.canWrite('group')) return; editing.value = row; Object.assign(formData, { name: row.name, description: row.description }); showModal.value = true } }, { default: () => t('common.edit') }),
-      h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('group') || !perm.canRead('role'), onClick: () => { if (!perm.canWrite('group') || !perm.canRead('role')) return; assigningGroupId.value = row.id; selectedRoles.value = (row.roles || []).map(r => r.id); showRolesModal.value = true } }, { default: () => t('admin.groups.assignRoles') }),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('group'), onClick: () => { if (!perm.canDelete('group')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
+const formData = reactive<CreateGroupRequest>({ name: '', description: '' });
 
-async function loadData() {
-  loading.value = true
-  try {
-    const result = await listGroups({ page: pagination.page, page_size: pagination.pageSize })
-    groups.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+const formRules = {
+  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+};
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('common.name') },
+  { colKey: 'description', title: t('common.description'), ellipsis: true },
+  {
+    colKey: 'roles',
+    title: t('admin.users.roles'),
+    cell: (h, { row }) =>
+      h(
+        TSpace,
+        { size: 'small' },
+        () =>
+          ((row as Group).roles || []).map(r =>
+            h(TTag, { size: 'small', theme: 'primary', variant: 'light' }, () => r.name)
+          )
+      )
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 220,
+    cell: (h, { row }) => {
+      const r = row as Group;
+      return h(TSpace, { size: 'small' }, () => [
+        h(TLink, { theme: 'primary', disabled: !perm.canWrite('group'), onClick: () => openEdit(r) }, () => t('common.edit')),
+        h(
+          TLink,
+          {
+            theme: 'primary',
+            disabled: !perm.canWrite('group') || !perm.canRead('role'),
+            onClick: () => openRoles(r)
+          },
+          () => t('admin.groups.assignRoles')
+        ),
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('group'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+      ]);
+    }
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
-
 function openCreate() {
-  if (!perm.canWrite('group')) return
-  editing.value = null
-  Object.assign(formData, { name: '', description: '' })
-  showModal.value = true
+  if (!perm.canWrite('group')) return;
+  editing.value = null;
+  Object.assign(formData, { name: '', description: '' });
+  showDialog.value = true;
+}
+
+function openEdit(row: Group) {
+  if (!perm.canWrite('group')) return;
+  editing.value = row;
+  Object.assign(formData, { name: row.name, description: row.description });
+  showDialog.value = true;
+}
+
+function openRoles(row: Group) {
+  if (!perm.canWrite('group') || !perm.canRead('role')) return;
+  assigningGroupId.value = row.id;
+  selectedRoles.value = (row.roles || []).map(r => r.id);
+  showRoles.value = true;
 }
 
 async function handleSubmit() {
-  if (!perm.canWrite('group')) return
-  submitting.value = true
+  if (!perm.canWrite('group')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editing.value) { await updateGroup(editing.value.id, formData); message.success(t('common.updateSuccess')) }
-    else { await createGroup(formData); message.success(t('common.createSuccess')) }
-    showModal.value = false; editing.value = null; loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { submitting.value = false }
+    if (editing.value) {
+      await updateGroup(editing.value.id, formData);
+      void MessagePlugin.success(t('common.updateSuccess'));
+    } else {
+      await createGroup(formData);
+      void MessagePlugin.success(t('common.createSuccess'));
+    }
+    showDialog.value = false;
+    editing.value = null;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('group')) return
-  try { await deleteGroup(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showDeleteConfirm.value = false
-}
-
-async function loadRoles() {
-  try { allRoles.value = (await listRoles({ page: 1, page_size: 100 })).data } catch { /* ignore */ }
+function confirmDelete(id: string) {
+  if (!perm.canDelete('group')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteGroup(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
 async function handleAssignRoles() {
-  if (!perm.canWrite('group') || !perm.canRead('role')) return
+  if (!perm.canWrite('group') || !perm.canRead('role')) return;
   try {
-    await assignGroupRoles(assigningGroupId.value, selectedRoles.value)
-    message.success(t('common.updateSuccess'))
-    showRolesModal.value = false
-    loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await assignGroupRoles(assigningGroupId.value, selectedRoles.value);
+    void MessagePlugin.success(t('common.updateSuccess'));
+    showRoles.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  }
 }
 
-onMounted(() => { loadData(); loadRoles() })
+async function loadRoles() {
+  try {
+    allRoles.value = (await listRoles({ page: 1, page_size: 100 })).data;
+  } catch {
+    // Roles are optional for the list; the assign dialog will simply be empty.
+  }
+}
+
+onMounted(loadRoles);
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('admin.groups.title')">
-      <NButton v-if="perm.canWrite('group')" type="primary" @click="openCreate">{{ t('admin.groups.createGroup') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('admin.groups.title') }}</h2>
+      <TButton v-if="perm.canWrite('group')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('admin.groups.createGroup') }}
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="groups"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: Group) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listGroups" />
 
-    <NModal v-if="showModal" v-model:show="showModal" :title="editing ? t('admin.groups.editGroup') : t('admin.groups.createGroup')" preset="card" style="width: 450px;">
-      <NForm :model="formData" label-placement="left" label-width="80px">
-        <NFormItem :label="t('common.name')"><NInput v-model:value="formData.name" :disabled="!perm.canWrite('group')" /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="formData.description" type="textarea" :disabled="!perm.canWrite('group')" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('group')" @click="handleSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showDialog"
+      :header="editing ? t('admin.groups.editGroup') : t('admin.groups.createGroup')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleSubmit"
+    >
+      <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
+        <TFormItem :label="t('common.name')" name="name">
+          <TInput v-model="formData.name" />
+        </TFormItem>
+        <TFormItem :label="t('common.descriptions')" name="description">
+          <TTextarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Assign Roles Modal -->
-    <NModal v-if="showRolesModal" v-model:show="showRolesModal" :title="t('admin.groups.assignRoles')" preset="card" style="width: 450px;">
-      <NCheckboxGroup v-model:value="selectedRoles">
-        <NSpace item-style="display: flex;">
-          <NCheckbox v-for="role in allRoles" :key="role.id" :value="role.id" :label="role.name" :disabled="!perm.canWrite('group') || !perm.canRead('role')" />
-        </NSpace>
-      </NCheckboxGroup>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showRolesModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :disabled="!perm.canWrite('group') || !perm.canRead('role')" @click="handleAssignRoles">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+    <TDialog
+      v-model:visible="showRoles"
+      :header="t('admin.groups.assignRoles')"
+      :confirm-btn="t('common.save')"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleAssignRoles"
+    >
+      <TCheckboxGroup v-model="selectedRoles" class="role-list">
+        <TCheckbox
+          v-for="role in allRoles"
+          :key="role.id"
+          :value="role.id"
+          :label="role.name"
+          :disabled="!perm.canWrite('group') || !perm.canRead('role')"
+        />
+      </TCheckboxGroup>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+</style>

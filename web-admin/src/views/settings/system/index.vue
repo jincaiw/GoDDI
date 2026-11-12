@@ -1,110 +1,184 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listSystemSettings, updateSystemSetting, type SystemSetting } from '@/service/api/goddi/settings'
+import { onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { MessagePlugin } from 'tdesign-vue-next';
+import { usePermission } from '@/composables/usePermission';
+import {
+  listSystemSettings,
+  updateSystemSetting,
+  type SystemSetting
+} from '@/service/api/goddi/settings';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'SystemSettingsPage' });
+
+const { t } = useI18n();
+const perm = usePermission();
+
+const loading = ref(false);
+const settings = ref<SystemSetting[]>([]);
+const savingKeys = reactive<Record<string, boolean>>({});
+const numericValues = reactive<Record<string, number>>({});
 
 // Localized label/description for a setting key; falls back to the raw key /
 // backend description for unknown keys.
 function settingLabel(key: string): string {
-  const localized = t(`settings.items.${key}.label`)
-  return localized !== `settings.items.${key}.label` ? localized : key
+  const localized = t(`settings.items.${key}.label`);
+  return localized !== `settings.items.${key}.label` ? localized : key;
 }
 
 function settingDesc(setting: SystemSetting): string {
-  const localized = t(`settings.items.${setting.key}.desc`)
-  return localized !== `settings.items.${setting.key}.desc` ? localized : setting.description
+  const localized = t(`settings.items.${setting.key}.desc`);
+  return localized !== `settings.items.${setting.key}.desc` ? localized : setting.description;
 }
-
-const loading = ref(false)
-const settings = ref<SystemSetting[]>([])
-const savingKeys = reactive<Record<string, boolean>>({})
 
 // Fallback list: if the backend ever returns settings without a `type` field
-// (older versions, ad-hoc inserts) we still want a sensible default. The
-// backend now sends `type` for every well-known key, so this only fires for
-// unknown keys.
-const FALLBACK_BOOL_KEYS = ['server_dark_mode', 'dns_enable_logging', 'dhcp_enable_failover']
-const FALLBACK_NUMBER_KEYS = ['dns_default_ttl', 'dns_cache_max_entries', 'dhcp_default_lease_time', 'dhcp_max_lease_time']
+// (older versions, ad-hoc inserts) we still want a sensible default.
+const FALLBACK_BOOL_KEYS = ['server_dark_mode', 'dns_enable_logging', 'dhcp_enable_failover'];
+const FALLBACK_NUMBER_KEYS = ['dns_default_ttl', 'dns_cache_max_entries', 'dhcp_default_lease_time', 'dhcp_max_lease_time'];
 
 function effectiveType(setting: SystemSetting): 'bool' | 'int' | 'string' {
-  if (setting.type === 'bool' || setting.type === 'int' || setting.type === 'string') {
-    return setting.type
-  }
-  if (FALLBACK_BOOL_KEYS.includes(setting.key) || setting.value === 'true' || setting.value === 'false') {
-    return 'bool'
-  }
-  if (FALLBACK_NUMBER_KEYS.includes(setting.key)) {
-    return 'int'
-  }
-  if (typeof setting.value === 'string' && /^\d+$/.test(setting.value)) {
-    return 'int'
-  }
-  return 'string'
-}
-
-function isNumberSetting(setting: SystemSetting): boolean {
-  return effectiveType(setting) === 'int'
+  if (setting.type === 'bool' || setting.type === 'int' || setting.type === 'string') return setting.type;
+  if (FALLBACK_BOOL_KEYS.includes(setting.key) || setting.value === 'true' || setting.value === 'false') return 'bool';
+  if (FALLBACK_NUMBER_KEYS.includes(setting.key)) return 'int';
+  if (typeof setting.value === 'string' && /^\d+$/.test(setting.value)) return 'int';
+  return 'string';
 }
 
 function isLongValue(value: string): boolean {
-  return !!value && value.length > 100
+  return !!value && value.length > 100;
 }
 
-// Track numeric values separately for n-input-number binding
-const numericValues = reactive<Record<string, number>>({})
-
 async function loadData() {
-  loading.value = true
+  loading.value = true;
   try {
-    const result = await listSystemSettings()
-    settings.value = result.data
-    // Initialize numeric values
+    const result = await listSystemSettings();
+    settings.value = result.data;
     for (const s of result.data) {
-      if (isNumberSetting(s)) {
-        numericValues[s.key] = Number(s.value)
-      }
+      if (effectiveType(s) === 'int') numericValues[s.key] = Number(s.value);
     }
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+  } catch (err) {
+    void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function handleSave(setting: SystemSetting) {
-  if (!perm.canWrite('settings')) return
-  savingKeys[setting.key] = true
+  if (!perm.canWrite('settings')) return;
+  savingKeys[setting.key] = true;
   try {
-    const valueToSave = isNumberSetting(setting) ? String(numericValues[setting.key] ?? setting.value) : setting.value
-    await updateSystemSetting(setting.key, valueToSave)
-    message.success(t('settings.updateSuccess'))
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { savingKeys[setting.key] = false }
+    const valueToSave =
+      effectiveType(setting) === 'int' ? String(numericValues[setting.key] ?? setting.value) : setting.value;
+    await updateSystemSetting(setting.key, valueToSave);
+    void MessagePlugin.success(t('settings.updateSuccess'));
+  } catch (err) {
+    void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+  } finally {
+    savingKeys[setting.key] = false;
+  }
 }
 
-onMounted(loadData)
+onMounted(loadData);
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('settings.title')" />
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('settings.title') }}</h2>
+    </TCard>
 
-    <NSpin :show="loading">
-      <NCard>
-        <NForm label-placement="left" label-width="200px">
-          <NFormItem v-for="setting in settings" :key="setting.key" :label="settingLabel(setting.key)">
-            <NSwitch v-if="setting.type === 'bool'" v-model:value="setting.value" checked-value="true" unchecked-value="false" :disabled="!perm.canWrite('settings')" />
-            <NInputNumber v-else-if="setting.type === 'int'" v-model:value="numericValues[setting.key]" :min="0" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
-            <NInput v-else v-model:value="setting.value" :type="isLongValue(String(setting.value)) ? 'textarea' : 'text'" :rows="3" style="max-width: 500px;" :disabled="!perm.canWrite('settings')" />
-            <NButton v-if="perm.canWrite('settings')" type="primary" size="small" style="margin-left: 8px;" :loading="savingKeys[setting.key]" @click="handleSave(setting)">{{ t('common.save') }}</NButton>
-            <template #feedback>
-              <span style="color: var(--n-text-color-3); font-size: 12px;">{{ settingDesc(setting) }}</span>
-            </template>
-          </NFormItem>
-        </NForm>
-      </NCard>
-    </NSpin>
+    <TLoading :loading="loading" size="small">
+      <TCard :bordered="false">
+        <div v-for="setting in settings" :key="setting.key" class="setting-row">
+          <div class="setting-meta">
+            <div class="setting-label">{{ settingLabel(setting.key) }}</div>
+            <div class="setting-desc">{{ settingDesc(setting) }}</div>
+          </div>
+
+          <div class="setting-control">
+            <TSwitch
+              v-if="effectiveType(setting) === 'bool'"
+              v-model="setting.value"
+              :custom-value="['true', 'false']"
+              :disabled="!perm.canWrite('settings')"
+            />
+            <TInputNumber
+              v-else-if="effectiveType(setting) === 'int'"
+              v-model="numericValues[setting.key]"
+              :min="0"
+              :disabled="!perm.canWrite('settings')"
+              style="width: 220px"
+            />
+            <TTextarea
+              v-else-if="isLongValue(String(setting.value))"
+              v-model="setting.value"
+              :disabled="!perm.canWrite('settings')"
+              :autosize="{ minRows: 2, maxRows: 6 }"
+              style="width: 320px"
+            />
+            <TInput
+              v-else
+              v-model="setting.value"
+              :disabled="!perm.canWrite('settings')"
+              style="width: 320px"
+            />
+            <TButton
+              v-if="perm.canWrite('settings')"
+              theme="primary"
+              size="small"
+              :loading="savingKeys[setting.key]"
+              @click="handleSave(setting)"
+            >
+              {{ t('common.save') }}
+            </TButton>
+          </div>
+        </div>
+      </TCard>
+    </TLoading>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.setting-row:last-child {
+  border-bottom: none;
+}
+.setting-meta {
+  min-width: 220px;
+}
+.setting-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+.setting-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+</style>

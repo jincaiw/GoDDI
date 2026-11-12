@@ -76,8 +76,11 @@ MUTATIONS = [
         "name": "写入前不再归一化记录名（同一个查询落到两行上）",
         "file": RECORDS,
         "check": "unit",
-        "old": "rowID, id, zone.NormalizeRecordName(rec.Name, zoneName), rec.Type, rec.Value,",
-        "new": "rowID, id, rec.Name, rec.Type, rec.Value,",
+        # adapters_records.go now normalises into a local `name` variable
+        # before the INSERT instead of inlining the call. Disable that step
+        # while keeping `zoneName` referenced so the mutated tree still builds.
+        "old": "\t\tname := zone.NormalizeRecordName(rec.Name, zoneName)\n",
+        "new": "\t\tname := rec.Name\n\t\t_ = zoneName\n",
         "must_fail": "TestTheRecordSetLeavesTheRecordsADataPlaneAuthoredAlone",
     },
     {

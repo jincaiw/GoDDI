@@ -30,8 +30,13 @@ MUTATIONS = [
     {
         "name": "migrate --status 直接打开数据库，从而创建它",
         "file": "cmd/goddi/main.go",
-        "old": "\tif _, err := os.Stat(path); err != nil {\n\t\tif os.IsNotExist(err) {",
-        "new": "\tif _, err := os.Stat(path); err != nil {\n\t\tif false {",
+        # main.go contains two `os.Stat(path)` / `os.IsNotExist` guards (one in
+        # the DHCP HA status path, one in migrationStatusOfStore). Anchor on the
+        # migration-status comment so only the intended guard is mutated; the
+        # old generic target made this mutation SKIPPED-AMBIGUOUS and left one
+        # of the six checks untested.
+        "old": "\tif _, err := os.Stat(path); err != nil {\n\t\tif os.IsNotExist(err) {\n\t\t\t// Never opened: opening a SQLite path creates the file, and a",
+        "new": "\tif _, err := os.Stat(path); err != nil {\n\t\tif false {\n\t\t\t// Never opened: opening a SQLite path creates the file, and a",
         "check": [PYTHON, "scripts/w12_snapshot_smoke_check.py"],
         "must_contain": "did not create the database it was asked about",
     },

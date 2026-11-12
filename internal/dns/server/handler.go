@@ -79,7 +79,16 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 			_ = h.writeResponse(w, req, resp)
 			return
 		}
-		resp, err := h.server.updateHandler.HandleUpdateFrom(req, clientIP)
+		// The listener verified the TSIG MAC against the raw wire bytes.
+		// Re-packing the message inside the update handler loses the
+		// original name compression and breaks the MAC, so pass the
+		// authoritative result down. Fail closed whenever a TSIG RR is
+		// present but no listener-side verification was possible.
+		tsigStatus := w.TsigStatus()
+		if req.IsTsig() != nil && !h.server.hasTSIGSecrets() {
+			tsigStatus = errors.New("no TSIG keys configured on the listener")
+		}
+		resp, err := h.server.updateHandler.HandleUpdateFrom(req, clientIP, tsigStatus)
 		if err != nil {
 			slog.Error("dns_handler: dynamic update failed", "error", err)
 			resp = new(dns.Msg)
@@ -133,10 +142,18 @@ func (h *DNSHandler) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		"protocol", proto,
 	)
 
+	// RFC 4035 §3.2.1: RRSIGs are only sent when the client sets the EDNS DO
+	// bit. The responder itself fails closed, so an unsigned or incomplete
+	// zone never sees a signature here.
+	dnssecOK := false
+	if opt := req.IsEdns0(); opt != nil {
+		dnssecOK = opt.Do()
+	}
+
 	// Step 1: Check local authoritative zones first.
 	// Authoritative answers bypass recursion ACL checks. A zone-level query
 	// ACL may refuse the client.
-	resp, denied, found := h.server.lookupAuthoritative(qname, qtype, clientIP)
+	resp, denied, found := h.server.lookupAuthoritative(qname, qtype, clientIP, dnssecOK)
 	if denied {
 		resp := new(dns.Msg)
 		resp.SetRcode(req, dns.RcodeRefused)

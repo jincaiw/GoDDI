@@ -39,10 +39,6 @@
 -- The two new counters cover the material the second data plane needs and the
 -- first one does not:
 --
---   'ddns'    the outbox rows a DHCP process owes the DNS side. It moves on
---             insert only: the consumer orders by id and keeps its own retry
---             state, so a row's status changing is not something anyone has to
---             be told about.
 --   'leases'  the lease replica, which the DNS side needs to answer "does the
 --             binding behind this record still exist?". It is separate from
 --             'dhcp' because lease churn is constant and scope configuration is
@@ -61,7 +57,6 @@ CREATE INDEX IF NOT EXISTS idx_dns_records_authored_locally ON dns_records(autho
 
 -- The counters first: a trigger body is resolved against the schema when it is
 -- created, so the rows it updates have to exist already.
-INSERT OR IGNORE INTO dataplane_revision (domain, revision) VALUES ('ddns', 0);
 INSERT OR IGNORE INTO dataplane_revision (domain, revision) VALUES ('leases', 0);
 
 -- +goose StatementBegin
@@ -104,14 +99,6 @@ END;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TRIGGER IF NOT EXISTS trg_dp_rev_ddns_events_ins
-AFTER INSERT ON dhcp_dns_events
-BEGIN
-    UPDATE dataplane_revision SET revision = revision + 1, updated_at = datetime('now') WHERE domain = 'ddns';
-END;
--- +goose StatementEnd
-
--- +goose StatementBegin
 CREATE TRIGGER IF NOT EXISTS trg_dp_rev_leases_ins
 AFTER INSERT ON dhcp_leases
 BEGIN
@@ -139,7 +126,6 @@ END;
 DROP TRIGGER IF EXISTS trg_dp_rev_leases_del;
 DROP TRIGGER IF EXISTS trg_dp_rev_leases_upd;
 DROP TRIGGER IF EXISTS trg_dp_rev_leases_ins;
-DROP TRIGGER IF EXISTS trg_dp_rev_ddns_events_ins;
 
 -- +goose StatementBegin
 DROP TRIGGER IF EXISTS trg_dp_rev_dns_records_ins;
@@ -178,6 +164,6 @@ BEGIN
 END;
 -- +goose StatementEnd
 
-DELETE FROM dataplane_revision WHERE domain IN ('ddns', 'leases');
+DELETE FROM dataplane_revision WHERE domain = 'leases';
 DROP INDEX IF EXISTS idx_dns_records_authored_locally;
 ALTER TABLE dns_records DROP COLUMN authored_locally;

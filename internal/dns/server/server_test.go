@@ -60,7 +60,7 @@ func TestLookupAuthoritativeDefersForwardAndStubZoneMisses(t *testing.T) {
 		t.Run(zoneType, func(t *testing.T) {
 			srv := New(&config.Config{}, nil, nil, nil, nil, nil, newTestZoneStore(t, zoneType, nil))
 
-			resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1")
+			resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1", false)
 			if denied {
 				t.Fatal("forward/stub zone miss was denied")
 			}
@@ -82,7 +82,7 @@ func TestLookupAuthoritativePreservesQueryACLForForwardZone(t *testing.T) {
 		newTestZoneStore(t, string(zone.ZoneTypeForward), &zone.ZoneACL{QueryAccess: zone.QueryAccessDeny}),
 	)
 
-	resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1")
+	resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1", false)
 	if !denied || found || resp != nil {
 		t.Fatalf("forward zone with denied query ACL = (%v, denied=%v, found=%v), want denied", resp, denied, found)
 	}
@@ -91,7 +91,7 @@ func TestLookupAuthoritativePreservesQueryACLForForwardZone(t *testing.T) {
 func TestLookupAuthoritativeKeepsPrimaryNegativeAnswer(t *testing.T) {
 	srv := New(&config.Config{}, nil, nil, nil, nil, nil, newTestZoneStore(t, string(zone.ZoneTypePrimary), nil))
 
-	resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1")
+	resp, denied, found := srv.lookupAuthoritative("missing.example.test.", dns.TypeA, "192.0.2.1", false)
 	if denied || !found {
 		t.Fatalf("primary zone miss = (denied=%v, found=%v), want authoritative negative answer", denied, found)
 	}

@@ -297,22 +297,6 @@ func TestEveryUpwardQueueRecordsARefusal(t *testing.T) {
 			},
 		},
 		{
-			name: "queued DNS work",
-			seed: func(t *testing.T, s *Store) string {
-				if _, err := s.Exec(`INSERT INTO dhcp_dns_events (lease_id, generation, action)
-					VALUES ('l1', 1, 'create')`); err != nil {
-					t.Fatalf("seed a DNS event: %v", err)
-				}
-				return "1"
-			},
-			controlTable: "dhcp_dns_events", verb: "INSERT",
-			markerTable: "dhcp_dns_event_dirty", markerKey: "event_id",
-			push: func(ctx context.Context, r *Replicator) error {
-				_, err := r.PushEvents(ctx, 100)
-				return err
-			},
-		},
-		{
 			name: "the DHCP event log",
 			seed: func(t *testing.T, s *Store) string {
 				if _, err := s.Exec(`INSERT INTO dhcp_logs (id, event_type, message)
@@ -490,5 +474,71 @@ func TestEveryMarkerTableIsInTheUpwardQueueList(t *testing.T) {
 		if n != 1 {
 			t.Errorf("upwardQueues says %s is keyed by %s, which the table does not have", name, key)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A re-issued address supersedes the stale holder in the projection
+// ---------------------------------------------------------------------------
+// The control database's partial unique index holds at most one active/offered
+// lease per (scope, address). When an address is released or expires and is
+// handed back out, the store holds a NEW lease id for it while the projection
+// still carries the OLD active row. The insert then collides, is refused, and
+// the address is stuck: the console keeps showing the old holder and no new
+// lease for that address ever arrives. The push has to expire the stale holder
+// as part of the same row's upsert.
+func TestReissuedAddressSupersedesTheStaleHolder(t *testing.T) {
+	control, store, rep := newPair(t)
+	ctx := context.Background()
+	insertControlScope(t, control, "s1", "lan", "10.0.0.0/24", "10.0.0.10", "10.0.0.20")
+
+	// The projection already holds an ACTIVE lease for the address under an
+	// older id (a previous holder the store no longer has).
+	if _, err := control.Exec(`INSERT INTO dhcp_leases
+		(id, scope_id, ip_address, mac_address, lease_start, lease_end, status, last_seen, generation)
+		VALUES ('old-holder', 's1', '10.0.0.11', 'aa:aa:aa:aa:aa:01',
+		        '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z', 'active', '2026-01-01T00:00:00Z', 1)`); err != nil {
+		t.Fatalf("seed the stale control holder: %v", err)
+	}
+
+	// The store now holds a different lease for the same address.
+	insertLease(t, store, "new-holder", "s1", "10.0.0.11", "active")
+
+	res, err := rep.Push(ctx, 100)
+	if err != nil {
+		t.Fatalf("Push = %v", err)
+	}
+	if res.Refused != 0 {
+		t.Fatalf("the push refused %d row(s); the re-issued address should supersede the stale holder", res.Refused)
+	}
+	if res.Upserted != 1 {
+		t.Fatalf("the push upserted %d row(s), want 1", res.Upserted)
+	}
+
+	// The new holder is active and the stale one is no longer held.
+	var newStatus, oldStatus string
+	if err := control.QueryRow(`SELECT status FROM dhcp_leases WHERE id = 'new-holder'`).Scan(&newStatus); err != nil {
+		t.Fatalf("read the new holder: %v", err)
+	}
+	if err := control.QueryRow(`SELECT status FROM dhcp_leases WHERE id = 'old-holder'`).Scan(&oldStatus); err != nil {
+		t.Fatalf("read the stale holder: %v", err)
+	}
+	if newStatus != "active" {
+		t.Errorf("new holder status = %q, want active", newStatus)
+	}
+	if oldStatus == "active" || oldStatus == "offered" {
+		t.Errorf("stale holder is still held (status = %q); the address cannot be served twice", oldStatus)
+	}
+	// Exactly one held row for the address.
+	var held int
+	if err := control.QueryRow(`SELECT COUNT(*) FROM dhcp_leases
+		WHERE scope_id = 's1' AND ip_address = '10.0.0.11' AND status IN ('active','offered')`).Scan(&held); err != nil {
+		t.Fatalf("count held rows: %v", err)
+	}
+	if held != 1 {
+		t.Fatalf("the address has %d held rows in the projection, want exactly 1", held)
+	}
+	if found, _ := dirtyMarker(t, store, "new-holder"); found {
+		t.Error("the marker survived a successful supersede-push")
 	}
 }

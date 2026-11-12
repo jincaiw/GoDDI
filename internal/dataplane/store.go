@@ -25,11 +25,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jasonwa/goddi/internal/sqlitepolicy"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )
@@ -85,10 +87,7 @@ func Open(role config.DataPlaneRole, dsn string) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("dataplane: opening %s store: %w", role, err)
-	}
+	db := sqlitepolicy.OpenWriter(dsn)
 
 	// A data plane is a single writer over its own file. Capping the pool at
 	// one connection also removes the read-then-write interleavings that
@@ -101,11 +100,6 @@ func Open(role config.DataPlaneRole, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("dataplane: connecting to %s store: %w", role, err)
 	}
 
-	if err := applyPragmas(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("dataplane: %s store: %w", role, err)
-	}
-
 	if err := runMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("dataplane: migrating %s store: %w", role, err)
@@ -113,35 +107,6 @@ func Open(role config.DataPlaneRole, dsn string) (*Store, error) {
 
 	slog.Info("data-plane store ready", "role", role, "dsn", dsn)
 	return &Store{DB: db, role: role, dsn: dsn}, nil
-}
-
-// requiredPragmas are applied and then read back. A pragma that silently did
-// not take effect is worse than one that failed: the process would run with
-// durability the operator did not ask for and cannot see.
-var requiredPragmas = []struct {
-	name string
-	want string
-}{
-	{"busy_timeout", "5000"},
-	{"foreign_keys", "1"},
-	{"journal_mode", "wal"},
-	{"synchronous", "2"}, // 2 = FULL
-}
-
-func applyPragmas(db *sql.DB) error {
-	for _, p := range requiredPragmas {
-		if _, err := db.Exec("PRAGMA " + p.name + " = " + p.want); err != nil {
-			return fmt.Errorf("setting PRAGMA %s = %s: %w", p.name, p.want, err)
-		}
-		var got string
-		if err := db.QueryRow("PRAGMA " + p.name).Scan(&got); err != nil {
-			return fmt.Errorf("reading back PRAGMA %s: %w", p.name, err)
-		}
-		if !strings.EqualFold(strings.TrimSpace(got), p.want) {
-			return fmt.Errorf("PRAGMA %s reads back as %q, want %q", p.name, got, p.want)
-		}
-	}
-	return nil
 }
 
 func runMigrations(db *sql.DB) error {
@@ -168,15 +133,20 @@ func runMigrations(db *sql.DB) error {
 // this constructor refuses rather than bringing into existence the database it
 // was asked to describe.
 func OpenReadOnly(role config.DataPlaneRole, dsn string) (*Store, error) {
-	path := dsnFile(dsn)
-	if path == "" {
-		return nil, fmt.Errorf("dataplane: the %s store has no file path", role)
+	path, err := ReadOnlyPath(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("dataplane: the %s store: %w", role, err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("dataplane: the %s store: %w", role, err)
 	}
 
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("dataplane: resolving the %s store path: %w", role, err)
+	}
+	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute), RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", uri)
 	if err != nil {
 		return nil, fmt.Errorf("dataplane: opening the %s store read-only: %w", role, err)
 	}
@@ -187,6 +157,43 @@ func OpenReadOnly(role config.DataPlaneRole, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("dataplane: connecting to the %s store: %w", role, err)
 	}
 	return &Store{DB: db, role: role, dsn: dsn}, nil
+}
+
+// ReadOnlyPath extracts the filename without forwarding any DSN parameters to
+// the driver. Bare paths are literal, including '?' and '#'; use a file URI
+// for a DSN containing query parameters.
+func ReadOnlyPath(dsn string) (string, error) {
+	dsn = strings.TrimSpace(dsn)
+	path := dsn
+	if strings.HasPrefix(dsn, "file:") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", fmt.Errorf("invalid SQLite file URI: %w", err)
+		}
+		if u.Fragment != "" || (u.Host != "" && u.Host != "localhost") || u.User != nil {
+			return "", fmt.Errorf("unsupported SQLite file URI authority or fragment")
+		}
+		params, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return "", fmt.Errorf("invalid SQLite file URI query: %w", err)
+		}
+		for _, mode := range params["mode"] {
+			if strings.EqualFold(mode, "memory") {
+				return "", fmt.Errorf("memory databases cannot be inspected as files")
+			}
+		}
+		path = u.Path
+		if u.Opaque != "" {
+			path, err = url.PathUnescape(u.Opaque)
+			if err != nil {
+				return "", fmt.Errorf("invalid SQLite file URI path: %w", err)
+			}
+		}
+	}
+	if path == "" || path == ":memory:" || strings.IndexByte(path, 0) >= 0 {
+		return "", fmt.Errorf("SQLite DSN has no usable file path")
+	}
+	return path, nil
 }
 
 // dsnDir is the directory a DSN's file lives in, or "" when it is not a file.

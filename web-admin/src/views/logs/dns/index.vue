@@ -1,75 +1,62 @@
 <script setup lang="ts">
-import { h, onMounted, reactive, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NTag } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import { listDNSQueryLogs, type DNSQueryLog } from '@/service/api/goddi/dns'
+import { h } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { Tag as TTag } from 'tdesign-vue-next';
+import type { PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { listDNSQueryLogs, type DNSQueryLog } from '@/service/api/goddi/dns';
 
-const { t } = useI18n()
-const loading = ref(false)
-const error = ref('')
-const logs = ref<DNSQueryLog[]>([])
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
+defineOptions({ name: 'DNSQueryLogsPage' });
 
-const columns = [
-  { title: () => t('logs.dns.queryName'), key: 'query_name', minWidth: 220, ellipsis: { tooltip: true } },
-  { title: () => t('logs.dns.queryType'), key: 'query_type', width: 100 },
-  { title: () => t('logs.dns.clientIp'), key: 'client_ip', width: 140 },
-  { title: () => t('logs.dns.responseCode'), key: 'response_code', width: 130 },
-  { title: () => t('logs.dns.responseTime'), key: 'response_time_ms', width: 110, render: (row: DNSQueryLog) => `${row.response_time_ms} ms` },
-  { title: () => t('logs.dns.cached'), key: 'cached', width: 100, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.cached ? 'success' : 'default' }, { default: () => row.cached ? t('common.yes') : t('common.no') }) },
-  { title: () => t('logs.dns.blocked'), key: 'blocked', width: 100, render: (row: DNSQueryLog) => h(NTag, { size: 'small', type: row.blocked ? 'error' : 'default' }, { default: () => row.blocked ? t('common.yes') : t('common.no') }) },
-  { title: () => t('logs.dns.upstream'), key: 'upstream', width: 160, ellipsis: { tooltip: true } },
-  { title: () => t('common.createdAt'), key: 'created_at', width: 180 },
-]
+const { t } = useI18n();
 
-async function loadData() {
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await listDNSQueryLogs({ page: pagination.page, page_size: pagination.pageSize })
-    logs.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : t('common.failed')
-  } finally {
-    loading.value = false
-  }
+function yesNo(value: boolean) {
+  return h(
+    TTag,
+    { size: 'small', theme: value ? 'success' : 'default', variant: 'light' },
+    () => (value ? t('common.yes') : t('common.no'))
+  );
 }
 
-function handlePageChange(page: number) {
-  pagination.page = page
-  loadData()
-}
-
-function handlePageSizeChange(pageSize: number) {
-  pagination.pageSize = pageSize
-  pagination.page = 1
-  loadData()
-}
-
-onMounted(loadData)
+const columns: PrimaryTableCol[] = [
+  { colKey: 'query_name', title: t('logs.dns.queryName'), minWidth: 220, ellipsis: true },
+  { colKey: 'query_type', title: t('logs.dns.queryType'), width: 100 },
+  { colKey: 'client_ip', title: t('logs.dns.clientIp'), width: 140 },
+  { colKey: 'response_code', title: t('logs.dns.responseCode'), width: 130 },
+  {
+    colKey: 'response_time_ms',
+    title: t('logs.dns.responseTime'),
+    width: 110,
+    cell: (_h, { row }) => `${(row as DNSQueryLog).response_time_ms} ms`
+  },
+  { colKey: 'cached', title: t('logs.dns.cached'), width: 100, cell: (_h, { row }) => yesNo(Boolean((row as DNSQueryLog).cached)) },
+  { colKey: 'blocked', title: t('logs.dns.blocked'), width: 100, cell: (_h, { row }) => yesNo(Boolean((row as DNSQueryLog).blocked)) },
+  { colKey: 'upstream', title: t('logs.dns.upstream'), width: 160, ellipsis: true },
+  { colKey: 'created_at', title: t('common.createdAt'), width: 180 }
+];
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('logs.dns.title')" />
-
-    <NAlert v-if="error" type="error" closable style="margin-bottom: 16px;" @close="error = ''">
-      {{ error }}
-    </NAlert>
-
-    <NCard>
-      <NDataTable
-        :columns="columns"
-        :data="logs"
-        :loading="loading"
-        remote
-        :pagination="pagination"
-        :row-key="(row: DNSQueryLog) => row.id"
-        @update:page="handlePageChange"
-        @update:page-size="handlePageSizeChange"
-      />
-    </NCard>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('logs.dns.title') }}</h2>
+    </TCard>
+    <RemoteTable :columns="columns" :fetcher="listDNSQueryLogs" />
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+</style>

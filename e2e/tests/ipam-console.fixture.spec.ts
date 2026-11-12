@@ -39,6 +39,15 @@ const SEED_NAME = process.env.GODDI_SMOKE_NAME || 'seeded.w13smoke.test'
 const CSV_HEADER = 'ip_address,status,mac_address,hostname,owner,device,location,description'
 
 /**
+ * Selector notes (TDesign migration): row actions are TDesign `TLink` anchors
+ * (`<a>` without href, so no implicit link role — match by exact text); dialogs are `.t-dialog`, the address drawer is
+ * `.t-drawer`, radios `.t-radio`, form items `.t-form__item`. The console
+ * still stores its language under the `GODDI_lang` localStorage key with a
+ * JSON-quoted value, so the en-US texts below are what the UI renders. A
+ * closed TDesign dialog keeps its (hidden) DOM unless destroyOnClose is set,
+ * so "the dialog is gone" is asserted with `toBeHidden` rather than count 0.
+ */
+/**
  * The addresses this run writes.
  *
  * Drawn per run rather than fixed, because the suite writes and does not clean
@@ -111,9 +120,9 @@ async function openImportDialog(page: Page, subnetName: string, subnetCidr: stri
   await page.goto('/ipam/subnets')
   const row = page.locator('tr', { hasText: subnetName })
   await expect(row).toBeVisible()
-  await row.getByRole('button', { name: 'Import Addresses', exact: true }).click()
+  await row.getByText('Import Addresses', { exact: true }).click()
 
-  const modal = page.locator('.n-modal').filter({ hasText: 'Import addresses' })
+  const modal = page.locator('.t-dialog').filter({ hasText: 'Import addresses' })
   await expect(modal).toBeVisible()
   // The entry point names the subnet it will write into: the operator does not
   // pick one again inside the dialog.
@@ -153,9 +162,9 @@ async function openPoolWizard(page: Page, subnetName: string, subnetCidr: string
   await page.goto('/ipam/subnets')
   const row = page.locator('tr', { hasText: subnetName })
   await expect(row).toBeVisible()
-  await row.getByRole('button', { name: 'Create DHCP Scope', exact: true }).click()
+  await row.getByText('Create DHCP Scope', { exact: true }).click()
 
-  const modal = page.locator('.n-modal').filter({ hasText: 'Create DHCP scope from a subnet' })
+  const modal = page.locator('.t-dialog').filter({ hasText: 'Create DHCP scope from a subnet' })
   await expect(modal).toBeVisible()
   await expect(modal.getByText(`${subnetName} (${subnetCidr})`)).toBeVisible()
   return modal
@@ -261,9 +270,9 @@ test('the address detail drawer renders the four subsystems', async ({ page }) =
 
   const row = ipRow(page, SEED_IP)
   await expect(row).toHaveCount(1)
-  await row.getByRole('button', { name: 'View detail', exact: true }).click()
+  await row.getByText('View detail', { exact: true }).click()
 
-  const drawer = page.locator('.n-drawer')
+  const drawer = page.locator('.t-drawer')
   await expect(drawer).toBeVisible()
   await expect(drawer.getByText(`IP detail · ${SEED_IP}`)).toBeVisible()
 
@@ -322,7 +331,7 @@ test('the pool wizard plans from the subnet, and refuses a plan the world moved 
     expect(reserved.ok(), await reserved.text()).toBe(true)
     reservedId = (await reserved.json()).data.id
 
-    await modal.locator('.n-form-item').filter({ hasText: 'Name' }).locator('input').fill(scopeName)
+    await modal.locator('.t-form__item').filter({ hasText: 'Name' }).locator('input').fill(scopeName)
     await modal.getByRole('button', { name: 'Next', exact: true }).click()
     await expect(modal.getByText('This is the scope that will be created')).toBeVisible()
     await expect(modal.getByText('255.255.255.0')).toBeVisible()
@@ -346,7 +355,7 @@ test('the pool wizard plans from the subnet, and refuses a plan the world moved 
 
     await modal.getByRole('button', { name: 'Next', exact: true }).click()
     await modal.getByRole('button', { name: 'Create scope', exact: true }).click()
-    await expect(modal).toHaveCount(0)
+    await expect(modal).toBeHidden()
 
     // The scope is on the server, not just in a toast.
     const scopes = await (await page.request.get('/api/v1/dhcp/scopes?page_size=100', { headers })).json()
@@ -374,9 +383,9 @@ async function openReverseZoneDialog(page: Page, subnetName: string, subnetCidr:
   await page.goto('/ipam/subnets')
   const row = page.locator('tr', { hasText: subnetName })
   await expect(row).toBeVisible()
-  await row.getByRole('button', { name: 'Generate Reverse Zone', exact: true }).click()
+  await row.getByText('Generate Reverse Zone', { exact: true }).click()
 
-  const modal = page.locator('.n-modal').filter({ hasText: 'Generate Reverse Zone' })
+  const modal = page.locator('.t-dialog').filter({ hasText: 'Generate Reverse Zone' })
   await expect(modal).toBeVisible()
   await expect(modal.getByText(`${subnetName} (${subnetCidr})`)).toBeVisible()
   return modal
@@ -410,7 +419,7 @@ test('the reverse zone button creates a zone, and says so when it cannot', async
   // of the reverse tree is on offer too, and creating in-addr.arpa locally
   // takes over reverse resolution for everything -- never the answer to "where
   // does this subnet go".
-  const radios = modal.locator('.n-radio')
+  const radios = modal.locator('.t-radio')
   await expect(radios).toHaveCount(3)
   await expect(radios.nth(0)).toContainText(zoneName)
   await expect(radios.nth(1)).toContainText('0.192.in-addr.arpa')
@@ -423,7 +432,7 @@ test('the reverse zone button creates a zone, and says so when it cannot', async
   await expect(modal.getByText('best match')).toBeVisible()
 
   await modal.getByRole('button', { name: 'Create zone', exact: true }).click()
-  await expect(modal).toHaveCount(0)
+  await expect(modal).toBeHidden()
 
   // The write is real. This is the assertion the old button failed: it called
   // the compute endpoint, discarded the answer and reported success, so no zone
@@ -458,15 +467,15 @@ test('a DHCP scope description survives the form', async ({ page }) => {
     await page.goto('/dhcp/scopes')
     await page.getByRole('button', { name: 'Create Scope', exact: true }).click()
 
-    const modal = page.locator('.n-modal').filter({ hasText: 'Create Scope' })
+    const modal = page.locator('.t-dialog').filter({ hasText: 'Create Scope' })
     await expect(modal).toBeVisible()
-    await modal.locator('.n-form-item').filter({ hasText: 'Name' }).locator('input').fill(scopeName)
-    await modal.locator('.n-form-item').filter({ hasText: 'Subnet' }).locator('input').fill('203.0.113.0/24')
-    await modal.locator('.n-form-item').filter({ hasText: 'Start IP' }).locator('input').fill('203.0.113.10')
-    await modal.locator('.n-form-item').filter({ hasText: 'End IP' }).locator('input').fill('203.0.113.20')
-    await modal.locator('.n-form-item').filter({ hasText: 'Description' }).locator('textarea').fill(comment)
+    await modal.locator('.t-form__item').filter({ hasText: 'Name' }).locator('input').fill(scopeName)
+    await modal.locator('.t-form__item').filter({ hasText: 'Subnet' }).locator('input').fill('203.0.113.0/24')
+    await modal.locator('.t-form__item').filter({ hasText: 'Start IP' }).locator('input').fill('203.0.113.10')
+    await modal.locator('.t-form__item').filter({ hasText: 'End IP' }).locator('input').fill('203.0.113.20')
+    await modal.locator('.t-form__item').filter({ hasText: 'Description' }).locator('textarea').fill(comment)
     await modal.getByRole('button', { name: 'Save', exact: true }).click()
-    await expect(modal).toHaveCount(0)
+    await expect(modal).toBeHidden()
 
     // Stored under the name the scope manager has, which is `comment`. The form
     // used to send `description`, an unknown key the backend dropped: the toast
@@ -482,9 +491,9 @@ test('a DHCP scope description survives the form', async ({ page }) => {
     // mismatch: reading `description` always produced an empty box.
     const row = page.locator('tr', { hasText: scopeName })
     await expect(row).toBeVisible()
-    await row.getByRole('button', { name: 'Edit', exact: true }).click()
-    const edit = page.locator('.n-modal').filter({ hasText: 'Edit Scope' })
-    await expect(edit.locator('.n-form-item').filter({ hasText: 'Description' }).locator('textarea')).toHaveValue(comment)
+    await row.getByText('Edit', { exact: true }).click()
+    const edit = page.locator('.t-dialog').filter({ hasText: 'Edit Scope' })
+    await expect(edit.locator('.t-form__item').filter({ hasText: 'Description' }).locator('textarea')).toHaveValue(comment)
   } finally {
     if (createdId) await page.request.delete(`/api/v1/dhcp/scopes/${createdId}`, { headers })
   }

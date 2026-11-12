@@ -1,0 +1,25 @@
+{
+  "description": "V1 二进制散列封套的互操作向量；载荷样例不冻结业务事件 schema。",
+  "clusterId": "3a0cc999-92c2-44df-9cc2-06d414a60001",
+  "leaderId": "6c0a127e-4d25-42f8-8a4b-e4f1845100a1",
+  "events": [
+    {
+      "epoch": "1",
+      "seq": "1",
+      "schemaVersion": 1,
+      "committedUnixMs": "1794100000000",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "payloadUtf8": "{\"changes\":[{\"kind\":\"dhcp.lease.committed\",\"objectId\":\"b01dd6c0-81a0-4a8f-b66c-5f28c1f20001\",\"revision\":\"1\",\"body\":{\"address\":\"192.0.2.10\",\"label\":\"测试\"}}]}",
+      "hash": "c1e8456f1fa0ce4986dd1599430e0197361ea72c2ffedc9ddd6ef03e33c2ef4c"
+    },
+    {
+      "epoch": "1",
+      "seq": "2",
+      "schemaVersion": 1,
+      "committedUnixMs": "1794100000050",
+      "prevHash": "c1e8456f1fa0ce4986dd1599430e0197361ea72c2ffedc9ddd6ef03e33c2ef4c",
+      "payloadUtf8": "{\"changes\": [{\"kind\":\"dhcp.lease.released\",\"objectId\":\"b01dd6c0-81a0-4a8f-b66c-5f28c1f20001\",\"revision\":\"2\",\"body\":{\"address\":\"192.0.2.10\"}}]}",
+      "hash": "c629d71c9982e834f19ffd20772c5e1006f2b21deff617ba9d2d963ca651e4bb"
+    }
+  ]
+}

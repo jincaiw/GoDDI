@@ -1,136 +1,245 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSwitch, NTag, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
+import { reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
 import {
-  listAllowRules, addAllowRule, deleteAllowRule,
-  flushAllowRules, importAllowRules, exportAllowRules,
-  type AllowRule,
-} from '@/service/api/goddi/dns'
+  addAllowRule,
+  deleteAllowRule,
+  exportAllowRules,
+  flushAllowRules,
+  importAllowRules,
+  listAllowRules,
+  type AllowRule
+} from '@/service/api/goddi/dns';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DNSAllowedPage' });
 
-const loading = ref(false)
-const rules = ref<AllowRule[]>([])
-const showAddModal = ref(false)
-const showFlushConfirm = ref(false)
-const importInput = ref<HTMLInputElement | null>(null)
-const form = reactive({ pattern: '', match_type: 'exact', enabled: true })
+const { t } = useI18n();
+const perm = usePermission();
 
-const columns = [
-  { title: () => t('dns.security.pattern'), key: 'pattern' },
-  { title: () => t('dns.security.matchType'), key: 'match_type', width: 120, render: (row: AllowRule) => h(NTag, { size: 'small' }, { default: () => row.match_type }) },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: AllowRule) => h(NSwitch, { value: row.enabled, disabled: true }) },
-  { title: () => t('common.actions'), key: 'actions', width: 80, render: (row: AllowRule) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => handleDelete(row.id) }, { default: () => t('common.delete') }) },
-]
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showAdd = ref(false);
+const submitting = ref(false);
+const importInput = ref<HTMLInputElement | null>(null);
+const form = reactive({ pattern: '', match_type: 'exact', enabled: true });
 
-async function load() {
-  loading.value = true
-  try { rules.value = (await listAllowRules()).data ?? [] } finally { loading.value = false }
+const matchOptions = [
+  { label: 'Exact', value: 'exact' },
+  { label: 'Suffix', value: 'suffix' },
+  { label: 'Wildcard', value: 'wildcard' },
+  { label: 'Regex', value: 'regex' }
+];
+
+const formRules = {
+  pattern: [{ required: true, message: t('dns.security.pattern') + ' required', type: 'error' }]
+};
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'pattern', title: t('dns.security.pattern'), ellipsis: true },
+  {
+    colKey: 'match_type',
+    title: t('dns.security.matchType'),
+    width: 130,
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as AllowRule).match_type))
+  },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as AllowRule).enabled) })
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(
+        TLink,
+        { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDelete((row as AllowRule).id) },
+        () => t('common.delete')
+      )
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
+
+function openAdd() {
+  if (!perm.canWrite('dns')) return;
+  Object.assign(form, { pattern: '', match_type: 'exact', enabled: true });
+  showAdd.value = true;
 }
 
 async function handleAdd() {
-  if (!perm.canWrite('dns')) return
+  if (!perm.canWrite('dns')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    await addAllowRule(form)
-    message.success(t('common.createSuccess'))
-    showAddModal.value = false
-    load()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    await addAllowRule(form);
+    void MessagePlugin.success(t('common.createSuccess'));
+    showAdd.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-async function handleDelete(id: string) {
-  if (!perm.canDelete('dns')) return
-  try { await deleteAllowRule(id); message.success(t('common.deleteSuccess')); load() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+function confirmDelete(id: string) {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteAllowRule(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
-async function handleFlush() {
-  if (!perm.canDelete('dns')) return
-  showFlushConfirm.value = false
-  try {
-    const res = await flushAllowRules()
-    message.success(`${t('dns.security.flushSuccess')} (${res.flushed})`)
-    load()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+function confirmFlush() {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('dns.security.flush'),
+    body: t('dns.security.flushConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        const res = await flushAllowRules();
+        void MessagePlugin.success(`${t('dns.security.flushSuccess')} (${res.flushed})`);
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
 function triggerImport() {
-  if (!perm.canWrite('dns')) return
-  importInput.value?.click()
+  if (!perm.canWrite('dns')) return;
+  importInput.value?.click();
 }
 
 async function handleImportFile(e: Event) {
-  if (!perm.canWrite('dns')) return
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
+  if (!perm.canWrite('dns')) return;
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
   try {
-    const text = await file.text()
-    const res = await importAllowRules(text)
-    const result = res.data
-    message.success(`${t('dns.security.importSuccess')} (${result.imported}, skipped ${result.skipped})`)
-    load()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally {
-    input.value = ''
+    const text = await file.text();
+    const response = await importAllowRules(text);
+    // postRaw returns an AxiosResponse; the payload is the envelope's `data`.
+    const result = (response.data as { data?: { imported: number; skipped: number } })?.data;
+    void MessagePlugin.success(
+      `${t('dns.security.importSuccess')} (${result?.imported ?? 0}, skipped ${result?.skipped ?? 0})`
+    );
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    input.value = '';
   }
 }
 
 async function handleExport() {
   try {
-    const response = await exportAllowRules()
-    const url = window.URL.createObjectURL(new Blob([response.data as BlobPart]))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'allowlist.txt'
-    link.click()
-    window.URL.revokeObjectURL(url)
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
+    const response = await exportAllowRules();
+    const url = window.URL.createObjectURL(new Blob([response.data as BlobPart]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'allowlist.txt';
+    link.click();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    msgError(err);
+  }
 }
-
-onMounted(load)
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dns.security.allowedTitle')">
-      <NSpace>
-        <NButton v-if="perm.canRead('dns')" @click="handleExport">{{ t('dns.security.exportRules') }}</NButton>
-        <NButton v-if="perm.canWrite('dns')" @click="triggerImport">{{ t('dns.security.importRules') }}</NButton>
-        <NButton v-if="perm.canDelete('dns')" type="error" @click="showFlushConfirm = true">{{ t('dns.security.flush') }}</NButton>
-        <NButton v-if="perm.canWrite('dns')" type="primary" @click="showAddModal = true">{{ t('dns.security.addAllowRule') }}</NButton>
-      </NSpace>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dns.security.allowedTitle') }}</h2>
+      <TSpace size="small">
+        <TButton v-if="perm.canRead('dns')" variant="outline" @click="handleExport">
+          {{ t('dns.security.exportRules') }}
+        </TButton>
+        <TButton v-if="perm.canWrite('dns')" variant="outline" @click="triggerImport">
+          {{ t('dns.security.importRules') }}
+        </TButton>
+        <TButton v-if="perm.canDelete('dns')" theme="danger" variant="outline" @click="confirmFlush">
+          {{ t('dns.security.flush') }}
+        </TButton>
+        <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openAdd">
+          <template #icon><TIcon name="add" /></template>
+          {{ t('dns.security.addAllowRule') }}
+        </TButton>
+      </TSpace>
+    </TCard>
 
-    <NCard>
-      <NDataTable :columns="columns" :data="rules" :loading="loading" :row-key="(row: AllowRule) => row.id" />
-    </NCard>
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listAllowRules" :show-pagination="false" />
 
-    <input ref="importInput" type="file" accept=".txt,.conf,text/plain" style="display: none;" @change="handleImportFile" />
+    <input ref="importInput" type="file" accept=".txt,.conf,text/plain" class="hidden-file" @change="handleImportFile" />
 
-    <NModal v-if="showAddModal" v-model:show="showAddModal" preset="card" :title="t('dns.security.addAllowRule')" style="width: 450px;">
-      <NForm :model="form" label-placement="left" label-width="80px">
-        <NFormItem :label="t('dns.security.pattern')"><NInput v-model:value="form.pattern" /></NFormItem>
-        <NFormItem :label="t('dns.security.matchType')"><NSelect v-model:value="form.match_type" :options="[{ label: 'Exact', value: 'exact' }, { label: 'Suffix', value: 'suffix' }, { label: 'Wildcard', value: 'wildcard' }, { label: 'Regex', value: 'regex' }]" /></NFormItem>
-        <NFormItem :label="t('common.enabled')"><NSwitch v-model:value="form.enabled" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showAddModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :disabled="!perm.canWrite('dns')" @click="handleAdd">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog
-      :show="showFlushConfirm"
-      :message="t('dns.security.flushConfirm')"
-      @confirm="handleFlush"
-      @cancel="showFlushConfirm = false"
-    />
+    <TDialog
+      v-model:visible="showAdd"
+      :header="t('dns.security.addAllowRule')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleAdd"
+    >
+      <TForm ref="formRef" :data="form" :rules="formRules" label-align="top">
+        <TFormItem :label="t('dns.security.pattern')" name="pattern">
+          <TInput v-model="form.pattern" />
+        </TFormItem>
+        <TFormItem :label="t('dns.security.matchType')" name="match_type">
+          <TSelect v-model="form.match_type" :options="matchOptions" />
+        </TFormItem>
+        <TFormItem :label="t('common.enabled')" name="enabled">
+          <TSwitch v-model="form.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hidden-file {
+  display: none;
+}
+</style>

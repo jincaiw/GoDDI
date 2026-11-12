@@ -10,7 +10,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.GitCommit=$(shell git rev-p
 # Build directory
 BUILD_DIR=./dist
 
-.PHONY: all build test lint clean docker-build migrate fmt vet
+.PHONY: all build test lint clean docker-build migrate fmt vet verify verify-race verify-browser verify-tidy
 
 all: lint test build
 
@@ -46,6 +46,56 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	$(GO) vet ./...
+
+## verify: Full offline verification matrix (Go build/test/vet, frontend lint/typecheck/build, patch hygiene)
+# Reproducible form of the evidence in docs/audit/IMPLEMENTATION-STATUS.md §1.
+# Browser suites are separate: they need a running server and the tester's
+# Playwright harness; see that document for the 15-suite procedure.
+# `pnpm lint` runs with --fix, so commit any formatting it applies.
+verify:
+	@echo "== Go: build =="
+	$(GO) build -mod=readonly ./...
+	@echo "== Go: tests =="
+	$(GO) test -mod=readonly ./...
+	@echo "== Go: vet =="
+	$(GO) vet -mod=readonly ./...
+	@echo "== Go: gofmt =="
+	@test -z "$$(gofmt -l cmd internal pkg)" || { echo "unformatted Go files:"; gofmt -l cmd internal pkg; exit 1; }
+	@echo "== Frontend: lint =="
+	cd web-admin && pnpm lint
+	@echo "== Frontend: typecheck =="
+	cd web-admin && pnpm typecheck
+	@echo "== Frontend: build =="
+	cd web-admin && pnpm build
+	@echo "== Patch hygiene =="
+	git diff --check
+	@echo "verify: OK"
+
+## verify-race: Same as verify plus the full Go race detector (slower)
+# Race is an additive check; the rest of verify runs once first.
+verify-race: verify
+	@echo "== Go: race =="
+	$(GO) test -mod=readonly -race ./...
+	@echo "verify-race: OK"
+
+## verify-tidy: Verify go.mod / go.sum are tidy without modifying them
+# -diff prints the diff and exits non-zero when the module files drift.
+# A cold module cache needs network access to compute the tidy graph.
+verify-tidy:
+	@echo "== Go: module hygiene =="
+	$(GO) mod tidy -diff
+	@echo "verify-tidy: OK"
+
+## verify-e2e: Run the two Playwright suites CI runs (bare + seeded fixture) locally
+# Starts its own instances; needs `cd e2e && npm ci` once. See scripts/e2e_local.sh.
+verify-e2e:
+	@bash scripts/e2e_local.sh
+
+## verify-browser: Run the 20 browser/static suites against a running isolated server (needs GODDI_ADMIN_PASS)
+# Requires a running server and Playwright; see test/browser/README.md.
+verify-browser:
+	@test -n "$(GODDI_ADMIN_PASS)" || { echo "GODDI_ADMIN_PASS is required; see test/browser/README.md" >&2; exit 2; }
+	./test/browser/run.sh
 
 ## clean: Remove build artifacts
 clean:

@@ -16,6 +16,7 @@ import (
 	"github.com/jasonwa/goddi/internal/config"
 	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
 	"github.com/jasonwa/goddi/internal/dns/cache"
+	"github.com/jasonwa/goddi/internal/dns/dnssec"
 	"github.com/jasonwa/goddi/internal/dns/dynamic_update"
 	"github.com/jasonwa/goddi/internal/dns/filter"
 	"github.com/jasonwa/goddi/internal/dns/forwarder"
@@ -45,6 +46,10 @@ type Server struct {
 	rateLimiter   *RateLimiter
 	axfrHandler   *transfer.AXFRHandler
 	updateHandler *dynamic_update.UpdateHandler
+	// dnssecResponder mints DNSKEY/RRSIG records for signed zones. It is only
+	// attached when the experimental dns.dnssec.enabled switch is on, and only
+	// emits records for queries carrying the EDNS DO bit.
+	dnssecResponder *dnssec.Responder
 	// notifyHandler is invoked for inbound NOTIFY (RFC 1996) messages.
 	notifyHandler func(zoneName string)
 
@@ -98,6 +103,41 @@ type Server struct {
 }
 
 const defaultInflightLimit = 1024
+
+// Bounds on the section counts of an RFC 2136 UPDATE message. The library's
+// accept function runs on the header before the message is unpacked, so these
+// caps are the first line of defence against a packet claiming an absurd
+// number of RRs. Our handler then validates TSIG, zone boundaries and policy.
+const (
+	maxUpdateAnswerRecords    = 2000
+	maxUpdateAuthorityRecords = 2000
+	maxUpdateExtraRecords     = 16
+)
+
+// msgAcceptFunc permits RFC 2136 UPDATE messages to reach DNSHandler.
+//
+// miekg/dns's DefaultMsgAcceptFunc rejects every opcode except QUERY and
+// NOTIFY with RcodeNotImplemented BEFORE the handler is invoked, and also
+// rejects messages with more than one NS record. Without this override an
+// unsigned UPDATE is answered NOTIMP by the library and the dynamic-update
+// handler (which would answer REFUSED) is never reached. QUERY and NOTIFY
+// keep the library's own checks unchanged.
+func msgAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
+	if dh.Bits&(1<<15) != 0 { // QR: a response is not a request
+		return dns.MsgIgnore
+	}
+	opcode := int(dh.Bits>>11) & 0xF
+	if opcode == dns.OpcodeUpdate {
+		if dh.Qdcount != 1 ||
+			dh.Ancount > maxUpdateAnswerRecords ||
+			dh.Nscount > maxUpdateAuthorityRecords ||
+			dh.Arcount > maxUpdateExtraRecords {
+			return dns.MsgReject
+		}
+		return dns.MsgAccept
+	}
+	return dns.DefaultMsgAcceptFunc(dh)
+}
 
 // ErrInflightLimitReached is returned when a distinct cache-miss query cannot
 // enter the bounded shared-forwarding table. Callers may safely fall back to a
@@ -215,6 +255,17 @@ func (s *Server) SetRateLimiter(rl *RateLimiter) {
 // SetAXFRHandler attaches the zone transfer (AXFR/IXFR) handler.
 func (s *Server) SetAXFRHandler(h *transfer.AXFRHandler) {
 	s.axfrHandler = h
+}
+
+// SetDNSSECResponder attaches the experimental DNSSEC signing responder.
+//
+// The caller must gate this on dns.dnssec.enabled. The responder itself only
+// signs zones that are marked dnssec_enabled and have a complete active
+// KSK+ZSK, and returns the original unsigned answer on any error, so an
+// incomplete key set can never turn an otherwise valid answer into a Bogus
+// one.
+func (s *Server) SetDNSSECResponder(r *dnssec.Responder) {
+	s.dnssecResponder = r
 }
 
 // SetUpdateHandler attaches the RFC 2136 dynamic update handler.
@@ -443,6 +494,15 @@ func (s *Server) SetTSIGSecretMap(secrets map[string]string) {
 	s.tsigMu.Unlock()
 }
 
+// hasTSIGSecrets reports whether the listeners were given any TSIG keys.
+// The DNS handler uses this to fail closed: a TSIG-signed UPDATE whose MAC
+// the listener could not verify must never be treated as authenticated.
+func (s *Server) hasTSIGSecrets() bool {
+	s.tsigMu.Lock()
+	defer s.tsigMu.Unlock()
+	return len(s.tsigSecrets) > 0
+}
+
 // tsigSnapshot returns a copy of the current TSIG secret map for listener
 // construction. Must not be called concurrently with SetTSIGSecretMap from
 // the same goroutine flow; Start serializes listener setup through
@@ -515,14 +575,14 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		if err != nil {
 			return fmt.Errorf("binding UDP listener %s: %w", s.cfg.DNS.Listeners.UDP.Address, err)
 		}
-		s.udpServer = &dns.Server{PacketConn: udpConn, Handler: handler}
+		s.udpServer = &dns.Server{PacketConn: udpConn, Handler: handler, TsigSecret: tsigSecrets, MsgAcceptFunc: msgAcceptFunc}
 	}
 	if s.cfg.DNS.Listeners.TCP.Enabled {
 		tcpListener, err = net.Listen("tcp", s.cfg.DNS.Listeners.TCP.Address)
 		if err != nil {
 			return fmt.Errorf("binding TCP listener %s: %w", s.cfg.DNS.Listeners.TCP.Address, err)
 		}
-		s.tcpServer = &dns.Server{Listener: tcpListener, Handler: handler, TsigSecret: tsigSecrets}
+		s.tcpServer = &dns.Server{Listener: tcpListener, Handler: handler, TsigSecret: tsigSecrets, MsgAcceptFunc: msgAcceptFunc}
 	}
 	if s.cfg.DNS.Listeners.DOT.Enabled {
 		dotListener, err = net.Listen("tcp", s.cfg.DNS.Listeners.DOT.Address)
@@ -628,11 +688,12 @@ func (s *Server) startDoTWithListener(handler dns.Handler, listener net.Listener
 		return err
 	}
 	s.dotServer = &dns.Server{
-		Listener:   listener,
-		Net:        "tcp-tls",
-		Handler:    handler,
-		TLSConfig:  tlsCfg,
-		TsigSecret: s.tsigSnapshot(),
+		Listener:      listener,
+		Net:           "tcp-tls",
+		Handler:       handler,
+		TLSConfig:     tlsCfg,
+		TsigSecret:    s.tsigSnapshot(),
+		MsgAcceptFunc: msgAcceptFunc,
 	}
 	go s.serveDNSServer("DoT", s.dotServer)
 	return nil
@@ -1044,8 +1105,9 @@ func (s *Server) zoneSOAFor(qname string) dns.RR {
 
 // lookupAuthoritative checks if the query matches a local authoritative zone.
 // Returns (response, denied, found); denied indicates a zone-level query ACL
-// rejected the client and the caller must answer REFUSED.
-func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string) (*dns.Msg, bool, bool) {
+// rejected the client and the caller must answer REFUSED. dnssecOK is the
+// request's EDNS DO bit: without it no RRSIG is emitted (RFC 4035 §3.2.1).
+func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string, dnssecOK bool) (*dns.Msg, bool, bool) {
 	// If Zone Store is available, use it directly.
 	if s.zoneStore != nil {
 		// Zone-level query ACL (most specific zone wins; empty ACL = allow).
@@ -1053,20 +1115,50 @@ func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string
 			return nil, true, false
 		}
 
+		zoneName := s.zoneStore.MatchingZone(qname)
+
 		// A secondary zone past its SOA EXPIRE must not answer from its local
 		// copy (RFC 1035 §6.3). The copy is not merely old: the primary may
 		// have reassigned names it still holds, so answering would return an
 		// address that now belongs to a different host. SERVFAIL is returned
 		// rather than NXDOMAIN so a resolver treats it as a transient failure
 		// and tries another server instead of caching a negative answer.
-		if zoneName := s.zoneStore.MatchingZone(qname); zoneName != "" && s.zoneStore.IsZoneExpired(zoneName) {
+		if zoneName != "" && s.zoneStore.IsZoneExpired(zoneName) {
 			resp := new(dns.Msg)
 			resp.Rcode = dns.RcodeServerFailure
 			return resp, false, true
 		}
 
+		// DNSSEC: only a signed zone with a complete active key set may emit
+		// key/signature records, and only when the client asked for them. Any
+		// error here leaves the ordinary answer path untouched.
+		signed := zoneName != "" && s.dnssecResponder != nil && s.dnssecResponder.SignedZone(zoneName)
+
+		// A DNSKEY query is answered from the live key set rather than from
+		// dns_records, so it stays correct across key rotations. The RRSIG
+		// over the DNSKEY RRset is only sent when DO is set; the DNSKEY RRs
+		// themselves are served to any client that asks for them.
+		if signed && qtype == dns.TypeDNSKEY {
+			if rrs, err := s.dnssecResponder.DNSKEYRRset(zoneName); err == nil && len(rrs) > 0 {
+				answer := make([]dns.RR, 0, len(rrs))
+				for _, rr := range rrs {
+					if _, isSig := rr.(*dns.RRSIG); isSig && !dnssecOK {
+						continue
+					}
+					answer = append(answer, rr)
+				}
+				resp := new(dns.Msg)
+				resp.Answer = answer
+				resp.Authoritative = true
+				return resp, false, true
+			}
+		}
+
 		_, answers, found := s.zoneStore.Lookup(qname, qtype)
 		if found && len(answers) > 0 {
+			if signed && dnssecOK {
+				answers = s.dnssecResponder.SignRRsets(zoneName, answers)
+			}
 			resp := new(dns.Msg)
 			resp.Answer = answers
 			resp.Authoritative = true
@@ -1078,14 +1170,21 @@ func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string
 		if s.zoneStore.IsForwardingZone(qname) {
 			return nil, false, false
 		}
-		if zoneName := s.zoneStore.MatchingZone(qname); zoneName != "" {
+		if zoneName != "" {
 			resp := new(dns.Msg)
 			resp.Authoritative = true
-			if !s.zoneStore.NameExists(zoneName, qname) {
+			nameExists := s.zoneStore.NameExists(zoneName, qname)
+			if !nameExists {
 				resp.Rcode = dns.RcodeNameError
 			}
 			if soa := s.zoneStore.ZoneSOA(zoneName); soa != nil {
 				resp.Ns = []dns.RR{soa}
+			}
+			// Signed zones prove negative answers with an NSEC covering the
+			// queried name and sign the SOA in the authority section. The
+			// responder returns resp.Ns untouched if anything is missing.
+			if signed && dnssecOK {
+				resp.Ns = s.dnssecResponder.SignNegative(zoneName, qname, qtype, nameExists, resp.Ns)
 			}
 			return resp, false, true
 		}

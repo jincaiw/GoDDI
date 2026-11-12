@@ -1,7 +1,5 @@
 -- +goose Up
--- N6 migration-stage durable fact storage. This table is an additive bridge:
--- existing dhcp_dns_events remains the compatibility DNS outbox until consumers
--- are migrated and the unified sequence is produced by the authoritative path.
+-- Durable fact storage for the unified DHCP lease facts chain.
 CREATE TABLE IF NOT EXISTS dhcp_ipam_observation_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id        TEXT    NOT NULL UNIQUE,

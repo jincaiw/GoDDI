@@ -1,4 +1,4 @@
-import { deleteRaw, get, post } from './client'
+import { deleteRaw, get, getList, post } from './client'
 
 export interface LoginRequest {
   username: string
@@ -82,8 +82,8 @@ export function disableTOTP(password: string) {
   return post('/auth/totp/disable', { password })
 }
 
-export function listSessions() {
-  return get<SessionInfo[]>('/auth/sessions')
+export function listSessions(params?: Record<string, unknown>) {
+  return getList<SessionInfo>('/auth/sessions', params)
 }
 
 export function deleteSession(id: string) {

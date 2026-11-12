@@ -162,7 +162,6 @@ var mirroredTables = []string{
 	"dhcp_options",
 	"dhcp_leases",
 	"dhcp_logs",
-	"dhcp_dns_events",
 	"dns_zones",
 	"dns_records",
 }

@@ -198,6 +198,10 @@ func (sm *SessionManager) DeleteSessionByToken(token string) error {
 // expires_at is stored as RFC3339 ("T" separator); julianday() is required for
 // a correct comparison against the current time (plain string comparison
 // against datetime('now') output yields wrong results).
+// ListUserSessions returns every unexpired session of one user, newest first.
+// It is kept for callers that need the whole set; the management API uses
+// ListUserSessionsPaged so a busy account does not ship its entire session
+// history to the browser on every page load.
 func (sm *SessionManager) ListUserSessions(userID string) ([]Session, error) {
 	rows, err := sm.db.Query(`
 		SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at
@@ -208,21 +212,65 @@ func (sm *SessionManager) ListUserSessions(userID string) ([]Session, error) {
 		return nil, fmt.Errorf("querying sessions: %w", err)
 	}
 	defer rows.Close()
+	return scanSessions(rows)
+}
 
+// ListUserSessionsPaged returns one page of a user's unexpired sessions
+// (newest first) and the total number of unexpired sessions. Every login
+// creates a session, so an unbounded read grows without limit and eventually
+// makes the session-management page load megabytes and render thousands of
+// rows. The count and the page share the same filter so the pager stays
+// truthful.
+func (sm *SessionManager) ListUserSessionsPaged(userID string, limit, offset int) ([]Session, int64, error) {
+	var total int64
+	if err := sm.db.QueryRow(`
+		SELECT COUNT(*) FROM sessions
+		WHERE user_id = ? AND julianday(expires_at) > julianday('now')`,
+		userID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting sessions: %w", err)
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := sm.db.Query(`
+		SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at
+		FROM sessions WHERE user_id = ? AND julianday(expires_at) > julianday('now')
+		ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying sessions: %w", err)
+	}
+	defer rows.Close()
+	sessions, err := scanSessions(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return sessions, total, nil
+}
+
+// scanSessions materialises a session cursor. The cursor is fully drained
+// before returning: SQLite keeps one connection per handle, and issuing
+// another statement while a cursor is open waits on that connection.
+func scanSessions(rows *sql.Rows) ([]Session, error) {
 	var sessions []Session
 	for rows.Next() {
 		var s Session
 		var expiresAt, createdAt string
+		var parseErr error
 		if err := rows.Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &expiresAt, &createdAt); err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
 		}
-		s.ExpiresAt, err = time.Parse(time.RFC3339, expiresAt)
-		if err != nil {
-			slog.Warn("parsing expires_at for session", "error", err)
+		s.ExpiresAt, parseErr = time.Parse(time.RFC3339, expiresAt)
+		if parseErr != nil {
+			slog.Warn("parsing expires_at for session", "error", parseErr)
 		}
-		s.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
-		if err != nil {
-			slog.Warn("parsing created_at for session", "error", err)
+		s.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAt)
+		if parseErr != nil {
+			slog.Warn("parsing created_at for session", "error", parseErr)
 		}
 		s.TokenHash = "" // Never expose token hash
 		sessions = append(sessions, s)

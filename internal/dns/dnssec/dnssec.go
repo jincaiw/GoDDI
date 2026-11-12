@@ -106,10 +106,13 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 		return nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
 	}
 
-	// Get zone name for key generation.
-	z, err := m.zoneMgr.GetZone(zoneID)
-	if err != nil {
-		return nil, err
+	// The owner name is only needed to build the DNSKEY header for the key
+	// tag; the tag itself is computed from flags/protocol/algorithm/public
+	// key. Read it straight from the database so key generation does not
+	// depend on a ZoneManager (which the signing responder does not have).
+	var zoneName string
+	if err := m.db.QueryRow(`SELECT name FROM dns_zones WHERE id = ?`, zoneID).Scan(&zoneName); err != nil {
+		return nil, fmt.Errorf("reading zone %s: %w", zoneID, err)
 	}
 
 	// Generate key pair based on algorithm.
@@ -139,7 +142,7 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 
 		// Compute key tag.
 		dnsKey := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Name: z.Name, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
+			Hdr:       dns.RR_Header{Name: zoneName, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
 			Flags:     dnsKeyFlags(keyType),
 			Protocol:  3,
 			Algorithm: algoNum,
@@ -184,7 +187,7 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 		privKeyCipher = encrypted
 
 		dnsKey := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Name: z.Name, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
+			Hdr:       dns.RR_Header{Name: zoneName, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
 			Flags:     dnsKeyFlags(keyType),
 			Protocol:  3,
 			Algorithm: algoNum,
@@ -208,7 +211,7 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 		privKeyCipher = encrypted
 
 		dnsKey := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Name: z.Name, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
+			Hdr:       dns.RR_Header{Name: zoneName, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
 			Flags:     dnsKeyFlags(keyType),
 			Protocol:  3,
 			Algorithm: algoNum,
@@ -218,7 +221,7 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 	}
 
 	id := uuid.New().String()
-	_, err = m.db.Exec(`
+	_, err := m.db.Exec(`
 		INSERT INTO dns_dnssec_keys (id, zone_id, key_type, algorithm, public_key, private_key_ciphertext, key_tag, enabled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1)
 	`, id, zoneID, keyType, string(algo), pubKeyStr, privKeyCipher, keyTag)
@@ -239,11 +242,13 @@ func (m *DNSSECManager) generateKey(zoneID, keyType, algorithm string) (*DNSSECK
 
 // SignZone marks a zone as DNSSEC-enabled.
 //
-// EXPERIMENTAL / INCOMPLETE: this does NOT sign anything. It verifies that a
-// ZSK/KSK exist and flips dns_zones.dnssec_enabled, but no RRSIG, DNSKEY or
-// NSEC records are generated or served, so a validating resolver will treat
-// the zone as Bogus. Real signing is tracked separately; until then the API
-// entry points are gated behind the dns.dnssec.enabled configuration switch.
+// EXPERIMENTAL / INCOMPLETE: this verifies that a ZSK/KSK exist and flips
+// dns_zones.dnssec_enabled. The authoritative responder (see responder.go)
+// then serves DNSKEY records, RRSIGs over positive answers and NSEC denial
+// proof (NSEC or NSEC3, chosen by the zone's nsec3_* parameters) when the
+// experimental gate and the EDNS DO bit are set. The zone still needs a DS
+// at its parent, so a validating resolver can still treat it as Bogus. The
+// API entry points stay gated behind dns.dnssec.enabled.
 func (m *DNSSECManager) SignZone(zoneID string) error {
 	if zoneID == "" {
 		return fmt.Errorf("zone id is required")
@@ -362,9 +367,9 @@ func (m *DNSSECManager) GetDNSSECStatus(zoneID string) (map[string]interface{}, 
 	}
 
 	// "signed" is deliberately reported as false: even when dnssec_enabled is
-	// true the authoritative answers carry no RRSIG/NSEC records yet, so the
-	// zone is not actually signed. Callers (UI included) must not present
-	// dnssec_enabled alone as "DNSSEC is protecting this zone".
+	// true, the zone has no parent DS, so it is not fully signed. Callers
+	// (UI included) must not present dnssec_enabled alone as "DNSSEC is
+	// protecting this zone".
 	status := map[string]interface{}{
 		"zone_id":        zoneID,
 		"zone_name":      z.Name,
@@ -619,7 +624,14 @@ func (m *DNSSECManager) GetPrivateKey(key *DNSSECKey) (crypto.Signer, error) {
 		return nil, fmt.Errorf("decrypting private key: %w", err)
 	}
 
-	algo := DNSSECAlgorithm(key.Algorithm)
+	return parsePrivateKey(plainText, key.Algorithm)
+}
+
+// parsePrivateKey turns decrypted key bytes back into a crypto.Signer. Shared
+// by the manager API and the authoritative signing responder so both agree on
+// exactly which encodings are accepted.
+func parsePrivateKey(plainText []byte, algorithm string) (crypto.Signer, error) {
+	algo := DNSSECAlgorithm(algorithm)
 	switch algo {
 	case AlgRSASHA256, AlgRSASHA512:
 		rsaKey, err := x509.ParsePKCS1PrivateKey(plainText)
@@ -643,7 +655,7 @@ func (m *DNSSECManager) GetPrivateKey(key *DNSSECKey) (crypto.Signer, error) {
 		}
 		return ed25519.PrivateKey(plainText), nil
 	default:
-		return nil, fmt.Errorf("unsupported algorithm: %s", key.Algorithm)
+		return nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
 	}
 }
 

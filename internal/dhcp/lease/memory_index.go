@@ -238,6 +238,22 @@ func (i *MemoryIndex) SetPoolsChecked(pools []AddressPool) error {
 	return nil
 }
 
+// Snapshot returns a copy of every lease the index holds. Callers must not
+// assume ordering; it is a point-in-time read used by the expiry sweep and by
+// recovery verification.
+func (i *MemoryIndex) Snapshot() []Lease {
+	if i == nil {
+		return nil
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	out := make([]Lease, 0, len(i.byID))
+	for _, value := range i.byID {
+		out = append(out, value)
+	}
+	return out
+}
+
 func (i *MemoryIndex) Get(id string) (*Lease, bool) {
 	if i == nil || id == "" {
 		return nil, false

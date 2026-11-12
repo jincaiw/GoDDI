@@ -1,23 +1,32 @@
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
-import type { ImportReport } from '@/service/api/goddi/ipam'
+import { useI18n } from 'vue-i18n';
+import type { ImportReport } from '@/service/api/goddi/ipam';
 
 defineProps<{
-  report: ImportReport
-}>()
+  report: ImportReport;
+}>();
 
-const { t } = useI18n()
+const { t } = useI18n();
 </script>
 
 <template>
-  <NDescriptions :column="4" bordered size="small" label-placement="top" style="margin-bottom: 16px;">
-    <NDescriptionsItem :label="t('ipam.import.total')">{{ report.total }}</NDescriptionsItem>
-    <NDescriptionsItem :label="t('ipam.import.creates')">
-      <span :style="report.creates > 0 ? 'font-weight:500' : ''">{{ report.creates }}</span>
-    </NDescriptionsItem>
-    <NDescriptionsItem :label="t('ipam.import.updates')">
-      <span :style="report.updates > 0 ? 'font-weight:500' : ''">{{ report.updates }}</span>
-    </NDescriptionsItem>
-    <NDescriptionsItem :label="t('ipam.import.unchanged')">{{ report.unchanged }}</NDescriptionsItem>
-  </NDescriptions>
+  <TDescriptions :column="4" bordered size="small" class="mb-4">
+    <TDescriptionsItem :label="t('ipam.import.total')">{{ report.total }}</TDescriptionsItem>
+    <TDescriptionsItem :label="t('ipam.import.creates')">
+      <span :class="{ bold: report.creates > 0 }">{{ report.creates }}</span>
+    </TDescriptionsItem>
+    <TDescriptionsItem :label="t('ipam.import.updates')">
+      <span :class="{ bold: report.updates > 0 }">{{ report.updates }}</span>
+    </TDescriptionsItem>
+    <TDescriptionsItem :label="t('ipam.import.unchanged')">{{ report.unchanged }}</TDescriptionsItem>
+  </TDescriptions>
 </template>
+
+<style scoped>
+.mb-4 {
+  margin-bottom: 16px;
+}
+.bold {
+  font-weight: 600;
+}
+</style>

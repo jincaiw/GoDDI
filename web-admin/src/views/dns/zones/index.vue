@@ -1,72 +1,62 @@
 <script setup lang="ts">
-import { ref, reactive, computed, h, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSwitch, NSpace, NTag, useMessage } from 'naive-ui'
-import { SearchOutline } from '@vicons/ionicons5'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listDNSZones, createDNSZone, updateDNSZone, deleteDNSZone, batchDeleteDNSZones, cloneDNSZone, convertDNSZone, type DNSZone, type CreateDNSZoneRequest } from '@/service/api/goddi/dns'
+import { computed, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  batchDeleteDNSZones,
+  cloneDNSZone,
+  convertDNSZone,
+  createDNSZone,
+  deleteDNSZone,
+  listDNSZones,
+  updateDNSZone,
+  type CreateDNSZoneRequest,
+  type DNSZone
+} from '@/service/api/goddi/dns';
 
-const router = useRouter()
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'DNSZonesPage' });
 
-const loading = ref(false)
-const submitting = ref(false)
-const batchDeleting = ref(false)
-const zones = ref<DNSZone[]>([])
-const searchQuery = ref('')
-const filterType = ref<string | null>(null)
-const activeTab = ref<'authoritative' | 'allowed' | 'blocked'>('authoritative')
-const showCreateModal = ref(false)
-const showDeleteConfirm = ref(false)
-const showBatchDeleteConfirm = ref(false)
-const deletingId = ref('')
-const editingZone = ref<DNSZone | null>(null)
-const checkedKeys = ref<Array<string | number>>([])
+const router = useRouter();
+const { t } = useI18n();
+const perm = usePermission();
 
-const showCloneModal = ref(false)
-const cloneSource = ref<DNSZone | null>(null)
-const cloneName = ref('')
-const showConvertModal = ref(false)
-const convertSource = ref<DNSZone | null>(null)
-const convertTarget = ref('primary')
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showCreate = ref(false);
+const showClone = ref(false);
+const showConvert = ref(false);
+const submitting = ref(false);
+const batchDeleting = ref(false);
+const editing = ref<DNSZone | null>(null);
+const checkedKeys = ref<Array<string | number>>([]);
+
+const searchQuery = ref('');
+const filterType = ref<string | undefined>(undefined);
+const activeTab = ref<'authoritative' | 'allowed' | 'blocked'>('authoritative');
+
+const cloneSource = ref<DNSZone | null>(null);
+const cloneName = ref('');
+const convertSource = ref<DNSZone | null>(null);
+const convertTarget = ref('primary');
 
 const typeOptions = [
   { label: 'Primary', value: 'primary' },
   { label: 'Secondary', value: 'secondary' },
   { label: 'Stub', value: 'stub' },
-  { label: 'Forward', value: 'forward' },
-]
-
-const zoneTypeOptions = [
+  { label: 'Forward', value: 'forward' }
+];
+const zoneTypeOptions = computed(() => [
   ...typeOptions,
   { label: 'Catalog', value: 'catalog' },
   { label: t('dns.zones.typeAllowed'), value: 'allowed' },
-  { label: t('dns.zones.typeBlocked'), value: 'blocked' },
-]
-
-// Special (allowed/blocked) zones cannot be converted (backend enforces
-// this too); only the four IN zone types are offered as targets.
-const convertTargetOptions = computed(() => typeOptions.filter((o) => o.value !== convertSource.value?.type))
-
-function handleTabChange(tab: string) {
-  activeTab.value = tab as 'authoritative' | 'allowed' | 'blocked'
-  filterType.value = null
-  checkedKeys.value = []
-  applyFilters()
-}
-
-const pagination = reactive({
-  page: 1,
-  pageSize: 20,
-  itemCount: 0,
-  showSizePicker: true,
-  pageSizes: [10, 20, 50],
-})
+  { label: t('dns.zones.typeBlocked'), value: 'blocked' }
+]);
+// Special (allowed/blocked) zones cannot be converted; the backend enforces it.
+const convertTargetOptions = computed(() => typeOptions.filter(o => o.value !== convertSource.value?.type));
 
 const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
   name: '',
@@ -78,326 +68,409 @@ const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
   retry: 600,
   expire: 604800,
   minimum: 86400,
-  enabled: true,
-})
+  enabled: true
+});
+const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked');
 
-const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked')
+const formRules = {
+  name: [{ required: true, message: t('dns.zones.zoneName') + ' required', type: 'error' }]
+};
 
-const columns = [
-  { type: 'selection' as const },
-  { title: () => t('dns.zones.zoneName'), key: 'name' },
-  { title: () => t('dns.zones.zoneType'), key: 'type', width: 100, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.type === 'primary' ? 'success' : row.type === 'allowed' ? 'success' : row.type === 'blocked' ? 'error' : 'info' }, { default: () => row.type }) },
-  { title: () => t('dns.zones.records'), key: 'records_count', width: 80 },
-  { title: () => t('dns.zones.dnssec'), key: 'dnssec_enabled', width: 90, render: (row: DNSZone) => h(NTag, { size: 'small', type: row.dnssec_enabled ? 'success' : 'default' }, { default: () => row.dnssec_enabled ? 'ON' : 'OFF' }) },
-  { title: () => t('common.enabled'), key: 'enabled', width: 80, render: (row: DNSZone) => h(NSwitch, { value: row.enabled, disabled: !perm.canWrite('dns'), onUpdateValue: () => toggleEnabled(row) }) },
-  { title: () => t('common.actions'), key: 'actions', width: 300, render: (row: DNSZone) => h(NSpace, { size: 'small' }, {
-    default: () => [
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, onClick: () => router.push(`/dns/zone-detail/${row.id}`) }, { default: () => t('common.edit') })]),
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openClone(row) }, { default: () => t('dns.zones.clone') })]),
-      ...(row.type === 'allowed' || row.type === 'blocked' ? [] : [h(NButton, { size: 'small', text: true, disabled: !perm.canWrite('dns'), onClick: () => openConvert(row) }, { default: () => t('dns.zones.convert') })]),
-      h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('dns'), onClick: () => { if (!perm.canDelete('dns')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }),
-    ],
-  }) },
-]
+const params = computed<Record<string, unknown>>(() => {
+  const p: Record<string, unknown> = {};
+  if (searchQuery.value) p.name = searchQuery.value;
+  p.type = activeTab.value === 'authoritative' ? filterType.value || 'authoritative' : activeTab.value;
+  return p;
+});
 
-async function loadData() {
-  loading.value = true
-  try {
-    const params: Record<string, unknown> = { page: pagination.page, page_size: pagination.pageSize }
-    if (searchQuery.value) params.name = searchQuery.value
-    if (activeTab.value === 'authoritative') {
-      params.type = filterType.value || 'authoritative'
-    } else {
-      params.type = activeTab.value
+function handleTabChange(tab: string | number) {
+  activeTab.value = String(tab) as 'authoritative' | 'allowed' | 'blocked';
+  filterType.value = undefined;
+  checkedKeys.value = [];
+}
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('dns.zones.zoneName'), minWidth: 180 },
+  {
+    colKey: 'type',
+    title: t('dns.zones.zoneType'),
+    width: 110,
+    cell: (h, { row }) => {
+      const r = row as DNSZone;
+      const theme = r.type === 'blocked' ? 'danger' : r.type === 'allowed' || r.type === 'primary' ? 'success' : 'primary';
+      return h(TTag, { size: 'small', theme, variant: 'light' }, () => String(r.type));
     }
-    const result = await listDNSZones(params)
-    zones.value = result.data
-    pagination.itemCount = result.meta.total
-    // Drop selection keys that no longer exist on this page.
-    const ids = new Set(result.data.map((z: DNSZone) => z.id))
-    checkedKeys.value = checkedKeys.value.filter((k) => ids.has(String(k)))
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    loading.value = false
+  },
+  { colKey: 'records_count', title: t('dns.zones.records'), width: 90 },
+  {
+    colKey: 'dnssec_enabled',
+    title: t('dns.zones.dnssec'),
+    width: 90,
+    cell: (h, { row }) =>
+      h(TTag, { size: 'small', theme: (row as DNSZone).dnssec_enabled ? 'success' : 'default', variant: 'light' }, () =>
+        (row as DNSZone).dnssec_enabled ? 'ON' : 'OFF'
+      )
+  },
+  {
+    colKey: 'enabled',
+    title: t('common.enabled'),
+    width: 90,
+    cell: (h, { row }) => {
+      const r = row as DNSZone;
+      return h(TSwitch, {
+        size: 'small',
+        value: Boolean(r.enabled),
+        disabled: !perm.canWrite('dns'),
+        onChange: (value: unknown) => void toggleEnabled(r, Boolean(value))
+      });
+    }
+  },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 300,
+    cell: (h, { row }) => {
+      const r = row as DNSZone;
+      const special = r.type === 'allowed' || r.type === 'blocked';
+      return h(TSpace, { size: 'small' }, () => [
+        ...(special
+          ? []
+          : [
+              h(TLink, { theme: 'primary', onClick: () => void router.push(`/dns/zone-detail/${r.id}`) }, () => t('common.edit')),
+              h(TLink, { theme: 'primary', disabled: !perm.canWrite('dns'), onClick: () => openClone(r) }, () => t('dns.zones.clone')),
+              h(TLink, { theme: 'primary', disabled: !perm.canWrite('dns'), onClick: () => openConvert(r) }, () => t('dns.zones.convert'))
+            ]),
+        h(
+          TLink,
+          { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDelete(r.id) },
+          () => t('common.delete')
+        )
+      ]);
+    }
   }
-}
+];
 
-function applyFilters() {
-  pagination.page = 1
-  loadData()
-}
-
-function openCreateZone() {
-  if (!perm.canWrite('dns')) return
-  editingZone.value = null
-  const presetType = activeTab.value === 'allowed' ? 'allowed' : activeTab.value === 'blocked' ? 'blocked' : 'primary'
-  Object.assign(formData, { name: '', type: presetType, default_ttl: 3600, soa_mname: '', soa_rname: '', refresh: 3600, retry: 600, expire: 604800, minimum: 86400, enabled: true })
-  showCreateModal.value = true
+function openCreate() {
+  if (!perm.canWrite('dns')) return;
+  editing.value = null;
+  const presetType = activeTab.value === 'allowed' ? 'allowed' : activeTab.value === 'blocked' ? 'blocked' : 'primary';
+  Object.assign(formData, {
+    name: '',
+    type: presetType,
+    default_ttl: 3600,
+    soa_mname: '',
+    soa_rname: '',
+    refresh: 3600,
+    retry: 600,
+    expire: 604800,
+    minimum: 86400,
+    enabled: true
+  });
+  showCreate.value = true;
 }
 
 function openClone(zone: DNSZone) {
-  if (!perm.canWrite('dns')) return
-  cloneSource.value = zone
-  cloneName.value = `${zone.name}-copy`
-  showCloneModal.value = true
+  if (!perm.canWrite('dns')) return;
+  cloneSource.value = zone;
+  cloneName.value = `${zone.name}-copy`;
+  showClone.value = true;
 }
 
 function openConvert(zone: DNSZone) {
-  if (!perm.canWrite('dns')) return
-  convertSource.value = zone
-  convertTarget.value = zone.type === 'primary' ? 'secondary' : 'primary'
-  showConvertModal.value = true
+  if (!perm.canWrite('dns')) return;
+  convertSource.value = zone;
+  convertTarget.value = zone.type === 'primary' ? 'secondary' : 'primary';
+  showConvert.value = true;
 }
 
-async function handleClone() {
-  if (!perm.canWrite('dns')) return
-  if (!cloneSource.value || !cloneName.value.trim()) {
-    message.warning(t('dns.zones.newNameRequired'))
-    return
-  }
-  submitting.value = true
+async function toggleEnabled(zone: DNSZone, value: boolean) {
+  if (!perm.canWrite('dns')) return;
   try {
-    await cloneDNSZone(cloneSource.value.id, cloneName.value.trim())
-    message.success(t('common.createSuccess'))
-    showCloneModal.value = false
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function handleConvert() {
-  if (!perm.canWrite('dns')) return
-  if (!convertSource.value || !convertTarget.value) return
-  submitting.value = true
-  try {
-    await convertDNSZone(convertSource.value.id, convertTarget.value)
-    message.success(t('common.updateSuccess'))
-    showConvertModal.value = false
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function handleBatchDelete() {
-  if (!perm.canDelete('dns')) return
-  showBatchDeleteConfirm.value = false
-  if (checkedKeys.value.length === 0) return
-  batchDeleting.value = true
-  try {
-    const result = await batchDeleteDNSZones(checkedKeys.value.map((k) => String(k)))
-    message.success(t('dns.zones.batchDeleteDone', { n: result.deleted }))
-    checkedKeys.value = []
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
-  } finally {
-    batchDeleting.value = false
-  }
-}
-
-function handlePageChange(page: number) {
-  pagination.page = page
-  loadData()
-}
-
-function handlePageSizeChange(pageSize: number) {
-  pagination.pageSize = pageSize
-  pagination.page = 1
-  loadData()
-}
-
-async function toggleEnabled(zone: DNSZone) {
-  if (!perm.canWrite('dns')) return
-  try {
-    await updateDNSZone(zone.id, { enabled: !zone.enabled })
-    message.success(t('common.updateSuccess'))
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+    await updateDNSZone(zone.id, { enabled: value });
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
   }
 }
 
 async function handleSubmit() {
-  if (!perm.canWrite('dns')) return
-  submitting.value = true
+  if (!perm.canWrite('dns')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  submitting.value = true;
   try {
-    if (editingZone.value) {
-      await updateDNSZone(editingZone.value.id, formData)
-      message.success(t('common.updateSuccess'))
+    if (editing.value) {
+      await updateDNSZone(editing.value.id, formData);
+      void MessagePlugin.success(t('common.updateSuccess'));
     } else {
-      await createDNSZone(formData)
-      message.success(t('common.createSuccess'))
+      await createDNSZone(formData);
+      void MessagePlugin.success(t('common.createSuccess'));
     }
-    showCreateModal.value = false
-    editingZone.value = null
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+    showCreate.value = false;
+    editing.value = null;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('dns')) return
+async function handleClone() {
+  if (!perm.canWrite('dns')) return;
+  if (!cloneSource.value || !cloneName.value.trim()) {
+    void MessagePlugin.warning(t('dns.zones.newNameRequired'));
+    return;
+  }
+  submitting.value = true;
   try {
-    await deleteDNSZone(deletingId.value)
-    message.success(t('common.deleteSuccess'))
-    loadData()
-  } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : t('common.failed'))
+    await cloneDNSZone(cloneSource.value.id, cloneName.value.trim());
+    void MessagePlugin.success(t('common.createSuccess'));
+    showClone.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
   }
-  showDeleteConfirm.value = false
 }
 
-onMounted(loadData)
+async function handleConvert() {
+  if (!perm.canWrite('dns') || !convertSource.value || !convertTarget.value) return;
+  submitting.value = true;
+  try {
+    await convertDNSZone(convertSource.value.id, convertTarget.value);
+    void MessagePlugin.success(t('common.updateSuccess'));
+    showConvert.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+function confirmDelete(id: string) {
+  if (!perm.canDelete('dns')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteDNSZone(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
+}
+
+function confirmBatchDelete() {
+  if (!perm.canDelete('dns') || checkedKeys.value.length === 0) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('dns.zones.batchDelete'),
+    body: t('dns.zones.batchDeleteConfirm', { n: checkedKeys.value.length }),
+    theme: 'danger',
+    onConfirm: async () => {
+      batchDeleting.value = true;
+      try {
+        const result = await batchDeleteDNSZones(checkedKeys.value.map(k => String(k)));
+        void MessagePlugin.success(t('dns.zones.batchDeleteDone', { n: result.deleted }));
+        checkedKeys.value = [];
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      } finally {
+        batchDeleting.value = false;
+        dlg.hide();
+      }
+    }
+  });
+}
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('dns.zones.title')">
-      <NButton v-if="perm.canWrite('dns')" type="primary" @click="openCreateZone">
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('dns.zones.title') }}</h2>
+      <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
         {{ t('dns.zones.createZone') }}
-      </NButton>
-    </PageHeader>
+      </TButton>
+    </TCard>
 
-    <div class="filter-bar">
-      <NTabs v-model:value="activeTab" type="line" @update:value="handleTabChange">
-        <NTab name="authoritative">{{ t('dns.zones.tabAuthoritative') }}</NTab>
-        <NTab name="allowed">{{ t('dns.zones.tabAllowed') }}</NTab>
-        <NTab name="blocked">{{ t('dns.zones.tabBlocked') }}</NTab>
-      </NTabs>
-      <NSpace align="center">
-        <NInput v-model:value="searchQuery" :placeholder="t('common.search')" clearable style="width: 240px;" @keyup.enter="applyFilters" @clear="applyFilters">
-          <template #prefix><NIcon><SearchOutline /></NIcon></template>
-        </NInput>
-        <NSelect v-if="activeTab === 'authoritative'" v-model:value="filterType" :options="typeOptions" clearable :placeholder="t('dns.zones.zoneType')" style="width: 160px;" @update:value="applyFilters" />
-        <NButton @click="loadData">{{ t('common.refresh') }}</NButton>
+    <TCard :bordered="false" class="filter-bar">
+      <TTabs :value="activeTab" @change="handleTabChange">
+        <TTabPanel value="authoritative" :label="t('dns.zones.tabAuthoritative')" />
+        <TTabPanel value="allowed" :label="t('dns.zones.tabAllowed')" />
+        <TTabPanel value="blocked" :label="t('dns.zones.tabBlocked')" />
+      </TTabs>
+      <TSpace size="small" align="center" class="filter-controls">
+        <TInput
+          v-model="searchQuery"
+          clearable
+          :placeholder="t('common.search')"
+          style="width: 220px"
+          @enter="tableRef?.reload()"
+          @clear="tableRef?.reload()"
+        >
+          <template #prefix-icon><TIcon name="search" /></template>
+        </TInput>
+        <TSelect
+          v-if="activeTab === 'authoritative'"
+          v-model="filterType"
+          :options="typeOptions"
+          clearable
+          :placeholder="t('dns.zones.zoneType')"
+          style="width: 160px"
+        />
+        <TButton variant="outline" @click="tableRef?.reload()">{{ t('common.refresh') }}</TButton>
         <template v-if="checkedKeys.length > 0">
-          <NText depth="3">{{ t('dns.zones.selectedCount', { n: checkedKeys.length }) }}</NText>
-          <NButton v-if="perm.canDelete('dns')" type="error" secondary :loading="batchDeleting" @click="showBatchDeleteConfirm = true">
+          <span class="selected-count">{{ t('dns.zones.selectedCount', { n: checkedKeys.length }) }}</span>
+          <TButton
+            v-if="perm.canDelete('dns')"
+            theme="danger"
+            variant="outline"
+            :loading="batchDeleting"
+            @click="confirmBatchDelete"
+          >
             {{ t('dns.zones.batchDelete') }}
-          </NButton>
+          </TButton>
         </template>
-      </NSpace>
-    </div>
+      </TSpace>
+    </TCard>
 
-    <NDataTable
-      v-model:checked-row-keys="checkedKeys"
+    <RemoteTable
+      ref="tableRef"
+      v-model:selected-keys="checkedKeys"
       :columns="columns"
-      :data="zones"
-      :loading="loading" remote
-      :pagination="pagination"
-      :row-key="(row: DNSZone) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
+      :fetcher="listDNSZones"
+      :params="params"
+      selectable
     />
 
-    <!-- Create/Edit Zone Modal -->
-    <NModal v-if="showCreateModal" v-model:show="showCreateModal" preset="card" :title="editingZone ? t('dns.zones.editZone') : t('dns.zones.createZone')" style="width: 640px;">
-      <NForm :model="formData" label-placement="left" label-width="120px">
-        <NFormItem :label="t('dns.zones.zoneName')" path="name">
-          <NInput v-model:value="formData.name" :disabled="!!editingZone" />
-        </NFormItem>
-        <NFormItem :label="t('dns.zones.zoneType')" path="type">
-          <NSelect v-model:value="formData.type" :options="zoneTypeOptions" :disabled="!!editingZone" />
-        </NFormItem>
+    <TDialog
+      v-model:visible="showCreate"
+      :header="editing ? t('dns.zones.editZone') : t('dns.zones.createZone')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="640px"
+      @confirm="handleSubmit"
+    >
+      <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
+        <TFormItem :label="t('dns.zones.zoneName')" name="name">
+          <TInput v-model="formData.name" :disabled="!!editing" />
+        </TFormItem>
+        <TFormItem :label="t('dns.zones.zoneType')" name="type">
+          <TSelect v-model="formData.type" :options="zoneTypeOptions" :disabled="!!editing" />
+        </TFormItem>
         <template v-if="!isSpecialType">
-          <NFormItem :label="t('dns.zones.ttl')" path="default_ttl">
-            <NInputNumber v-model:value="formData.default_ttl" :min="60" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.primaryNs')" path="soa_mname">
-            <NInput v-model:value="formData.soa_mname" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.adminEmail')" path="soa_rname">
-            <NInput v-model:value="formData.soa_rname" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.refresh')" path="refresh">
-            <NInputNumber v-model:value="formData.refresh" :min="0" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.retry')" path="retry">
-            <NInputNumber v-model:value="formData.retry" :min="0" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.expire')" path="expire">
-            <NInputNumber v-model:value="formData.expire" :min="0" />
-          </NFormItem>
-          <NFormItem :label="t('dns.zones.minimum')" path="minimum">
-            <NInputNumber v-model:value="formData.minimum" :min="0" />
-          </NFormItem>
+          <TFormItem :label="t('dns.zones.ttl')" name="default_ttl">
+            <TInputNumber v-model="formData.default_ttl" :min="60" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.primaryNs')" name="soa_mname">
+            <TInput v-model="formData.soa_mname" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.adminEmail')" name="soa_rname">
+            <TInput v-model="formData.soa_rname" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.refresh')" name="refresh">
+            <TInputNumber v-model="formData.refresh" :min="0" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.retry')" name="retry">
+            <TInputNumber v-model="formData.retry" :min="0" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.expire')" name="expire">
+            <TInputNumber v-model="formData.expire" :min="0" />
+          </TFormItem>
+          <TFormItem :label="t('dns.zones.minimum')" name="minimum">
+            <TInputNumber v-model="formData.minimum" :min="0" />
+          </TFormItem>
         </template>
-        <NFormItem v-if="activeTab !== 'authoritative' || isSpecialType" :label="t('dns.zones.specialHint')">
-          <NText depth="3" style="font-size: 12px;">{{ t('dns.zones.specialHintText') }}</NText>
-        </NFormItem>
-        <NFormItem :label="t('common.enabled')" path="enabled">
-          <NSwitch v-model:value="formData.enabled" />
-        </NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showCreateModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleSubmit">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+        <TAlert
+          v-if="activeTab !== 'authoritative' || isSpecialType"
+          theme="info"
+          :message="t('dns.zones.specialHintText')"
+        />
+        <TFormItem :label="t('common.enabled')" name="enabled">
+          <TSwitch v-model="formData.enabled" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Clone Zone Modal -->
-    <NModal v-model:show="showCloneModal" preset="card" :title="t('dns.zones.cloneTitle')" style="width: 480px;">
-      <NForm label-placement="left" label-width="120px">
-        <NFormItem :label="t('dns.zones.zoneName')">
-          <NText depth="2">{{ cloneSource?.name }}</NText>
-        </NFormItem>
-        <NFormItem :label="t('dns.zones.newName')">
-          <NInput v-model:value="cloneName" :placeholder="cloneSource ? `${cloneSource.name}-copy` : ''" />
-        </NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showCloneModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleClone">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showClone"
+      :header="t('dns.zones.cloneTitle')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleClone"
+    >
+      <TForm label-align="top">
+        <TFormItem :label="t('dns.zones.zoneName')">
+          <TInput :value="cloneSource?.name" disabled />
+        </TFormItem>
+        <TFormItem :label="t('dns.zones.newName')">
+          <TInput v-model="cloneName" :placeholder="cloneSource ? `${cloneSource.name}-copy` : ''" />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Convert Zone Type Modal -->
-    <NModal v-model:show="showConvertModal" preset="card" :title="t('dns.zones.convertTitle')" style="width: 480px;">
-      <NForm label-placement="left" label-width="120px">
-        <NFormItem :label="t('dns.zones.zoneName')">
-          <NText depth="2">{{ convertSource?.name }}</NText>
-        </NFormItem>
-        <NFormItem :label="t('dns.zones.convertTarget')">
-          <NSelect v-model:value="convertTarget" :options="convertTargetOptions" />
-        </NFormItem>
-        <NFormItem>
-          <NText depth="3" style="font-size: 12px;">{{ t('dns.zones.convertHint') }}</NText>
-        </NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showConvertModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="submitting" :disabled="!perm.canWrite('dns')" @click="handleConvert">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog
-      :show="showDeleteConfirm"
-      :message="t('common.deleteConfirm')"
-      @confirm="handleDelete"
-      @cancel="showDeleteConfirm = false"
-    />
-
-    <ConfirmDialog
-      :show="showBatchDeleteConfirm"
-      :message="t('dns.zones.batchDeleteConfirm', { n: checkedKeys.length })"
-      @confirm="handleBatchDelete"
-      @cancel="showBatchDeleteConfirm = false"
-    />
+    <TDialog
+      v-model:visible="showConvert"
+      :header="t('dns.zones.convertTitle')"
+      :confirm-btn="{ loading: submitting, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleConvert"
+    >
+      <TForm label-align="top">
+        <TFormItem :label="t('dns.zones.zoneName')">
+          <TInput :value="convertSource?.name" disabled />
+        </TFormItem>
+        <TFormItem :label="t('dns.zones.convertTarget')">
+          <TSelect v-model="convertTarget" :options="convertTargetOptions" />
+        </TFormItem>
+        <TAlert theme="info" :message="t('dns.zones.convertHint')" />
+      </TForm>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.filter-bar :deep(.t-card__body) {
+  padding: 12px 16px;
+}
+.filter-controls {
+  margin-top: 12px;
+}
+.selected-count {
+  font-size: 13px;
+  color: #6b7280;
+}
+</style>

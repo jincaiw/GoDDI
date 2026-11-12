@@ -1,5 +1,7 @@
 # GoDDI 前端迁移 soybean-admin 实施方案
 
+> **【已被取代（round 226 注记）】** 本方案描述的 soybean-admin/Naive UI 迁移**未被执行**：实际落地的是 **TDesign Vue Next Starter** 骨架（见 `docs/tdesign-migration.md`，30 个 TDesign 页面、Naive UI 100% 移除）。本文件保留为历史方案记录，其中的文件路径与组件引用不反映当前代码。
+
 > 版本：v1.1 ｜ 日期：2026-09-07 ｜ 模板：[soybeanjs/soybean-admin](https://github.com/soybeanjs/soybean-admin) v2.2.0（MIT）
 > 结论：技术栈高度兼容（Vue3 + Vite8 + TS + Pinia + Naive UI），可整体替换，预估 2–4 个工作日完成主体迁移。
 > v1.1 修订：经对 v2.2.0 实际源码逐项核验后修正——新增「版本差异表」；纠正动态路由命名约定；请求层适配策略由「复用模板请求实例」改为「原生 axios 封装整体替换」；proxy 配置方式修正为 .env 驱动。

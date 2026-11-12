@@ -46,3 +46,4 @@ type LeaseStore interface {
 }
 
 var _ LeaseStore = (*lease.Manager)(nil)
+var _ LeaseStore = (*lease.WALLeaseStore)(nil)

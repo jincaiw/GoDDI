@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,9 @@ func TestCORS_NonWhitelistedOrigin(t *testing.T) {
 	if v := rec.Header().Get("Access-Control-Allow-Origin"); v != "" {
 		t.Errorf("Access-Control-Allow-Origin = %q, want empty for non-whitelisted origin", v)
 	}
+	if v := rec.Header().Get("Access-Control-Expose-Headers"); v != "" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want empty for non-whitelisted origin", v)
+	}
 }
 
 func TestCORS_WhitelistedOrigin(t *testing.T) {
@@ -190,6 +194,18 @@ func TestCORS_WhitelistedOrigin(t *testing.T) {
 	}
 	if v := rec.Header().Get("Access-Control-Allow-Credentials"); v != "true" {
 		t.Errorf("Access-Control-Allow-Credentials = %q, want %q", v, "true")
+	}
+	exposed := strings.Split(strings.ToLower(rec.Header().Get("Access-Control-Expose-Headers")), ",")
+	for _, want := range []string{"etag", "location", "x-request-id"} {
+		found := false
+		for _, value := range exposed {
+			if strings.TrimSpace(value) == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing exposed header %q in %v", want, exposed)
+		}
 	}
 }
 
@@ -307,12 +323,35 @@ func TestCORS_PreflightOptions(t *testing.T) {
 
 	req := httptest.NewRequest("OPTIONS", "/api/v1/test", nil)
 	req.Header.Set("Origin", "http://localhost:8080")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "content-type, authorization, idempotency-key, if-match")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("OPTIONS response status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	allowed := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers"))
+	for _, name := range []string{"content-type", "authorization", "idempotency-key", "if-match"} {
+		found := false
+		for _, value := range strings.Split(allowed, ",") {
+			if strings.TrimSpace(value) == name {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing CORS header %q in %q", name, allowed)
+		}
+	}
+	denied := httptest.NewRequest("OPTIONS", "/api/v1/test", nil)
+	denied.Header.Set("Origin", "https://evil.example.com")
+	denied.Header.Set("Access-Control-Request-Method", "POST")
+	denied.Header.Set("Access-Control-Request-Headers", "idempotency-key, if-match")
+	deniedRec := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRec, denied)
+	if deniedRec.Code != http.StatusNoContent || deniedRec.Header().Get("Access-Control-Allow-Origin") != "" || deniedRec.Header().Get("Access-Control-Allow-Headers") != "" {
+		t.Errorf("unexpected CORS grant to unauthorized origin: status=%d headers=%v", deniedRec.Code, deniedRec.Header())
 	}
 }
 

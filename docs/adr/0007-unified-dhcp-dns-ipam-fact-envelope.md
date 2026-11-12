@@ -1,9 +1,10 @@
 # ADR-0007：DHCP-DNS-IPAM 统一事实事件边界（迁移期契约）
 
 - 状态：**迁移期协议契约已建立，生产事实源尚未统一**（2026-09-13）
+  > **状态更新（2026-11-12，round 286–287）**：统一事实链已成为唯一 DHCP→DNS 生产者；旧的 `dhcp_dns_events` durable outbox、其消费者、上行/下行复制域与数据库表已**全部删除**。`DNSFactsConsumer` 从 unified facts 派生 DNS 记录（`DNSLink.ApplyOne` 幂等 + 批量 `ReloadZones`），split 部署经 `DomainFacts` 复制送达。本文档保留迁移期契约的历史判断；当前实现见 `docs/audit/IMPLEMENTATION-STATUS.md` §1ad/§1ah/§1ai。
 - 范围：N6
 - 基线：`v0.8.3` / `41e724a`
-- 相关：ADR-0004、ADR-0005、`internal/facts`、`dhcp_dns_events`、IPAM observation
+- 相关：ADR-0004、ADR-0005、`internal/facts`、IPAM observation（旧 `dhcp_dns_events` 已退役）
 
 ## 背景
 

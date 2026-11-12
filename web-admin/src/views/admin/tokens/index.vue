@@ -1,128 +1,198 @@
 <script setup lang="ts">
-import { ref, reactive, h, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { NButton, NSpace, useMessage } from 'naive-ui'
-import PageHeader from '@/components/PageHeader.vue'
-import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { usePermission } from '@/composables/usePermission'
-import { listAPITokens, createAPIToken, deleteAPIToken, type APIToken } from '@/service/api/goddi/user'
+import { reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { DialogPlugin, Link as TLink, MessagePlugin } from 'tdesign-vue-next';
+import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
+import RemoteTable from '@/components/RemoteTable.vue';
+import { usePermission } from '@/composables/usePermission';
+import {
+  createAPIToken,
+  deleteAPIToken,
+  listAPITokens,
+  type APIToken
+} from '@/service/api/goddi/user';
 
-const { t } = useI18n()
-const message = useMessage()
-const perm = usePermission()
+defineOptions({ name: 'AdminTokensPage' });
 
-const loading = ref(false)
-const creating = ref(false)
-const tokens = ref<APIToken[]>([])
-const showCreateModal = ref(false)
-const showTokenModal = ref(false)
-const showDeleteConfirm = ref(false)
-const deletingId = ref('')
-const createdToken = ref('')
+const { t } = useI18n();
+const perm = usePermission();
 
-const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0, showSizePicker: true, pageSizes: [10, 20, 50] })
-const createForm = reactive<{ name: string; description: string; expires_at: number | null }>({ name: '', description: '', expires_at: null })
+const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const formRef = ref<FormInstanceFunctions | null>(null);
+const showCreate = ref(false);
+const showToken = ref(false);
+const creating = ref(false);
+const createdToken = ref('');
 
-const columns = [
-  { title: () => t('admin.tokens.tokenName'), key: 'name' },
-  { title: () => t('common.description'), key: 'description', ellipsis: { tooltip: true } },
-  { title: () => t('admin.users.username'), key: 'username' },
-  { title: () => t('admin.tokens.expiresAt'), key: 'expires_at', width: 160 },
-  { title: () => t('admin.tokens.lastUsedAt'), key: 'last_used_at', width: 160 },
-  { title: () => t('common.actions'), key: 'actions', width: 100, render: (row: APIToken) => h(NButton, { size: 'small', text: true, type: 'error', disabled: !perm.canDelete('token'), onClick: () => { if (!perm.canDelete('token')) return; deletingId.value = row.id; showDeleteConfirm.value = true } }, { default: () => t('common.delete') }) },
-]
+const createForm = reactive<{ name: string; description: string; expires_at: number | null }>({
+  name: '',
+  description: '',
+  expires_at: null
+});
 
-async function loadData() {
-  loading.value = true
-  try {
-    const result = await listAPITokens({ page: pagination.page, page_size: pagination.pageSize })
-    tokens.value = result.data
-    pagination.itemCount = result.meta.total
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { loading.value = false }
+const formRules = {
+  name: [{ required: true, message: t('admin.tokens.tokenName') + ' required', type: 'error' }]
+};
+
+const columns: PrimaryTableCol[] = [
+  { colKey: 'name', title: t('admin.tokens.tokenName') },
+  { colKey: 'description', title: t('common.description'), ellipsis: true },
+  { colKey: 'username', title: t('admin.users.username'), width: 140 },
+  { colKey: 'expires_at', title: t('admin.tokens.expiresAt'), width: 170 },
+  { colKey: 'last_used_at', title: t('admin.tokens.lastUsedAt'), width: 170 },
+  {
+    colKey: 'op',
+    title: t('common.actions'),
+    width: 100,
+    cell: (h, { row }) =>
+      h(
+        TLink,
+        { theme: 'danger', disabled: !perm.canDelete('token'), onClick: () => confirmDelete((row as APIToken).id) },
+        () => t('common.delete')
+      )
+  }
+];
+
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
-function handlePageChange(page: number) { pagination.page = page; loadData() }
-function handlePageSizeChange(pageSize: number) { pagination.pageSize = pageSize; pagination.page = 1; loadData() }
-
 function openCreate() {
-  if (!perm.canWrite('token')) return
-  Object.assign(createForm, { name: '', description: '', expires_at: null })
-  showCreateModal.value = true
+  if (!perm.canWrite('token')) return;
+  Object.assign(createForm, { name: '', description: '', expires_at: null });
+  showCreate.value = true;
 }
 
 async function handleCreate() {
-  if (!perm.canWrite('token')) return
-  creating.value = true
+  if (!perm.canWrite('token')) return;
+  const valid = await formRef.value?.validate();
+  if (valid !== true) return;
+
+  creating.value = true;
   try {
     const result = await createAPIToken({
       name: createForm.name,
       description: createForm.description || undefined,
-      expires_at: createForm.expires_at ? new Date(createForm.expires_at).toISOString() : undefined,
-    })
-    createdToken.value = result.token
-    showCreateModal.value = false
-    showTokenModal.value = true
-    loadData()
-  } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) } finally { creating.value = false }
+      expires_at: createForm.expires_at ? new Date(createForm.expires_at).toISOString() : undefined
+    });
+    createdToken.value = result.token;
+    showCreate.value = false;
+    showToken.value = true;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    creating.value = false;
+  }
 }
 
-async function handleDelete() {
-  if (!perm.canDelete('token')) return
-  try { await deleteAPIToken(deletingId.value); message.success(t('common.deleteSuccess')); loadData() } catch (err: unknown) { message.error(err instanceof Error ? err.message : t('common.failed')) }
-  showDeleteConfirm.value = false
+function confirmDelete(id: string) {
+  if (!perm.canDelete('token')) return;
+  const dlg = DialogPlugin.confirm({
+    header: t('common.delete'),
+    body: t('common.deleteConfirm'),
+    theme: 'danger',
+    onConfirm: async () => {
+      try {
+        await deleteAPIToken(id);
+        void MessagePlugin.success(t('common.deleteSuccess'));
+        await tableRef.value?.reload();
+      } catch (err) {
+        msgError(err);
+      }
+      dlg.hide();
+    }
+  });
 }
 
 function copyToken() {
-  navigator.clipboard.writeText(createdToken.value)
-  message.success('Copied!')
+  void navigator.clipboard.writeText(createdToken.value).then(
+    () => void MessagePlugin.success('Copied!'),
+    () => void MessagePlugin.warning('Clipboard unavailable')
+  );
 }
-
-onMounted(loadData)
 </script>
 
 <template>
-  <div>
-    <PageHeader :title="t('admin.tokens.title')">
-      <NButton v-if="perm.canWrite('token')" type="primary" @click="openCreate">{{ t('admin.tokens.createToken') }}</NButton>
-    </PageHeader>
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <h2>{{ t('admin.tokens.title') }}</h2>
+      <TButton v-if="perm.canWrite('token')" theme="primary" @click="openCreate">
+        <template #icon><TIcon name="add" /></template>
+        {{ t('admin.tokens.createToken') }}
+      </TButton>
+    </TCard>
 
-    <NDataTable
-      :columns="columns"
-      :data="tokens"
-      :loading="loading"
-      remote :pagination="pagination"
-      :row-key="(row: APIToken) => row.id"
-      @update:page="handlePageChange"
-      @update:page-size="handlePageSizeChange"
-    />
+    <RemoteTable ref="tableRef" :columns="columns" :fetcher="listAPITokens" />
 
-    <!-- Create Token Modal -->
-    <NModal v-if="showCreateModal" v-model:show="showCreateModal" :title="t('admin.tokens.createToken')" preset="card" style="width: 450px;">
-      <NForm :model="createForm" label-placement="left" label-width="80px">
-        <NFormItem :label="t('admin.tokens.tokenName')"><NInput v-model:value="createForm.name" :disabled="!perm.canWrite('token')" /></NFormItem>
-        <NFormItem :label="t('common.descriptions')"><NInput v-model:value="createForm.description" type="textarea" :disabled="!perm.canWrite('token')" /></NFormItem>
-        <NFormItem :label="t('admin.tokens.expiresAt')"><NDatePicker v-model:value="createForm.expires_at" type="datetime" clearable style="width: 100%;" :disabled="!perm.canWrite('token')" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showCreateModal = false">{{ t('common.cancel') }}</NButton>
-          <NButton type="primary" :loading="creating" :disabled="!perm.canWrite('token')" @click="handleCreate">{{ t('common.save') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
+    <TDialog
+      v-model:visible="showCreate"
+      :header="t('admin.tokens.createToken')"
+      :confirm-btn="{ loading: creating, content: t('common.save') }"
+      :cancel-btn="t('common.cancel')"
+      width="480px"
+      @confirm="handleCreate"
+    >
+      <TForm ref="formRef" :data="createForm" :rules="formRules" label-align="top">
+        <TFormItem :label="t('admin.tokens.tokenName')" name="name">
+          <TInput v-model="createForm.name" :disabled="!perm.canWrite('token')" />
+        </TFormItem>
+        <TFormItem :label="t('common.descriptions')" name="description">
+          <TTextarea v-model="createForm.description" :disabled="!perm.canWrite('token')" :autosize="{ minRows: 2 }" />
+        </TFormItem>
+        <TFormItem :label="t('admin.tokens.expiresAt')" name="expires_at">
+          <TDatePicker
+            v-model="createForm.expires_at"
+            enable-time-picker
+            clearable
+            style="width: 100%"
+            :disabled="!perm.canWrite('token')"
+          />
+        </TFormItem>
+      </TForm>
+    </TDialog>
 
-    <!-- Token Created Modal -->
-    <NModal v-if="showTokenModal" v-model:show="showTokenModal" :title="t('admin.tokens.tokenCreated')" preset="card" style="width: 500px;" :mask-closable="false">
-      <NAlert type="warning" style="margin-bottom: 16px;">{{ t('admin.tokens.tokenWarning') }}</NAlert>
-      <NInput :value="createdToken" type="textarea" :rows="3" readonly />
-      <template #footer>
-        <NSpace justify="end">
-          <NButton type="primary" @click="copyToken">{{ t('admin.tokens.copyToken') }}</NButton>
-          <NButton @click="showTokenModal = false">{{ t('common.confirm') }}</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <ConfirmDialog :show="showDeleteConfirm" :message="t('common.deleteConfirm')" @confirm="handleDelete" @cancel="showDeleteConfirm = false" />
+    <TDialog
+      v-model:visible="showToken"
+      :header="t('admin.tokens.tokenCreated')"
+      :footer="false"
+      :close-on-overlay-click="false"
+      width="520px"
+    >
+      <TAlert theme="warning" :message="t('admin.tokens.tokenWarning')" class="token-alert" />
+      <TTextarea :value="createdToken" readonly :autosize="{ minRows: 3 }" />
+      <div class="token-actions">
+        <TButton theme="primary" @click="copyToken">{{ t('admin.tokens.copyToken') }}</TButton>
+        <TButton variant="outline" @click="showToken = false">{{ t('common.confirm') }}</TButton>
+      </div>
+    </TDialog>
   </div>
 </template>
+
+<style scoped>
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.td-page-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.token-alert {
+  margin-bottom: 16px;
+}
+.token-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+</style>
