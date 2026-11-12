@@ -76,7 +76,7 @@
 
 ## P1
 - **D-08 SQLite 磁盘满/fsync 错误未验证**：`sqlitepolicy` 只设 PRAGMA；需 ENOSPC/fsync 失败注入，要求绑定失败且不 ACK（`handler.go` 路径）。测试：填盘/错误注入。
-- **D-09 IPAM 陈旧导致错分配**：DHCP 从本地 `ipam_subnets` 分配，无 freshness 栅栏；建议分配前校验 generation/updated_at 或依赖发布屏障（`dataplane/sync.go`、`handler` 分配路径）。
+- **D-09 IPAM 陈旧导致错分配**：**部分已实现（2026-11-12）**：新增 `internal/ipam/projection.go` 的 `ProjectionGaps`（非阻塞缺口检测，启动时告警 scopes 子网无本地 `ipam_subnets` 投影）与 `NewProjectionGuard`（**可选** fail-closed：`dhcp.require_ipam_projection=true` 时分配前拒绝无投影 scope，静默不 ACK）；Server `SetScopeProjectionGuard`，main 接线，配置/env/CONFIG-REFERENCE 已加；测试 `projection_test.go` 通过。**剩余**：真正的"相对控制面滞后"需跨面发布水位（E-3/ADR-0005），本地面无法证明；严格拦截默认关闭以免误伤独立 scope。
 - **D-10 Outbox/consumer 故障注入缺失**：relay 中断/重复投递/消费者崩溃未测；无 DLQ（`facts/relay.go`、`ipam/facts_consumer.go`）。补故障注入 + 可选 DLQ。
 - **D-11 DHCP 报文重放/去重**：无显式事务号去重（依赖 IP/MAC 语义）；**已补租约层幂等/重复/并发测试并修复一处真实缺陷（2026-11-12）**：并发抢同一地址时落败方原返回裸 `UNIQUE constraint` 错误，现映射为 `ErrAddressTaken`（`internal/dhcp/lease/lease.go` `createLeaseWithStatus`），使调用方可按语义重试；测试 `internal/dhcp/lease/idempotency_test.go`（DISCOVER 重传同 ID/单行、异 MAC 拒绝、重复 Activate/Release 幂等、并发同址仅一胜者）全 PASS。
 - **D-12 备份/升级恢复演练缺失**：`internal/backup/*` 存在但无恢复演练；systemd 单实例约束需文档化（`deployments/systemd/goddi.service`）。

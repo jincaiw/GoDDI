@@ -494,6 +494,17 @@ func (s *Server) HandleRequest(msg *dhcpv4.DHCPv4, ifaceName string, serverIP ne
 		return nil, nil
 	}
 
+	// D-09 (opt-in): refuse to commit a binding for a scope whose subnet has no
+	// local IPAM projection. Silence, not NAK: the address may be fine, the
+	// server just cannot confirm the config is current.
+	if s.scopeProjectionGuard != nil {
+		if err := s.scopeProjectionGuard(sc.ID, sc.Subnet); err != nil {
+			slog.Warn("DHCP: withholding the ACK; scope IPAM projection missing",
+				"scope", sc.ID, "subnet", sc.Subnet, "error", err)
+			return nil, nil
+		}
+	}
+
 	// Commit the binding BEFORE building the ACK: the client treats the ACK as
 	// authoritative, so the state it relies on must already be durable.
 	var bound *lease.Lease

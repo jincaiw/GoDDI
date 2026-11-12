@@ -1105,6 +1105,16 @@ func runServer(configPath string) error {
 		// that arrived after packets were flowing would leave a window in
 		// which neither the old nor the new rule was in force.
 		dhcpSrv.SetRenewOutOfPoolPolicy(cfg.DHCP.RenewOutOfPoolPolicy)
+		if cfg.DHCP.RequireIPAMProjection {
+			dhcpSrv.SetScopeProjectionGuard(ipam.NewProjectionGuard(dhcpStore.DB))
+			slog.Info("DHCP: IPAM projection guard enabled (require_ipam_projection)")
+		}
+		// D-09 non-blocking signal: scopes whose subnet has no local IPAM
+		// projection. Allocation is unchanged unless require_ipam_projection
+		// (the guard above) is set; this only makes the gap visible.
+		if gaps, gerr := ipam.ProjectionGaps(context.Background(), dhcpStore.DB); gerr == nil && len(gaps) > 0 {
+			slog.Warn("DHCP: scopes missing local IPAM projection", "count", len(gaps))
+		}
 		slog.Info("DHCP server initialized",
 			"interfaces", cfg.DHCP.Interfaces, "lease_store", dhcpStore.DSN())
 	}

@@ -251,6 +251,11 @@ type DHCPConfig struct {
 	// LeaseWALPath is the WAL file for lease_store=wal. Defaults to
 	// <server.data_dir>/leases.wal.
 	LeaseWALPath string `yaml:"lease_wal_path"`
+	// RequireIPAMProjection, when true, makes the DHCP allocation path refuse a
+	// scope whose subnet has no local IPAM projection (D-09). Default false: the
+	// projection-gap detector/readiness is the signal and allocation is
+	// unchanged; set true to fail closed.
+	RequireIPAMProjection bool `yaml:"require_ipam_projection"`
 }
 
 // IPAMConfig holds IPAM configuration.
@@ -403,6 +408,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	setEnvString("GODDI_DHCP_RENEW_OUT_OF_POOL_POLICY", &cfg.DHCP.RenewOutOfPoolPolicy)
 	setEnvString("GODDI_DHCP_LEASE_STORE", &cfg.DHCP.LeaseStore)
 	setEnvString("GODDI_DHCP_LEASE_WAL_PATH", &cfg.DHCP.LeaseWALPath)
+	setEnvBool("GODDI_DHCP_REQUIRE_IPAM_PROJECTION", &cfg.DHCP.RequireIPAMProjection)
 
 	// The HA peer token is a shared secret, so it is read from the environment
 	// as well as from the file. Every other dhcp_ha setting is deployment

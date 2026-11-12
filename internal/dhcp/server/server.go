@@ -49,6 +49,11 @@ type Server struct {
 	// Server built without the setter keeps the historical behaviour.
 	renewOutOfPoolPolicy string
 
+	// scopeProjectionGuard, when set, is a fail-closed pre-allocation check
+	// (D-09, opt-in via dhcp.require_ipam_projection). Nil keeps the default
+	// behaviour unchanged.
+	scopeProjectionGuard func(scopeID, subnet string) error
+
 	// request admission is deliberately bounded: a slow lease database must not
 	// let an unbounded number of packets accumulate in memory. A full queue
 	// drops the packet silently from the protocol's point of view; the client
@@ -444,6 +449,12 @@ func (s *Server) SetRenewOutOfPoolPolicy(policy string) {
 		slog.Warn("DHCP: unknown renew_out_of_pool_policy; keeping the historical allow behaviour", "policy", policy)
 		s.renewOutOfPoolPolicy = config.RenewOutOfPoolAllow
 	}
+}
+
+// SetScopeProjectionGuard installs an optional fail-closed IPAM projection
+// check consulted before a binding is committed.
+func (s *Server) SetScopeProjectionGuard(fn func(scopeID, subnet string) error) {
+	s.scopeProjectionGuard = fn
 }
 
 // strictOutOfPoolRenewal reports whether the operator asked to refuse

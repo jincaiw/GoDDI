@@ -43,6 +43,6 @@
 | DHCP→IPAM→DDNS 事务性 Outbox（单节点） | PASS |
 | Outbox 幂等/重放机制 | PARTIAL（缺故障注入证据） |
 | DNS A/AAAA/PTR 幂等/失败留箱 | PARTIAL |
-| IPAM 滞后时 DHCP 分配安全 | PARTIAL/风险（无 freshness 栅栏） |
+| IPAM 滞后时 DHCP 分配安全 | PARTIAL→**基础已实现（D-09, 2026-11-12）**：`ipam.ProjectionGaps` 缺口检测（启动告警）+ 可选严格栅栏 `ipam.NewProjectionGuard`（`dhcp.require_ipam_projection`）；跨面水位仍待 E-3 |
 | 两节点配置写协调 | NOT_IMPLEMENTED |
 | VRF/VLAN/Prefix 重叠运行级验证 | NOT_VERIFIED |

@@ -1856,3 +1856,11 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - **修复真实缺陷**：`internal/dhcp/lease/lease.go` `createLeaseWithStatus` 把并发插入触发的 `UNIQUE constraint failed: dhcp_leases.scope_id, dhcp_leases.ip_address` 映射为 `ErrAddressTaken`（原为裸错误，调用方无法按"地址被占"语义重试）。
 - `go test ./internal/dhcp/lease ./internal/dhcp/server` 全绿；`go build ./...` OK。
 - D-10（outbox 故障注入）：现有覆盖已含 enqueue 幂等/冲突、replica 快照原子替换/校验失败/断点、consumer gap/失败留箱；relay 中断与 DLQ 仍 NOT_VERIFIED。
+
+## 1bc. D-09 IPAM 投影缺口检测 + 可选严格栅栏（round 363）
+
+- `internal/ipam/projection.go`：`ProjectionGaps(ctx,db)`（enabled scope 子网无 `ipam_subnets.cidr` 即缺口；非阻塞）、`NewProjectionGuard(db)`（scope 子网无投影 → `ErrProjectionMissing`）。
+- `internal/dhcp/server`：`SetScopeProjectionGuard`；handler 在 MayBind 后、提交前调用（仅当注入），失败静默不 ACK。
+- 配置：`dhcp.require_ipam_projection`（默认 false）+ `GODDI_DHCP_REQUIRE_IPAM_PROJECTION`；CONFIG-REFERENCE 已加。main：启用时注入 guard；始终启动打印缺口计数告警（非阻塞）。
+- 测试：`internal/ipam/projection_test.go`（缺口检测仅列未投影且启用 scope；guard 拒绝未投影、放行已投影）。`go test ./internal/ipam ./internal/dhcp/server ./internal/config` 全绿。
+- 边界：跨面"相对控制面滞后"需 E-3/ADR-0005 水位，本地面不能证明；严格拦截默认关闭以免误伤独立 scope。
