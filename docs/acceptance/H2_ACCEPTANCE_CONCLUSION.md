@@ -8,7 +8,7 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=171，FAIL=0，NOT_VERIFIED=23） |
+| **Level 1 判定** | **PASS**（PASS=176，FAIL=0，NOT_VERIFIED=23） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
 | 已知架构缺口 | ADR-0005 跨节点配置发布未实现（跨节点 DNS/IPAM 配置一致性 NOT_VERIFIED） |
@@ -23,8 +23,9 @@
 | DNS 双节点 | 6 | 0 | 3 | 建区/记录/删除、真实查询、控制面宕机仍应答 |
 | DNS 传送 | 8 | 0 | 0 | **签名 AXFR**、无签名被拒、SOA、**IXFR**、**NOTIFY** |
 | DHCP 双节点 | 10 | 0 | 3 | 真实 udhcpc DORA、镜像可见、无重复 active 租约、分区 fail-closed、显式 degrade、备不接管 |
-| 故障注入 H2-001..020 | 21 | 0 | 15 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
-| IPAM/DDNS | 13 | 0 | 2 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
+| 故障注入 H2-001..020（容器/进程） | 22 | 0 | 14 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
+| 故障注入 H2-009/010/011/012/016（应用级） | 5 | 0 | 0 | 事件重投幂等；租约哈希/越界篡改→启动拒绝发布快照（fail-closed）；facts 水位不一致→投影缺口指标；写故障窗口下已持久租约零丢失；IPAM 消费者故障后可恢复并排空 backlog |
+| IPAM/DDNS | 12 | 0 | 3 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
 | Web 控制台 | 113 | 0 | 0 | 18 套 Playwright + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
 
 ## 3. 强制项核验（任务 §8）
@@ -59,11 +60,18 @@
 
 > 缺证据前，Enterprise H2 **正式硬件 GA 不得宣称通过**；Docker Level 1 仅作为软件级门禁。
 
+## 5b. 本轮新增修复（验收基础设施，非产品）
+
+- **`/metrics` 需 Bearer 鉴权**：此前多处把"指标未出现"记为 NOT_VERIFIED 实为 401。`verify-consistency`、`dns-acceptance`、`ipam-acceptance`、`app-fault` 均已带 token 取指标 → LKG revision（dhcp/dns）与 `goddi_dhcp_ipam_projection_gaps` 现可核验。
+- **udhcpc 改写客户端网络**：DHCP 类测试会改动 client 容器的地址/路由，DNS/后续套件前必须恢复 fixture 网络；已内建恢复。
+- **探针重装**：`make h2-down` 会删除容器，DNS 传送的 Go 探针（axfrprobe/notifyprobe）改由 `build-probes.sh` 自动重建安装。
+- **故障注入顺序**：`h2-fault-test` 曾误调 `run-all.sh`，已改为 `fault-scenarios.sh`（含应用级）。
+
 ## 6. 原始证据索引
 
 - 机器可读汇总：`tests/h2/reports/H2-REPORT-<ts>.json`（含各套件计数、故障场景判定、Level 2 清单）
 - 故障场景：`tests/h2/reports/faults-<ts>.jsonl`（逐条 PASS/FAIL/NOT_VERIFIED）
-- 套件明细：`tests/h2/reports/{dns,dns-transfer,dhcp,ipam,web}-summary-<ts>.json`
+- 套件明细：`tests/h2/reports/{dns,dns-transfer,dhcp,ipam,web,app-faults}-summary-<ts>.json`
 - 现场快照：`tests/h2/reports/<ts>/`（各容器 logs、inspect、HA 状态、网络列表、compose ps）
 - 复现命令：`make h2-up && make h2-test`、`make h2-fault-test`、`make h2-fault-kernel`、`make h2-report`、`make h2-down`
 

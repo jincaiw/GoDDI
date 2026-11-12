@@ -46,6 +46,7 @@ make h2-down                  # 清理
 见 [`H2_ACCEPTANCE_CONCLUSION.md`](H2_ACCEPTANCE_CONCLUSION.md)：Level 1 **PASS**（PASS=171 / FAIL=0 / NOT_VERIFIED=23，8/8 强制项无违规）；Level 2 物理 5 项 **NOT_VERIFIED**；已知缺口（ADR-0005 等）已列明。
 
 ## 状态（滚动）
+- Round 11（应用级故障注入 H2-009/010/011/012/016）：`app-fault.sh` 真实篡改持久状态验证 fail-closed → **APP-FAULTS PASS=5 FAIL=0 NOT_VERIFIED=0**（事件重投幂等、越界租约→启动拒绝快照、水位不一致→投影缺口指标、写故障零丢失、消费者故障恢复）。另修正 `/metrics` 需鉴权（此前多处 NOT_VERIFIED 实为 401）与 udhcpc 改写客户端网络的问题。全链路 `make h2-test` verdict=PASS（PASS=176）。
 - Round 10（六入口验证 + 最终结论）：`make h2-up / h2-test / h2-fault-test / h2-consistency-check / h2-report / h2-down` 全部实测可用、可重复、可清理。修复三处验收基础设施问题（`h2-fault-test` 调错脚本、`h2-down` 后探针丢失需自动重建、DNS 端口就绪竞态）。最终 `make h2-test` verdict=PASS（PASS=171），`make h2-fault-test` PASS=22 FAIL=0。产出 `docs/acceptance/H2_ACCEPTANCE_CONCLUSION.md`。
 - Round 9（Web 控制台全功能验收）：启动**最新构建**（HEAD 编译，隔离数据目录/端口），用真实 Chromium 执行 18 套 Playwright 回归 + 人操作 CRUD 走查 → **WEB PASS=113 FAIL=0 PAGE_ERRORS=0**。
   - 人操作路径实测：表单登录 → 仪表盘渲染 → 建区 → **列表 UI 可见** → 加 A 记录 → **区域详情页可见** → 删除 → 无页面错误。

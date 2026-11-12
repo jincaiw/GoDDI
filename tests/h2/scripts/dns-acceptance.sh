@@ -6,6 +6,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=reports; mkdir -p "$OUT"
+# udhcpc rewrites the client's own address/route; restore the fixture network
+# before issuing DNS queries so a previous DHCP test cannot break this suite.
+docker exec client sh -c 'ip link set eth0 down 2>/dev/null; ip addr flush dev eth0 2>/dev/null; ip link set eth0 address 02:00:00:00:00:aa; ip link set eth0 up; ip addr add 10.77.3.3/24 dev eth0 2>/dev/null; ip route add default via 10.77.3.1 2>/dev/null; true' >/dev/null 2>&1
+
 PASS=0; FAIL=0; NV=0
 ok(){ echo "PASS | $1"; PASS=$((PASS+1)); }
 bad(){ echo "FAIL | $1"; FAIL=$((FAIL+1)); }
@@ -55,7 +59,7 @@ if [ -n "${ZB:-}" ]; then
   [ "$b2" = "192.0.2.11" ] && ok "node-b answers its own config www.h2.test.=$b2" || bad "node-b dig answer='$b2'"
 else bad "zone create node-b failed"; fi
 # LKG revision / config divergence between the two independent control planes
-ra=$(curl -s http://127.0.0.1:18181/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r'); rb=$(curl -s http://127.0.0.1:18182/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r')
+ra=$(curl -s -H "Authorization: Bearer $TOK_A" http://127.0.0.1:18181/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r'); rb=$(curl -s -H "Authorization: Bearer $TOK_B" http://127.0.0.1:18182/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r')
 printf '%s\n%s\n' "$ra" "$rb" > "$OUT/dns-lkg-$TS.txt"
 if [ -n "$ra" ] && [ -n "$rb" ]; then
   [ "$ra" = "$rb" ] && ok "both nodes report same LKG revision" || nv "LKG revisions differ between independent control planes (no cluster-wide publish): a=[$ra] b=[$rb]"

@@ -158,6 +158,8 @@ for id in H2-004 H2-005 H2-006 H2-009 H2-010 H2-011 H2-012 H2-013 H2-016 H2-020;
   nv "$id" "requires tc/netem, disk-fault injection or product features (license) — Linux CI / unit harness, not this host"
 done
 
+# Application-level fault injection (H2-009/010/011/012/016) in a separate pass.
+if [ -x scripts/app-fault.sh ]; then bash scripts/app-fault.sh; fi
 printf '{"suite":"faults","timestamp":"%s","pass":%d,"fail":%d,"not_verified":%d}\n' "$TS" "$PASS" "$FAIL" "$NV" > "$OUT/faults-summary-$TS.json"
 bash scripts/collect-evidence.sh >/dev/null 2>&1 || true
 echo "----"; echo "FAULTS PASS=$PASS FAIL=$FAIL NOT_VERIFIED=$NV"

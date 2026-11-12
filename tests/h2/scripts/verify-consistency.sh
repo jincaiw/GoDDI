@@ -15,6 +15,9 @@ check(){ n="$1";
 }
 check node-a; check node-b
 # Exactly-one-owner signal via the CLI (no management auth needed).
+TOK=$(curl -s -X POST http://127.0.0.1:18181/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"AdminPass-0123456789"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['token'])" 2>/dev/null)
+lkg(){ curl -s -H "Authorization: Bearer $TOK" "http://127.0.0.1:18181/metrics" | grep '^goddi_dataplane_lkg_revision' | tr -d '\r'; }
+
 ha_status(){ docker exec "$1" goddi ha status -c /etc/goddi/config.yaml 2>/dev/null; }
 sa=$(ha_status node-a); sb=$(ha_status node-b)
 printf '%s\n' "$sa" > "$OUT/ha-node-a-$TS.txt"; printf '%s\n' "$sb" > "$OUT/ha-node-b-$TS.txt"
@@ -30,8 +33,8 @@ if [ "$a_primary" -eq 1 ] && [ "$b_primary" -eq 0 ]; then ok "exactly one owner 
 la=$(docker logs node-a 2>&1); lb=$(docker logs node-b 2>&1)
 case "$la" in *"mutual TLS"*) ok "node-a replication uses mutual TLS";; *) bad "node-a mTLS marker missing";; esac
 case "$lb" in *"mutual TLS"*) ok "node-b replication uses mutual TLS";; *) bad "node-b mTLS marker missing";; esac
-case "$la" in *"data plane LKG"*) ok "node-a LKG stamp logged";; *) nv "node-a LKG stamp not yet logged";; esac
-case "$lb" in *"data plane LKG"*) ok "node-b LKG stamp logged";; *) nv "node-b LKG stamp not yet logged";; esac
+LA_LKG=$(lkg); [ -n "$LA_LKG" ] && ok "node-a LKG revision exposed ($LA_LKG)" || nv "node-a LKG revision not exposed"
+case "$la" in *"data plane LKG"*) ok "node-a LKG stamp logged";; *) nv "node-a LKG log line not seen";; esac
 # Physical/hardware items are out of scope for Docker H2.
 nv "real power-loss durability (Level 2 physical)"
 nv "SSD/eMMC cache reliability (Level 2 physical)"

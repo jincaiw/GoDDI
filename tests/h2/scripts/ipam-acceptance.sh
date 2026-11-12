@@ -51,7 +51,7 @@ if [ -n "${IP:-}" ]; then
   elif [ "$obs" = "in_use" ] || [ "$obs" = "active" ] || [ "$obs" = "bound" ]; then ok "IPAM address $IP observed_state=$obs (lease projected via facts)"
   else nv "IPAM address $IP observed_state=$obs"; fi
   # projection lag metric must exist once facts flow
-  lag=$(curl -s http://127.0.0.1:18181/metrics | grep -E '^goddi_dhcp_ipam_projection_gaps' | head -1)
+  lag=$(curl -s -H "Authorization: Bearer $TOK" http://127.0.0.1:18181/metrics | grep -E '^goddi_dhcp_ipam_projection_gaps' | head -1)
   [ -n "$lag" ] && ok "IPAM projection-gap metric exposed ($lag)" || nv "IPAM projection-gap metric not exposed on this node"
   # End-to-end facts: producer outbox -> relay -> control inbox -> IPAM.
   st=$(sqlq "select status from dhcp_ipam_observation_events order by sequence desc limit 1;")
