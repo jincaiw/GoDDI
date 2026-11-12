@@ -22,7 +22,10 @@
 4. 测试：无/过期/错误证书拒绝、重放帧拒绝、轮换不断链。
 5. 验收：抓包无明文租约；无有效证书不可连。
 
-**E-3 quorum/witness（自动 degraded 前置，D-05/ADR-0005）**
+**E-3 quorum/witness（自动 degraded 前置，D-05/ADR-0005）— 状态：BLOCKED（外部阻断，2026-11-12 评估）**
+
+> 合理性评估：真实 quorum/witness 需第三个仲裁节点或外部见证，本沙箱无三节点/见证环境，无法实现并**验证**；伪造内存 witness 会给出虚假安全感（违反"不得伪造通过记录"）。因此**不实现自动 degraded**，默认 `paused` 保持不变（符合 ADR-0010）；E-3 标记 `external-validation-required / BLOCKED`，待现场提供见证节点后按如下设计实施。
+
 1. 引入 leader lease/epoch 与 quorum 或 witness（ADR-0005），明确"2 节点 + witness"共识。
 2. 自动 degraded 继续仅当：epoch 最新 + quorum/witness 证明无更高 epoch 新主。
 3. 测试：分区无双主；quorum 丢失 fail-closed；恢复后自动回 primary 或 blocked。

@@ -60,6 +60,8 @@
 7. 依赖：D-01/D-02 之后。
 8. 验收：三态可查；中断不产生两个"已提交"版本。
 
+> **状态更新（2026-11-12）**：ADR-0005 发布协调与 quorum/witness 依赖第三方仲裁，本环境无法验证 → **BLOCKED（external-validation-required）**；不实现自动 degraded，默认 paused 保持不变（ADR-0010）。
+
 ### D-06 AXFR 授权链路与 TSIG 热加载（部分已修）
 1. 问题/触发：此前应用无路径写 `dns_zone_transfer`（纯 UI 无法授权 AXFR）；TSIG 密钥仅启动加载，运行期新增需重启。
 2. 源码：`internal/api/handler/dns_zone_transfer.go`（本轮新增）；`cmd/goddi/main.go:845-869`（一次性 `SetTSIGSecretMap`）。

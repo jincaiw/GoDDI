@@ -1836,3 +1836,9 @@ E-1 为**单进程内**围栏（写路径经 `MayBind` 抑制）；真正的"跨
 
 ### 1ay.3 边界
 TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境必须配置 `dhcp_ha.tls_*`。证书**自动轮换/吊销编排**仍需现场 PKI（未实现，NOT_VERIFIED）。
+
+## 1az. E-3 quorum/witness：合理性评估（BLOCKED，round 360）
+
+- **结论**：真实 quorum/witness 需要第三仲裁节点/外部见证；本沙箱无此环境，无法实现并验证。为避免"伪见证"造成的虚假安全感（违反不得伪造证据），**不实现自动 degraded**；默认 `paused` 保持（符合 ADR-0010）。
+- **前置已完成**：E-1（Owner Epoch 写栅栏）、E-2（mTLS+防重放）已实现并有单测；E-3 一旦有见证环境，可在此之上实现"自动 degraded 仅当 epoch 最新 + witness 证明"。
+- **状态**：BLOCKED（external-validation-required），实施步骤与判据见 09 计划 E-3。
