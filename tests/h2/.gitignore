@@ -1,4 +1,3 @@
 certs/
-reports/*.json
-reports/*.log
-reports/*.pcap
+reports/**
+!reports/.gitkeep
