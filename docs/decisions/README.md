@@ -4,7 +4,7 @@
 
 | 编号 | 标题 | 状态 | 权威来源 | 说明 |
 |---|---|---|---|---|
-| DEC-002 | 禁止自动接管（备不得凭心跳超时升主） | 已确认 | `docs/adr/0003` 决策 4/7 | 与 ADR-0010 一致 |
+| DEC-002 | 禁止自动接管（备不得凭心跳超时升主） | **已确认（2026-11-12 正式化）** | `docs/adr/0003`、`DEC-002-no-auto-promote.md` | 与 ADR-0010 一致 |
 | DEC-006 | 复制中断时的服务策略 | **已确认（2026-11-12）** | `docs/adr/0010`、`DEC-006-replication-loss-service.md` | 默认 paused；自动 degraded 仅 epoch+quorum+mTLS 后 |
 | DEC-007 | 不一致时的阻断与恢复 | **已确认（2026-11-12）** | `docs/adr/0010`、`DEC-007-consistency-recovery-block.md` | 区分"链路中断(paused)"与"检出不一致(blocked)" |
 | DEC-008 | 单管理员审批仅启动重新验证 | 待正式化 | 审计任务书 | 需补文本与实现核对 |
