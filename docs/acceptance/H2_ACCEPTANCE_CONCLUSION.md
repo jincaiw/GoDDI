@@ -82,6 +82,13 @@
   新主 node-b 保持 primary → 配置作者与 DHCP 角色正交（node-a 仍 201，node-b 409）。**PASS=13 FAIL=0 NOT_VERIFIED=1**
   （唯一 NOT_VERIFIED：提升后备端可分配租约需 ADR-0005 跨节点 scope 复制，未实现）。
 
+## 5d. 双机网络监测指标（2026-11-13 补充）
+
+新增 HA 网络层指标，直接回答"两台虚拟机能否看到对方"：
+- `goddi_dhcp_ha_peer_up{node_id}`：任一链路可达=1，全断=0（主备两节点均发布）。
+- `goddi_dhcp_ha_peer_last_seen_seconds{node_id}`：距上次听到对端的秒数。
+- 告警：`GoDDIDHCPHAPeerDown`（对端 2 分钟全链路不可达）、`GoDDIDHCPHAPeerSilent`（可达但 >30s 无帧，疑似半开链路）。
+
 ## 6. 原始证据索引
 
 - 机器可读汇总：`tests/h2/reports/H2-REPORT-<ts>.json`（含各套件计数、故障场景判定、Level 2 清单）

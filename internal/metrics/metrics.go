@@ -212,6 +212,21 @@ var (
 		Help: "Difference between the primary's durable DHCP IPAM facts sequence and its standby's applied sequence.",
 	}, []string{"node_id"})
 
+	// DHCPHAPeerUp and DHCPHAPeerLastSeenSeconds are the network-level view of
+	// the pair: whether the other node is currently reachable on any configured
+	// path, and how long ago it was last heard. They are the two facts an
+	// operator watching "the state of the two machines" actually needs, and they
+	// answer a different question from Redundant/Promising (which describe this
+	// node's own ability to promise, not the peer's liveness).
+	DHCPHAPeerUp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_up",
+		Help: "1 when the peer is reachable on any configured path right now, 0 when it is not. Absent when HA is disabled.",
+	}, []string{"node_id"})
+	DHCPHAPeerLastSeenSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dhcp_ha_peer_last_seen_seconds",
+		Help: "Seconds since this node last heard from its peer on the replication link. Absent until the peer has been seen.",
+	}, []string{"node_id"})
+
 	DHCPRequestsInflight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "goddi_dhcp_requests_inflight",
 		Help: "Current number of DHCP requests being processed by workers.",
@@ -561,6 +576,10 @@ type DHCPHASample struct {
 	FactsSequence int64
 	// FactsAcknowledgedSequence is the facts high water durably acknowledged by the standby.
 	FactsAcknowledgedSequence int64
+	// PeerUp is whether the peer is reachable on any configured path right now.
+	PeerUp bool
+	// PeerLastSeen is when this node last heard from its peer (zero if never).
+	PeerLastSeen time.Time
 	// PeerAppliedFactsSequence is the latest applied facts watermark reported by the standby.
 	PeerAppliedFactsSequence int64
 }
@@ -897,6 +916,8 @@ func InitMetrics() {
 			FactsProducerFirstOutstandingSequence,
 			DHCPHARedundant,
 			DHCPHAPromising,
+			DHCPHAPeerUp,
+			DHCPHAPeerLastSeenSeconds,
 			DHCPHASequence,
 			DHCPHAAcknowledgedSequence,
 			DHCPHAPeerAppliedSequence,
@@ -1019,6 +1040,10 @@ func sampleProviders() {
 		for _, s := range fn() {
 			DHCPHARedundant.WithLabelValues(s.NodeID).Set(boolGauge(s.Redundant))
 			DHCPHAPromising.WithLabelValues(s.NodeID).Set(boolGauge(s.Promising))
+			DHCPHAPeerUp.WithLabelValues(s.NodeID).Set(boolGauge(s.PeerUp))
+			if !s.PeerLastSeen.IsZero() {
+				DHCPHAPeerLastSeenSeconds.WithLabelValues(s.NodeID).Set(time.Since(s.PeerLastSeen).Seconds())
+			}
 			DHCPHASequence.WithLabelValues(s.NodeID).Set(float64(s.Sequence))
 			DHCPHAAcknowledgedSequence.WithLabelValues(s.NodeID).Set(float64(s.AcknowledgedSequence))
 			DHCPHAPeerAppliedSequence.WithLabelValues(s.NodeID).Set(float64(s.PeerAppliedSequence))

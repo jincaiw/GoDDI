@@ -68,6 +68,8 @@ func withProviders(t *testing.T) {
 		DHCPHAFactsAcknowledgedSequence.Reset()
 		DHCPHAPeerAppliedFactsSequence.Reset()
 		DHCPHAFactsReplicationLag.Reset()
+		DHCPHAPeerUp.Reset()
+		DHCPHAPeerLastSeenSeconds.Reset()
 	})
 }
 
@@ -423,5 +425,26 @@ func TestSampleProvidersLeavesAnAgeUnknownUntilThereIsOne(t *testing.T) {
 	// present, which is the distinction the whole vector exists for.
 	if strings.Contains(text, `type="full"`) {
 		t.Errorf("a type with no successful backup was published alongside one that had:\n%s", text)
+	}
+}
+
+// TestSampleProvidersPublishesPeerLiveness proves the network-level view of the
+// pair: whether the peer is reachable on any path and how long ago it was heard.
+// These answer "the state of the two machines", which Redundant/Promising do not.
+func TestSampleProvidersPublishesPeerLiveness(t *testing.T) {
+	withProviders(t)
+	lastSeen := time.Now().Add(-12 * time.Second)
+	dhcpHAStatsFn = func() []DHCPHASample {
+		return []DHCPHASample{{
+			NodeID: "primary-a", PeerUp: false, PeerLastSeen: lastSeen,
+		}}
+	}
+	sampleProviders()
+	text := expose(t, DHCPHAPeerUp, DHCPHAPeerLastSeenSeconds)
+	if !strings.Contains(text, `goddi_dhcp_ha_peer_up{node_id="primary-a"} 0`) {
+		t.Errorf("peer_up not exposed as 0:\n%s", text)
+	}
+	if !strings.Contains(text, `goddi_dhcp_ha_peer_last_seen_seconds{node_id="primary-a"}`) {
+		t.Errorf("peer_last_seen_seconds not exposed:\n%s", text)
 	}
 }

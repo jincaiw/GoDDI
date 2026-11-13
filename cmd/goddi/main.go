@@ -1944,7 +1944,12 @@ func runServer(configPath string) error {
 	// Nothing is published at all when HA is off. The redundancy series must be
 	// absent on an installation that never had a second copy, not zero: zero is
 	// the alarm.
-	if haEnabled && haRole != config.HARoleStandby {
+	//
+	// The standby publishes too: it is the node that dials the peer, so its
+	// peer_up / peer_last_seen_seconds are the primary evidence that the second
+	// cable/peer is alive, and its own Redundant/Promising describe its side of
+	// the pair. Sequence fields simply stay zero because it authors nothing.
+	if haEnabled {
 		metrics.RegisterDHCPHAStatsProvider(func() []metrics.DHCPHASample {
 			state := currentHAState(haRole, haRepl, haMirror)
 			sample := metrics.DHCPHASample{
@@ -1965,6 +1970,10 @@ func runServer(configPath string) error {
 					return nil
 				}
 				sample.FactsSequence = factsSequence
+				sample.PeerUp, sample.PeerLastSeen = haRepl.LinkSnapshot()
+			}
+			if haMirror != nil {
+				sample.PeerUp, sample.PeerLastSeen = haMirror.LinkSnapshot()
 			}
 			return []metrics.DHCPHASample{sample}
 		})

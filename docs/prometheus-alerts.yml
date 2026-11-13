@@ -160,6 +160,26 @@ groups:
           summary: "DHCP HA 备端确认水位落后"
           description: "node {{ $labels.node_id }} 的租约复制水位持续落后超过 2 分钟。检查主备链路、备端磁盘和 `/ready` 的 HA 状态；在确认水位追平前，不得将备端作为完整副本使用。"
 
+      # 网络层的对端存活：直接回答"两台虚拟机现在能不能看到对方"。与上面的
+      # Redundant/Promising 不同，这两条衡量的是链路，不是本机的承诺能力。
+      - alert: GoDDIDHCPHAPeerDown
+        expr: goddi_dhcp_ha_peer_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP HA 对端在所有链路上持续不可达"
+          description: "node {{ $labels.node_id }} 已持续 2 分钟无法在其任一配置链路（peer_address / peer_address_backup）上连到对端。单条链路故障不应到这里——只有所有链路都不可达才会 peer_up=0。先查对端进程、交换机与两条网线；若开启了 auto_failover，备端会在阈值窗口后自我提升，先确认这是预期。"
+
+      - alert: GoDDIDHCPHAPeerSilent
+        expr: goddi_dhcp_ha_peer_up == 1 and goddi_dhcp_ha_peer_last_seen_seconds > 30
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DHCP HA 对端可达但长时间未被听到"
+          description: "node {{ $labels.node_id }} 认为对端链路是通的（peer_up=1），但已超过 30 秒没有从对端听到任何帧。这通常意味着链路半开、NAT/防火墙丢弃、或对端在复制通道卡死。检查 repl 链路的丢包与对端 /ready。"
+
       - alert: GoDDIDHCPHAFactsMirrorBehind
         expr: goddi_dhcp_ha_facts_replication_lag > 0
         for: 2m
