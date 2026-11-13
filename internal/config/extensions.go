@@ -48,6 +48,21 @@ type ClusterConfig struct {
 	BindAddr     string `yaml:"bind_addr" json:"bind_addr"`
 	Peers        string `yaml:"peers" json:"peers"`
 	SyncInterval int    `yaml:"sync_interval" json:"sync_interval"`
+
+	// ConfigAuthor, when true, lets this node accept configuration writes
+	// (zones, records, scopes, IPAM objects). It is the single-author rule of
+	// ADR-0005 in its minimal form: exactly one node in a deployment may
+	// author configuration, so two nodes can never publish divergent
+	// revisions for the same resource. It defaults to true, which keeps every
+	// single-node deployment unchanged.
+	//
+	// This is NOT the full ADR-0005 coordinator: there is no leader election,
+	// quorum or witness here, and the flag is a deployment-time statement by
+	// the operator rather than something a node can prove to itself. It
+	// removes the "two consoles, two divergent configs" failure mode; it does
+	// not remove the need for the coordinator before multi-node config
+	// publishing can be called complete.
+	ConfigAuthor *bool `yaml:"config_author" json:"config_author"`
 }
 
 // PluginConfig holds plugin/app marketplace configuration.
@@ -132,6 +147,15 @@ func DefaultSSOConfig() SSOConfig {
 		Scopes:       "openid,profile,email",
 		AutoRegister: false,
 	}
+}
+
+// IsConfigAuthor reports whether this node may write configuration. The default
+// (unset) is true so existing single-node deployments keep working.
+func (c ClusterConfig) IsConfigAuthor() bool {
+	if c.ConfigAuthor == nil {
+		return true
+	}
+	return *c.ConfigAuthor
 }
 
 // DefaultClusterConfig returns default cluster configuration.

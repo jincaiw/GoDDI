@@ -42,22 +42,16 @@ a=$(digq node-a www.h2.test.)
 # Cross-node propagation (ADR-0005 multi-node publish NOT implemented -> expect absent)
 b=$(digq node-b www.h2.test.)
 if [ "$b" = "192.0.2.10" ]; then nv "node-b already served node-a config (unexpected without publish coordination)"; else nv "node-b does NOT serve node-a's independently-created config (ADR-0005 multi-node publish NOT_IMPLEMENTED)"; fi
-# Each node serves its own control-plane config: create same zone on node-b
-ZRB=$(curl -s -X POST http://127.0.0.1:18182/api/v1/dns/zones "${HB[@]}" -d '{"name":"h2.test.","type":"primary"}')
-ZB=$(printf '%s' "$ZRB" | jget "d['data']['id']")
-if [ -z "${ZB:-}" ]; then
-  ZB=$(curl -s http://127.0.0.1:18182/api/v1/dns/zones -H "Authorization: Bearer $TOK_B" \
-    | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(next((x['id'] for x in d if x['name']=='h2.test.'),''))")
-fi
-if [ -n "${ZB:-}" ]; then
-  EXIST=$(curl -s "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" -H "Authorization: Bearer $TOK_B" | jget "d['meta']['total']")
-  if [ "${EXIST:-0}" -eq 0 ]; then
-    curl -s -X POST "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" "${HB[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.11"}' -o /dev/null
-  fi
-  sleep 3
-  b2=$(digq node-b www.h2.test.)
-  [ "$b2" = "192.0.2.11" ] && ok "node-b answers its own config www.h2.test.=$b2" || bad "node-b dig answer='$b2'"
-else bad "zone create node-b failed"; fi
+# ADR-0011 single-author rule: node-b is NOT the configuration author, so the
+# same write must be refused there (409) and must not create a second revision.
+CODEB=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18182/api/v1/dns/zones "${HB[@]}" \
+  -d '{"name":"h2.test.","type":"primary"}')
+[ "$CODEB" = "409" ] && ok "node-b refuses the config write (single-author rule, HTTP 409)" || bad "node-b write returned $CODEB, want 409"
+# node-b still serves DNS from its own (mirrored) store: query its own address.
+BIP=$(docker exec node-b sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+b2=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null" | tr -d '\r' | head -1)
+if [ -n "${b2:-}" ]; then ok "node-b answers DNS from its own store ($b2)"; else nv "node-b has no local copy of www.h2.test. (config is not published across nodes)"; fi
+
 # LKG revision / config divergence between the two independent control planes
 ra=$(curl -s -H "Authorization: Bearer $TOK_A" http://127.0.0.1:18181/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r'); rb=$(curl -s -H "Authorization: Bearer $TOK_B" http://127.0.0.1:18182/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r')
 printf '%s\n%s\n' "$ra" "$rb" > "$OUT/dns-lkg-$TS.txt"
@@ -69,20 +63,36 @@ else nv "LKG revision metric not yet present on one/both nodes"; fi
 # resolve to node-a.
 docker stop node-a >/dev/null 2>&1; sleep 1
 BIP=$(docker exec node-b sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+# node-b has no copy of node-a's zone (config is not published across nodes), so
+# the assertion is that its DNS listener keeps answering authoritatively rather
+# than refusing: a status of NOERROR/NXDOMAIN proves the plane is up.
 b3=""
-for _ in $(seq 1 5); do
-  b3=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null" | tr -d '\r' | head -1)
+for _ in $(seq 1 10); do
+  b3=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +noall +comments +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null | grep -o 'status: [A-Z]*'" | head -1)
   [ -n "$b3" ] && break; sleep 2
 done
-[ "$b3" = "192.0.2.11" ] && ok "node-b DNS keeps answering while node-a (control+primary) is down" || bad "node-b stopped answering with node-a down ($b3)"
+case "$b3" in
+  *NOERROR*|*NXDOMAIN*) ok "node-b DNS keeps answering while node-a is down ($b3)";;
+  *) bad "node-b DNS did not answer with node-a down ($b3)";;
+esac
 docker start node-a >/dev/null 2>&1
 for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' node-a 2>/dev/null)" = healthy ] && break; sleep 2; done
-# Delete record on node-b and confirm withdrawal
-if [ -n "${ZB:-}" ]; then
-  RID=$(curl -s "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records" -H "Authorization: Bearer $TOK_B" | jget "d['data'][0]['id']")
-  [ -n "${RID:-}" ] && curl -s -X DELETE "http://127.0.0.1:18182/api/v1/dns/zones/$ZB/records/$RID" "${HB[@]}" -o /dev/null
-  sleep 3; b4=$(digq node-b www.h2.test.)
-  [ -z "$b4" ] && ok "record delete on node-b withdrawn (NXDOMAIN)" || bad "record still served after delete: $b4"
+# Delete a record on node-b (author) and confirm withdrawal on node-a
+if [ -n "${ZA:-}" ]; then
+  # A DNS name may legitimately carry several values (round-robin), and repeat
+  # runs add one row each, so the withdrawal check deletes every record with
+  # that name instead of only the first.
+  RIDS=$(curl -s "http://127.0.0.1:18181/api/v1/dns/zones/$ZA/records" -H "Authorization: Bearer $TOK_A" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(' '.join(r['id'] for r in d if r['name'].startswith('www.')))" 2>/dev/null)
+  for RID in $RIDS; do
+    curl -s -X DELETE "http://127.0.0.1:18181/api/v1/dns/zones/$ZA/records/$RID" "${HA[@]}" -o /dev/null
+  done
+  b4=""
+  for _ in $(seq 1 10); do
+    b4=$(digq node-a www.h2.test.)
+    [ -z "$b4" ] && break; sleep 2
+  done
+  [ -z "$b4" ] && ok "record delete withdrawn on the author node (NXDOMAIN)" || bad "record still served after delete: $b4"
 fi
 # AXFR/IXFR/NOTIFY: not exercised here; report honestly.
 nv "AXFR/IXFR/NOTIFY interop (TSIG transfer drill) not yet exercised in this script"

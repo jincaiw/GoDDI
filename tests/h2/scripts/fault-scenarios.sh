@@ -154,12 +154,17 @@ docker start node-a >/dev/null 2>&1; waithealth node-a || true
 [ -n "$IPB" ] && ok H2-019b "lease obtained before the management-plane test ($IPB)"
 
 echo "### Kernel/CI-only scenarios"
-for id in H2-004 H2-005 H2-006 H2-009 H2-010 H2-011 H2-012 H2-013 H2-016 H2-020; do
-  nv "$id" "requires tc/netem, disk-fault injection or product features (license) — Linux CI / unit harness, not this host"
+# H2-004/005/006/013 are now covered by kernel-fault.sh (tc/netem + tmpfs) and
+# H2-009/010/011/012/016 by app-fault.sh; only the licence product feature
+# (H2-020) has no implementation to exercise, and H2-019 (split-plane) is
+# reported separately above.
+for id in H2-020; do
+  nv "$id" "commercial licence-expiry protection is a product feature that is not implemented, so there is nothing to exercise"
 done
 
 # Application-level fault injection (H2-009/010/011/012/016) in a separate pass.
 if [ -x scripts/app-fault.sh ]; then bash scripts/app-fault.sh; fi
+if [ -x scripts/kernel-fault.sh ]; then bash scripts/kernel-fault.sh; fi
 printf '{"suite":"faults","timestamp":"%s","pass":%d,"fail":%d,"not_verified":%d}\n' "$TS" "$PASS" "$FAIL" "$NV" > "$OUT/faults-summary-$TS.json"
 bash scripts/collect-evidence.sh >/dev/null 2>&1 || true
 echo "----"; echo "FAULTS PASS=$PASS FAIL=$FAIL NOT_VERIFIED=$NV"

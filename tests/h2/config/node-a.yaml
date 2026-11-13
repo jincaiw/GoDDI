@@ -44,3 +44,7 @@ dhcp_ha:
 
 log:
   level: debug
+
+cluster:
+  node_name: h2-node-a
+  config_author: true

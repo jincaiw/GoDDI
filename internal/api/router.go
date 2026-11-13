@@ -128,6 +128,11 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// audit-log listing endpoint while still covering DNS/debug mutations.
 			// Keep it after authentication so user identity is available in the entry.
 			r.Use(audit.AuditMiddleware(auditMgr))
+			// ADR-0005 single-author rule: on a deployment that marks this node
+			// as not the configuration author, configuration writes are refused
+			// (409) instead of producing a second, divergent revision. Reads and
+			// the data planes are unaffected.
+			r.Use(middleware.ConfigAuthor(cfg.Cluster.IsConfigAuthor(), cfg.Cluster.NodeName))
 
 			// Auth.
 			r.Post("/auth/logout", h.Logout)

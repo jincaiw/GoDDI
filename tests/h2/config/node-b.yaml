@@ -44,3 +44,10 @@ dhcp_ha:
 
 log:
   level: debug
+
+# ADR-0005 single-author rule: node-a authors configuration, node-b does not.
+# Configuration writes on node-b are refused (409) instead of producing a second
+# divergent revision; reads and both data planes keep working.
+cluster:
+  node_name: h2-node-b
+  config_author: false

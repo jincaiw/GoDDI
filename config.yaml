@@ -210,3 +210,6 @@ log:
   level: "info"           # debug | info | warn | error
   query_log_enabled: true
   retention_days: 30
+
+cluster:
+  config_author: true

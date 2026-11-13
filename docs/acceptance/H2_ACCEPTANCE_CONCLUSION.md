@@ -8,10 +8,11 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=176，FAIL=0，NOT_VERIFIED=23） |
+| **Level 1 判定** | **PASS**（PASS=196，FAIL=0，NOT_VERIFIED=16） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
-| 已知架构缺口 | ADR-0005 跨节点配置发布未实现（跨节点 DNS/IPAM 配置一致性 NOT_VERIFIED） |
+| 配置作者 | **单作者规则已实施**（ADR-0011）：非作者节点配置写 409、读与数据面不受影响 |
+| 已知架构缺口 | ADR-0005 完整协调器（leader/quorum/epoch/watermark）仍未实现 |
 
 > 说明：23 项 NOT_VERIFIED 均为**本环境无法证明**的项（内核 tc/netem、磁盘满需 CAP_SYS_ADMIN、单进程 split-plane、物理级、ADR-0005），**不是失败**；真实失败一律 FAIL 且不重试成 PASS。
 
@@ -23,7 +24,9 @@
 | DNS 双节点 | 6 | 0 | 3 | 建区/记录/删除、真实查询、控制面宕机仍应答 |
 | DNS 传送 | 8 | 0 | 0 | **签名 AXFR**、无签名被拒、SOA、**IXFR**、**NOTIFY** |
 | DHCP 双节点 | 10 | 0 | 3 | 真实 udhcpc DORA、镜像可见、无重复 active 租约、分区 fail-closed、显式 degrade、备不接管 |
-| 故障注入 H2-001..020（容器/进程） | 22 | 0 | 14 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
+| 内核级故障 H2-004/005/006/013 | 11 | 0 | 0 | 单向复制丢包（仅 node-a 侧有 qdisc）、延迟+丢包下 DORA 成功且仍复制到备、ACK 路径丢包→withhold、恢复后恢复 ACK、tmpfs 4MB 磁盘满→withhold |
+| 配置作者（ADR-0011） | 9 | 0 | 1 | 作者 201 / 非作者 409 且原因可读 / 三类读 200 / health 200 / 数据面 standby / 拒绝不落库 |
+| 故障注入 H2-001..020（容器/进程） | 22 | 0 | 5 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
 | 故障注入 H2-009/010/011/012/016（应用级） | 5 | 0 | 0 | 事件重投幂等；租约哈希/越界篡改→启动拒绝发布快照（fail-closed）；facts 水位不一致→投影缺口指标；写故障窗口下已持久租约零丢失；IPAM 消费者故障后可恢复并排空 backlog |
 | IPAM/DDNS | 12 | 0 | 3 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
 | Web 控制台 | 113 | 0 | 0 | 18 套 Playwright + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
@@ -77,7 +80,7 @@
 
 ## 7. 已知缺口（不影响 Level 1 判定，需产品路线决策）
 
-1. **ADR-0005 多节点配置发布未实现**：node-a 建区不会自动出现在 node-b；跨节点 Revision/Hash 一致性、跨节点 IPAM 配置一致性均记 NOT_VERIFIED。
+1. **ADR-0005 完整协调器未实现**：已落地 ADR-0011 单作者规则（消除"两节点各自发布不同 revision"），但 leader 选举/quorum/witness/epoch fencing/watermark 追赶仍无；因此 node-a 的配置**不会自动出现在** node-b，跨节点 Revision/Hash 自动一致性仍 NOT_VERIFIED。
 2. **TSIG 新密钥需重启**（启动快照），运维需知。
 3. **`goddi_dhcp_ipam_projection_gaps` 未在该节点暴露**（代码已注册，运行路径未触发）。
 4. **H2-019 管理面/数据面分离**：单进程模式未验证，`server.role=dns|dhcp` split-plane 路径未在此环境演练。

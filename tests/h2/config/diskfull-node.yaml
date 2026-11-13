@@ -1,0 +1,25 @@
+# Standalone single node whose lease store lives on a tiny tmpfs, used to inject
+# a real disk-full condition (H2-013). No HA, no DNS: the only thing under test
+# is the DHCP write path's ENOSPC behaviour.
+env: development
+server:
+  name: "GoDDI-diskfull"
+  http_addr: ":6081"
+  public_url: "http://127.0.0.1:18190"
+  data_dir: /data
+  role: all
+database:
+  driver: "sqlite"
+  dsn: /data/goddi.db
+dns:
+  enabled: false
+dhcp:
+  enabled: true
+  interfaces: []
+  lease_store: wal
+security:
+  totp_enabled: false
+dhcp_ha:
+  enabled: false
+log:
+  level: info

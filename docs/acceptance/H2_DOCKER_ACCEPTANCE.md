@@ -42,7 +42,13 @@ make h2-down                  # 清理
 故障场景判定、未运行套件（NOT_RUN，不当作 PASS）、以及 **Level 2 物理项清单（固定 NOT_VERIFIED）**。
 汇总判定：任一 FAIL → FAIL；全部通过但有未运行 → NOT_VERIFIED；否则 PASS。
 
-## 最终结论
+## 最终结论（2026-11-13 更新）
+
+- **内核级故障已转 PASS**：`make h2-fault-kernel` 在本机 linux/arm64 运行时真实注入 tc/netem 与 tmpfs 磁盘满 → H2-004/005/006/013 **PASS=11 FAIL=0**。
+- **ADR-0011 单作者规则已实施**：`cluster.config_author`；非作者节点配置写 409、读与数据面不受影响 → `make h2-config-author` **PASS=9**。
+- 全链路 `make h2-test` → **verdict=PASS，PASS=196 FAIL=0 NOT_VERIFIED=16**。
+
+## 早期结论
 见 [`H2_ACCEPTANCE_CONCLUSION.md`](H2_ACCEPTANCE_CONCLUSION.md)：Level 1 **PASS**（PASS=171 / FAIL=0 / NOT_VERIFIED=23，8/8 强制项无违规）；Level 2 物理 5 项 **NOT_VERIFIED**；已知缺口（ADR-0005 等）已列明。
 
 ## 状态（滚动）
