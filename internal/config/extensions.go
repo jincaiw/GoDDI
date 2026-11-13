@@ -63,6 +63,27 @@ type ClusterConfig struct {
 	// not remove the need for the coordinator before multi-node config
 	// publishing can be called complete.
 	ConfigAuthor *bool `yaml:"config_author" json:"config_author"`
+
+	// ConfigReplication turns on ADR-0013 configuration replication on this
+	// node. When true and this node is NOT the config author, it periodically
+	// pulls the author's configuration snapshot and applies it to its own
+	// control database, so a promoted standby has the scopes and zones to
+	// serve. Default false: nothing is pulled and behaviour is unchanged.
+	//
+	// This is the follower side only. The author serves the snapshot endpoint;
+	// the two together are the "A" half of ADR-0005 (replication), not the
+	// coordinator (leader/quorum/fencing), which stays unimplemented.
+	ConfigReplication bool `yaml:"config_replication" json:"config_replication"`
+	// ConfigReplicationSource is the author's base URL the follower pulls from,
+	// e.g. "http://10.77.3.4:6080". Required when ConfigReplication is true.
+	ConfigReplicationSource string `yaml:"config_replication_source" json:"config_replication_source"`
+	// ConfigReplicationToken is the shared secret presented as the
+	// X-Goddi-Replication-Token header. It authorises the snapshot endpoint
+	// without a session, and must match on both nodes.
+	ConfigReplicationToken string `yaml:"config_replication_token" json:"config_replication_token"`
+	// ConfigReplicationInterval is the pull interval in seconds. 0 means the
+	// default (5).
+	ConfigReplicationInterval int `yaml:"config_replication_interval" json:"config_replication_interval"`
 }
 
 // PluginConfig holds plugin/app marketplace configuration.

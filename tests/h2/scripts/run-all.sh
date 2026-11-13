@@ -17,6 +17,7 @@ if [ -x scripts/dns-transfer-acceptance.sh ]; then bash scripts/dns-transfer-acc
 if [ -x scripts/config-author-acceptance.sh ]; then bash scripts/config-author-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 if [ -x scripts/dns-primary-secondary-acceptance.sh ]; then bash scripts/dns-primary-secondary-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 if [ -x scripts/auto-failover-drill.sh ]; then bash scripts/auto-failover-drill.sh; [ $? -ne 0 ] && rc=1; fi
+if [ -x scripts/config-replication-acceptance.sh ]; then bash scripts/config-replication-acceptance.sh; [ $? -ne 0 ] && rc=1; fi
 bash scripts/collect-evidence.sh
 bash scripts/h2-report.sh
 exit $rc

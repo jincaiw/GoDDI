@@ -102,6 +102,14 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			Handle(cfg.Metrics.Path, metrics.PrometheusHandler())
 	}
 
+	// ADR-0013 configuration replication: the author serves its configuration
+	// tables as a JSON snapshot here. It is authorised by the shared-secret
+	// header, not a session, so it lives outside /api/v1 and its admin
+	// allowlist. The handler fails closed (503) when no token is configured, so
+	// registering it unconditionally cannot expose the configuration.
+	r.Get("/internal/cluster/config/snapshot",
+		handler.ConfigSnapshotHandler(db.DB, cfg.Cluster.NodeName, cfg.Cluster.ConfigReplicationToken))
+
 	// API v1 routes.
 	r.Route("/api/v1", func(r chi.Router) {
 		// The management surface, and the only place the allowlist is applied

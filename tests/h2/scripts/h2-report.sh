@@ -32,7 +32,7 @@ for path in sorted(glob.glob(os.path.join(out, "faults-*.jsonl"))):
         except Exception:
             continue
         faults[r.get("id", "?")] = r.get("verdict")
-expected = ["dns", "dns-transfer", "dhcp", "ipam", "faults", "app-faults", "kernel-faults", "config-author", "dns-primary-secondary", "auto-failover", "web"]
+expected = ["dns", "dns-transfer", "dhcp", "ipam", "faults", "app-faults", "kernel-faults", "config-author", "dns-primary-secondary", "auto-failover", "config-replication", "web"]
 missing = [s for s in expected if s not in suites]
 tot = collections.Counter()
 for name, d in suites.items():

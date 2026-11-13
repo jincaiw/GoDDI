@@ -25,6 +25,7 @@ import (
 	"github.com/jasonwa/goddi/internal/auth"
 	"github.com/jasonwa/goddi/internal/backup"
 	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jasonwa/goddi/internal/configrepl"
 	"github.com/jasonwa/goddi/internal/configver"
 	"github.com/jasonwa/goddi/internal/database"
 	"github.com/jasonwa/goddi/internal/dataplane"
@@ -1062,7 +1063,7 @@ func runServer(configPath string) error {
 				autoFailoverCh = make(chan struct{}, 1)
 				effectiveCopy := effective
 				storeCopy := dhcpStore
-				mirror.SetAutoPromote(func() {
+				mirror.SetAutoPromote(func() bool {
 					// Record the promotion durably (epoch+1) with the same
 					// guarded action an operator runs. The shortfall is the
 					// gap the standby already knows; unacknowledged changes
@@ -1077,8 +1078,8 @@ func runServer(configPath string) error {
 						Confirmed: true, OldPrimaryCannotWrite: true, AcceptGap: gap,
 					})
 					if terr != nil {
-						slog.Error("HA: auto-failover promotion was refused; staying standby", "error", terr)
-						return
+						slog.Error("HA: auto-failover promotion was refused; will keep trying", "error", terr)
+						return false
 					}
 					slog.Error("HA: auto-failover promoted this node; restarting to take effect",
 						"epoch", out.Epoch, "seq", out.Seq)
@@ -1086,6 +1087,7 @@ func runServer(configPath string) error {
 					case autoFailoverCh <- struct{}{}:
 					default:
 					}
+					return true
 				})
 			}
 			// The redundancy state goes in the startup log, not only in a
@@ -1604,6 +1606,40 @@ func runServer(configPath string) error {
 	// on the request path: a client waits for neither the console nor this loop.
 	if dhcpRunner != nil {
 		go dhcpRunner.Run(backgroundCtx)
+	}
+
+	// ADR-0013 configuration replication, follower side. When enabled and this
+	// node is not the config author, pull the author's configuration snapshot
+	// and apply it to this node's control database so a promoted standby has the
+	// scopes and zones to serve. After each apply, wake the data-plane sync so
+	// the change reaches dnsdata.db/leases.db without waiting a full interval.
+	//
+	// A snapshot is a full replace, so an apply that lands is complete: a missed
+	// pull is corrected by the next one. Failures are logged and retried; the
+	// follower keeps serving whatever it already has.
+	if cfg.Cluster.ConfigReplication && cfg.Cluster.IsConfigAuthor() == false {
+		puller := configrepl.NewPuller(db.DB,
+			configrepl.PullerConfig{
+				SourceURL: cfg.Cluster.ConfigReplicationSource,
+				Token:     cfg.Cluster.ConfigReplicationToken,
+				Interval:  time.Duration(cfg.Cluster.ConfigReplicationInterval) * time.Second,
+			},
+			dataplane.ConfigTableSpecs(),
+			func() {
+				if dnsRunner != nil {
+					dnsRunner.Wake()
+				}
+				if dhcpRunner != nil {
+					dhcpRunner.Wake()
+				}
+			})
+		go func() {
+			slog.Info("config replication: follower puller starting",
+				"source", cfg.Cluster.ConfigReplicationSource)
+			if err := puller.Run(backgroundCtx); err != nil {
+				slog.Error("config replication: puller stopped", "error", err)
+			}
+		}()
 	}
 
 	// The DHCP high-availability pair. Both halves run off the request path

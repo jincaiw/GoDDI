@@ -1,0 +1,20 @@
+# Override for the ADR-0013 configuration-replication drill.
+#
+# node-b pulls node-a's configuration snapshot (so a scope authored on node-a
+# appears on node-b), and is allowed to auto-failover so the drill can prove the
+# promoted standby actually serves that scope with no manual step. node-a only
+# needs the shared replication token so its snapshot endpoint authorises the pull.
+services:
+  node-a:
+    environment:
+      GODDI_CLUSTER_CONFIG_REPLICATION_TOKEN: "h2-config-repl-token-0123456789"
+  node-b:
+    environment:
+      GODDI_CLUSTER_CONFIG_REPLICATION: "true"
+      GODDI_CLUSTER_CONFIG_REPLICATION_SOURCE: "http://node-a:6080"
+      GODDI_CLUSTER_CONFIG_REPLICATION_TOKEN: "h2-config-repl-token-0123456789"
+      GODDI_CLUSTER_CONFIG_REPLICATION_INTERVAL: "2"
+      GODDI_DHCP_HA_AUTO_FAILOVER: "true"
+      GODDI_DHCP_HA_AUTO_FAILOVER_WINDOWS: "4"
+      GODDI_DHCP_HA_PRIORITY: "20"
+    restart: unless-stopped

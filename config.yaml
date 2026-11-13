@@ -213,3 +213,10 @@ log:
 
 cluster:
   config_author: true
+  # ADR-0013 配置复制（A）：默认关闭。开启且本节点非 config_author 时，
+  # 周期拉取 author 的配置快照并应用到本节点控制库，使被提升的备端能直接服务。
+  # 这不是 ADR-0005 完整协调器（选主/quorum 仍 501）。
+  config_replication: false
+  config_replication_source: ""
+  config_replication_token: ""
+  config_replication_interval: 5

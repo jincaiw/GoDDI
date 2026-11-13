@@ -148,9 +148,12 @@ type Mirror struct {
 	fenced       bool
 	epoch        int64
 	// onPromote is invoked when auto-failover decides this standby should
-	// promote. Nil (the default) keeps the fail-closed behaviour: a standby
-	// never promotes itself. main wires it only when auto_failover is enabled.
-	onPromote func()
+	// promote. It reports whether the promotion actually took effect: a refusal
+	// (for example the peer answered too recently to satisfy the quiet window)
+	// returns false and the mirror keeps retrying rather than giving up. Nil
+	// (the default) keeps the fail-closed behaviour: a standby never promotes
+	// itself. main wires it only when auto_failover is enabled.
+	onPromote func() bool
 }
 
 type incomingSnapshot struct {
@@ -276,7 +279,7 @@ func (m *Mirror) LinkSnapshot() (up bool, lastSeen time.Time) {
 // has lost the primary on every path for the configured number of windows. It is
 // only wired when ha.auto_failover is deliberately enabled; leaving it nil keeps
 // the fail-closed contract (a standby never promotes itself).
-func (m *Mirror) SetAutoPromote(fn func()) { m.onPromote = fn }
+func (m *Mirror) SetAutoPromote(fn func() bool) { m.onPromote = fn }
 
 func (m *Mirror) Run(ctx context.Context) error {
 	backoff := 250 * time.Millisecond
@@ -301,11 +304,19 @@ func (m *Mirror) Run(ctx context.Context) error {
 		// every path, which is what "both cables gone and the peer silent"
 		// looks like.
 		if m.cfg.AutoFailover && m.onPromote != nil && failures >= windows {
-			slog.Error("HA: auto-failover threshold reached; promoting this standby",
+			slog.Error("HA: auto-failover threshold reached; attempting promotion",
 				"node_id", m.cfg.NodeID, "windows", windows, "priority", m.cfg.Priority,
 				"peer_paths", m.cfg.PeerAddrs())
-			m.onPromote()
-			return nil
+			if m.onPromote() {
+				return nil // promoted; the process exits and a supervisor restarts it as primary
+			}
+			// Refused (e.g. the peer answered inside the quiet window, as happens
+			// when a kill makes the dial fail instantly). Reset the counter and
+			// keep retrying; real elapsed silence accumulates and a later attempt
+			// will satisfy the window. Giving up here would leave the pair dead.
+			slog.Warn("HA: auto-failover promotion refused; will retry after the quiet window",
+				"node_id", m.cfg.NodeID)
+			failures = 0
 		}
 
 		slog.Warn("HA: the mirror lost its primary; reconnecting",

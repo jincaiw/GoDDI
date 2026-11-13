@@ -30,6 +30,7 @@
 | 故障注入 H2-009/010/011/012/016（应用级） | 5 | 0 | 0 | 事件重投幂等；租约哈希/越界篡改→启动拒绝发布快照（fail-closed）；facts 水位不一致→投影缺口指标；写故障窗口下已持久租约零丢失；IPAM 消费者故障后可恢复并排空 backlog |
 | IPAM/DDNS | 12 | 0 | 3 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
 | DNS 主从（primary/secondary） | 8 | 0 | 0 | 主建区→secondary AXFR 跟随→改记录后 serial 追平→同 serial→node-b 为 secondary 无双主→同名 primary 被拒（并修复 AXFR 应用丢 zone 后缀的整区 NXDOMAIN 缺陷） |
+| 配置复制 A（ADR-0013） | 10 | 0 | 0 | node-a 建 scope→node-b 自动出现（控制库+数据面）→杀 node-a→node-b 自动提升并**从复制 scope 直接分配租约**（无手工重建），闭掉"提升后无法服务"缺口 |
 | Web 控制台 | 113 | 0 | 0 | 18 套 Playwright + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
 
 ## 3. 强制项核验（任务 §8）
@@ -99,7 +100,7 @@
 
 ## 7. 已知缺口（不影响 Level 1 判定，需产品路线决策）
 
-1. **ADR-0005 完整协调器未实现**：已落地 ADR-0011 单作者规则（消除"两节点各自发布不同 revision"），但 leader 选举/quorum/witness/epoch fencing/watermark 追赶仍无；因此 node-a 的配置**不会自动出现在** node-b，跨节点 Revision/Hash 自动一致性仍 NOT_VERIFIED。
+1. **ADR-0005 拆分为 A/B（见 ADR-0013）**：**A（配置复制）已实现**——非 author 节点周期拉取 author 配置快照并应用，node-a 的 scope/zone 会出现在 node-b（H2 `config-replication` PASS=10），提升后可立即服务。**B（完整协调器）仍无**：leader 选举/quorum/witness/epoch fencing 未实现，`internal/cluster.ErrNotImplemented` 保留；作者节点自身故障的自动切换与真实分区 fail-closed 仍 NOT_VERIFIED，需产品决策与 3 故障域。
 2. **TSIG 新密钥需重启**（启动快照），运维需知。
 3. **`goddi_dhcp_ipam_projection_gaps` 未在该节点暴露**（代码已注册，运行路径未触发）。
 4. **H2-019 管理面/数据面分离**：单进程模式未验证，`server.role=dns|dhcp` split-plane 路径未在此环境演练。

@@ -1,6 +1,6 @@
 # ADR-0013：多节点配置复制（A）优先，分布式写入授权（B）延后
 
-- 状态：**Accepted（2026-11-13）**——路线 1：先做配置复制，保留 ADR-0011 静态单作者
+- 状态：**Implemented（2026-11-13）**——路线 1 已落地：配置复制 A 完成（P0–P5），保留 ADR-0011 静态单作者；B 延后
 - 关联：ADR-0005（多节点配置发布协调，未实现）、ADR-0011（单作者规则）
 - 范围：B8.7 的落地取舍
 
@@ -46,11 +46,21 @@ ADR-0005 把「多节点配置发布」作为一个整体，包含两件性质�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **P0** | `internal/configrepl` follower 模型 + 契约测试（幂等、stale、gap 暂停不跳过、rollback 为新 revision、未知结果可查、key 冲突、资源携带） | ✅ 本轮完成 |
-| P1 | 迁移 `config_inbox`（follower 侧，复刻 outbox + seq，唯一索引） | 待做 |
-| P2 | relay：author `config_release_outbox` → follower `config_inbox`（`appendNewer`） | 待做 |
-| P3 | applier：按 seq 经 configver adapters 应用；gap→快照重同步 | 待做 |
-| P4 | 串通 dataplane sync，确认 scope/zone 落到本地数据面 | 待做 |
-| P5 | H2 验收 `make h2-config-replication`：node-a 建配置→node-b 自动出现→杀 node-a→node-b 提升并**真正分配租约/DNS 应答** | 待做 |
+| P1 | 迁移 `036_config_repl_state.sql`（follower 水位） | ✅ 完成 |
+| P2 | 快照读取/应用（`internal/configrepl/snapshot.go`：`ReadSnapshot`/`ApplySnapshot`，replace_whole / replace_control_authored；内容指纹作版本）+ HTTP 端点 `GET /internal/cluster/config/snapshot`（共享 token） | ✅ 完成 |
+| P3 | follower 拉取器 `internal/configrepl/puller.go`（按指纹变化拉取、整表事务替换、写水位、唤醒数据面） | ✅ 完成 |
+| P4 | 装配 `cluster.config_replication*`（默认关）+ main follower 循环 + 唤醒 dns/dhcp runner；dataplane sync 把 scope/zone 落到本地数据面 | ✅ 完成 |
+| P5 | H2 验收 `make h2-config-replication`：**PASS=10 FAIL=0** | ✅ 完成 |
+
+### 实现说明（重要取舍）
+
+- **版本 = 内容指纹**（FNV-64 over 表行），而非 `config_release_outbox.id`。因为 DHCP scope 通过控制台 API 直接写表、**不产生 outbox 行**，用 outbox id 会恒为 0，follower 永不拉取——这一点由 H2 实测暴露并修正。
+- **快照是整表替换、幂等**：不需要 seq/applied+1 逐条重放；漏掉一次拉取由下一次全量快照自愈。P0 的 `Follower` 顺序重放模型仍保留为协议契约与单元测试基础。
+- **自动提升被拒时重试**：`docker kill` 使拨号瞬间 connection-refused，4 个窗口远早于 15s 静默窗，Takeover 被拒；修复为回调返回 bool、被拒则继续重试直到静默窗满足（否则会永久停在 standby）。
+
+### 端到端验收（H2，真实 udhcpc）
+
+node-a 建 scope → **node-b 自动出现在控制库与数据面（无手工）** → node-a 基线 DORA 成功 → `docker kill node-a` → **node-b 自动提升为 primary 并直接从复制来的 scope 分配租约 10.77.3.121（无手工重建 scope）**。这正是"提升后可立即服务"的缺口闭环。
 
 ## 验收映射（ADR-0005 最小原型 7 条）
 

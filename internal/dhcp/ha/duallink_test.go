@@ -76,7 +76,7 @@ func TestAutoFailoverFiresOnlyWhenEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		fired := 0
-		m.SetAutoPromote(func() { fired++ })
+		m.SetAutoPromote(func() bool { fired++; return true })
 		return m, &fired
 	}
 

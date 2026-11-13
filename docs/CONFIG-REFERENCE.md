@@ -60,7 +60,8 @@
 | 段落 | 键 | 默认 | 说明 |
 |---|---|---|---|
 | `sso` | `enabled`, `provider`, `authority`, `client_id`, `client_secret`, `discovery_url`, `scopes`, `auto_register`, `group_mapping` | `enabled=false`, `provider=oidc`, `scopes=openid,profile,email`, `auto_register=false` | OIDC/SSO 保留结构 |
-| `cluster` | `enabled`, `node_name`, `node_role`, `bind_addr`, `peers`, `sync_interval` | `enabled=false`, `node_role=primary`, `bind_addr=:7946`, `sync_interval=30` | 多节点协调保留结构；`internal/cluster.ProtocolModel` 仅进程内模型 |
+| `cluster` | `enabled`, `node_name`, `node_role`, `bind_addr`, `peers`, `sync_interval` | `enabled=false`, `node_role=primary`, `bind_addr=:7946`, `sync_interval=30` | 多节点**协调**（选主/quorum/fencing）保留结构，`/cluster` 仍 501；`internal/cluster.ProtocolModel` 仅进程内模型 |
+| `cluster.config_replication*` | `config_replication`, `config_replication_source`, `config_replication_token`, `config_replication_interval` | 全 `false`/空/`5` | **已实现（ADR-0013 路线 A）**：非 author 节点周期拉取 author 配置快照并应用，使备端提升后可直接服务。单作者由 `config_author` 固定，故为单向只读复制，非协调器。默认关闭 |
 | `plugin` | `enabled`, `registry`, `auto_update` | 全 `false` / 空 | App 市场保留结构 |
 | `dns.recursion.*` 之外的 `scopes` / `authority` 等 | 见上 | — | 同上，均属保留段 |
 
@@ -108,6 +109,10 @@
 | `GODDI_DHCP_HA_ROLE` | 字符串 | `dhcp_ha.role` |
 | `GODDI_DHCP_RENEW_OUT_OF_POOL_POLICY` | 字符串 | `dhcp.renew_out_of_pool_policy` |
 | `GODDI_DNS_ALLOW_PRIVATE_UPSTREAM` | 布尔 | `dns.allow_private_upstream` |
+| `GODDI_CLUSTER_CONFIG_REPLICATION` | 布尔 | `cluster.config_replication` |
+| `GODDI_CLUSTER_CONFIG_REPLICATION_SOURCE` | 字符串 | `cluster.config_replication_source` |
+| `GODDI_CLUSTER_CONFIG_REPLICATION_TOKEN` | 字符串 | `cluster.config_replication_token` |
+| `GODDI_CLUSTER_CONFIG_REPLICATION_INTERVAL` | 整数 | `cluster.config_replication_interval` |
 | `GODDI_DNS_DEFAULT_TTL` | 整数 | `dns.default_ttl` |
 | `GODDI_DNS_DNSSEC_ENABLED` | 布尔 | `dns.dnssec.enabled` |
 | `GODDI_DNS_DOMAIN` | 字符串 | `dns.domain` |

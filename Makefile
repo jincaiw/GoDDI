@@ -158,6 +158,9 @@ h2-dns-ps-test:
 h2-auto-failover:
 	@bash tests/h2/scripts/auto-failover-drill.sh
 
+h2-config-replication:
+	@bash tests/h2/scripts/config-replication-acceptance.sh
+
 h2-report:
 	@bash tests/h2/scripts/h2-report.sh
 
