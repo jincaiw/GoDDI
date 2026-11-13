@@ -1,10 +1,13 @@
 package transfer
 
 import (
+	"database/sql"
+	"net"
 	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
+	_ "modernc.org/sqlite"
 )
 
 func TestValidateTransferredAXFRRejectsInconsistentRRsetTTLs(t *testing.T) {
@@ -98,4 +101,48 @@ func TestParseTransferPolicyTLS(t *testing.T) {
 	if cfg.tsigAlgo != "hmac-sha512" {
 		t.Errorf("algo = %q, want hmac-sha512", cfg.tsigAlgo)
 	}
+}
+
+// TestInsertRRTxStoresFQDNName is the regression for a silent whole-zone outage:
+// a transferred zone committed its records under relative names ("www"), the
+// zone store indexed them as FQDN("www")="www." (outside the zone), and the
+// secondary answered NXDOMAIN for every query while its SOA serial looked
+// correct. The stored name must be the absolute FQDN, matching the control-plane
+// writer and the zone store's indexing.
+func TestInsertRRTxStoresFQDNName(t *testing.T) {
+	db := newSecondaryDB(t)
+	s := NewSecondarySync(db)
+	rr := &dns.A{
+		Hdr: dns.RR_Header{Name: "www.example.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+		A:   net.ParseIP("192.0.2.7"),
+	}
+	if err := s.insertRRTx(db, "zone-1", rr, "example.test."); err != nil {
+		t.Fatalf("insertRRTx: %v", err)
+	}
+	var name string
+	if err := db.QueryRow(`SELECT name FROM dns_records WHERE zone_id='zone-1'`).Scan(&name); err != nil {
+		t.Fatalf("reading stored record: %v", err)
+	}
+	if name != "www.example.test." {
+		t.Fatalf("stored name = %q, want the FQDN www.example.test.", name)
+	}
+}
+
+// newSecondaryDB builds the minimal schema insertRRTx writes to.
+func newSecondaryDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`CREATE TABLE dns_records (
+		id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
+		value TEXT NOT NULL, ttl INTEGER NOT NULL, priority INTEGER, weight INTEGER,
+		port INTEGER, flag INTEGER, tag TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+		comment TEXT, tags TEXT, owner TEXT, expires_at DATETIME, authored_locally INTEGER DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
+	return db
 }

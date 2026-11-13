@@ -2,7 +2,7 @@
 # .ha-goddi-bin / .ha-web-dist by `make h2-build`), no in-container frontend
 # build. The node config is mounted at /etc/goddi/config.yaml by compose.
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates tzdata curl jq \
+RUN apk add --no-cache ca-certificates tzdata curl jq sqlite \
     && addgroup -S goddi && adduser -S -G goddi goddi
 WORKDIR /app
 COPY .ha-goddi-bin /usr/local/bin/goddi

@@ -16,10 +16,10 @@ jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/nul
 login(){ curl -s -X POST "http://127.0.0.1:$1/api/v1/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"AdminPass-0123456789"}'; }
 RA=$(login 18181); TOK=$(printf '%s' "$RA"|jget "d['data']['token']"); CS=$(printf '%s' "$RA"|jget "d['data']['csrf_token']")
 H=(-H "Authorization: Bearer $TOK" -H "X-CSRF-Token: $CS" -H 'Content-Type: application/json')
-sq(){ docker exec node-a sh -c "apk add -q sqlite >/dev/null 2>&1; sqlite3 -noheader $1 \"$2\"" 2>/dev/null | tr -d '\r'; }
+sq(){ docker exec node-a sh -c "sqlite3 -noheader $1 \"$2\"" 2>/dev/null | tr -d '\r'; }
 # The same query against the volume, for when the node has exited (a fail-closed
 # startup leaves nothing to exec into).
-sqvol(){ docker run --rm -v goddi-h2_node-a-data:/d alpine:3.24 sh -c "apk add -q sqlite >/dev/null 2>&1; sqlite3 -noheader /d/$1 \"$2\"" 2>/dev/null | tr -d '\r'; }
+sqvol(){ docker run --rm -v goddi-h2_node-a-data:/d alpine:3.24 sh -c "sqlite3 -noheader /d/$1 \"$2\"" 2>/dev/null | tr -d '\r'; }
 # Restore every tamper even if the script is interrupted: a half-restored H2 pair
 # would make later suites fail for the wrong reason.
 TAMPERED_LEASE=""; TAMPERED_ORIG=""

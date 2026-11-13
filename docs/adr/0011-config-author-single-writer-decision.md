@@ -59,3 +59,24 @@ watermark 追赶）。H2 验收暴露的现实后果是：两台节点各自有�
 - 端到端：`tests/h2/scripts/config-author-acceptance.sh`
   （作者 201 / 非作者 409 / 原因可读 / 三类读 200 / health 200 / 数据面 standby / 拒绝不落库）。
 - 配置：`tests/h2/config/node-a.yaml`（`config_author: true`）、`node-b.yaml`（`false`）。
+
+## 补充（2026-11-13）：与 DNS 主从角色的关系
+
+DNS 冗余用**标准 DNS 主从**（每 zone 一个 `primary`，其余 `secondary` 经 NOTIFY + AXFR/IXFR + TSIG 跟随），
+这是与 DHCP 主备**正交**的维度：DHCP 切换只改变"谁产生租约事实"，不改变"谁是 DNS primary"。
+
+因此单作者规则（本 ADR）不能误伤 DNS follower：
+- `middleware.ConfigAuthor` 对**非作者节点创建 `type=secondary` 的 zone** 放行（只读跟随者不会分叉）；
+- 其余配置写（含 `type=primary` 的 zone）仍 409 拒绝；
+- 请求体在中间件读出后**回放**给 handler，避免"放行了却读不到 body"。
+
+验收：`tests/h2/scripts/dns-primary-secondary-acceptance.sh` → PASS=8 FAIL=0：
+主建区 + secondary 跟随 → 首传成功 → 主改记录后 secondary **serial 追平** → 两节点同 serial →
+node-b 是 secondary 不是 primary（无双主）→ 同名 primary 被唯一约束拒绝。
+
+## 顺带修复的真实缺陷：AXFR 应用丢弃 zone 后缀导致整区 NXDOMAIN
+
+`internal/dns/transfer/secondary.go` 的 `insertRRTx` 曾把传输来的 RR 名裁剪成相对名（`www`），
+而 zone store 以 `dns.Fqdn(name)` 建索引（`www.` 落在区外），导致**传送成功、SOA serial 正确，
+但每条查询都 NXDOMAIN**——一个静默的整区故障。修复：按控制面写入口同一约定**存绝对 FQDN**。
+回归测试：`TestInsertRRTxStoresFQDNName`。

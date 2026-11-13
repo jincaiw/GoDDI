@@ -836,15 +836,13 @@ func (s *SecondarySync) insertRRTx(exec executor, zoneID string, rr dns.RR, zone
 		return nil
 	}
 
-	name := hdr.Name
-	// Make relative to zone if possible.
-	if strings.HasSuffix(strings.ToLower(name), strings.ToLower(zoneName)) {
-		name = name[:len(name)-len(zoneName)]
-		name = strings.TrimSuffix(name, ".")
-		if name == "" {
-			name = zoneName
-		}
-	}
+	// Store the record's absolute (FQDN) name, exactly as the zone store and the
+	// control-plane record writer do. Trimming the zone suffix here produced a
+	// relative name ("www"); the store then indexed it as FQDN("www")="www.",
+	// which is outside the zone, so a transferred zone answered NXDOMAIN for
+	// every query while the SOA serial looked correct -- a silent whole-zone
+	// outage after a successful transfer.
+	name := dns.Fqdn(hdr.Name)
 
 	rtype, ok := dns.TypeToString[hdr.Rrtype]
 	if !ok {

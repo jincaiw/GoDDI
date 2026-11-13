@@ -17,7 +17,9 @@ H=(-H "Authorization: Bearer $TOK" -H "X-CSRF-Token: $CS" -H 'Content-Type: appl
 # node-a's client-network address (not stable across recreates).
 DNS_IP=$(docker exec node-a sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
 [ -n "${DNS_IP:-}" ] || DNS_IP=10.77.3.2
-sqlq(){ docker exec node-a sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1; sqlite3 -noheader /var/lib/goddi/goddi.db \"$1\"" 2>/dev/null | tr -d '\r'; }
+# sqlite3 is baked into the H2 node image (see tests/h2/Dockerfile), so there is
+# no runtime package install on the query path.
+sqlq(){ docker exec node-a sh -c "sqlite3 -noheader /var/lib/goddi/goddi.db \"$1\"" 2>/dev/null | tr -d '\r'; }
 
 # --- IPAM space + subnet ---------------------------------------------------
 # Reuse an existing space/subnet so the suite is repeatable (the name is unique).
@@ -83,7 +85,12 @@ after=$(sqlq "select count(*) from ipam_addresses;")
 # Give the DHCP scope a domain and enable DNS updates, and create the reverse
 # zone the DHCP plane publishes PTRs into, so A/PTR are actually verifiable.
 if [ -n "${IP:-}" ]; then
-  SC=$(curl -s "http://127.0.0.1:18181/api/v1/dhcp/scopes" -H "Authorization: Bearer $TOK" | jget "d['data'][0]['id']")
+  # Target the scope that actually served this lease. Several fixture scopes
+  # share 10.77.3.0/24, so "the first scope" is not necessarily the one the
+  # lease came from and enabling DNS updates on the wrong one publishes nothing.
+  SC=$(curl -s "http://127.0.0.1:18181/api/v1/dhcp/leases?ip=$IP" -H "Authorization: Bearer $TOK" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print(d[0].get('scope_id','') if d else '')" 2>/dev/null)
+  [ -z "${SC:-}" ] && SC=$(curl -s "http://127.0.0.1:18181/api/v1/dhcp/scopes" -H "Authorization: Bearer $TOK" | jget "d['data'][0]['id']")
   if [ -n "${SC:-}" ]; then
     curl -s -X PUT "http://127.0.0.1:18181/api/v1/dhcp/scopes/$SC" "${H[@]}" \
       -d '{"domain_name":"h2ddns.test","dns_updates":true}' -o /dev/null

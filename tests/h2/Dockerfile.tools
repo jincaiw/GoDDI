@@ -4,5 +4,5 @@
 # container really owns the qdisc. On Docker Desktop the qdisc applies inside
 # the VM, so the scenario reports NOT_VERIFIED unless it can be verified.
 FROM alpine:3.24
-RUN apk add --no-cache iproute2 iptables iputils curl jq bash tcpdump
+RUN apk add --no-cache iproute2 iptables iputils curl jq bash tcpdump sqlite
 ENTRYPOINT ["sh"]

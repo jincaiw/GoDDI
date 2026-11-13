@@ -46,7 +46,7 @@ st=$(docker exec node-b goddi ha status -c /etc/goddi/config.yaml 2>/dev/null | 
 [ "$st" -eq 1 ] && ok "non-author node keeps its DHCP standby role" || bad "non-author node role changed"
 
 # A refused write must leave no trace: the non-author store must not contain it.
-left=$(docker exec node-b sh -c "apk add -q sqlite >/dev/null 2>&1; sqlite3 /var/lib/goddi/goddi.db \"select count(*) from dns_zones where name like 'non%$NAME';\"" 2>/dev/null | tr -d '\r')
+left=$(docker exec node-b sh -c "sqlite3 /var/lib/goddi/goddi.db \"select count(*) from dns_zones where name like 'non%$NAME';\"" 2>/dev/null | tr -d '\r')
 [ "${left:-0}" -eq 0 ] && ok "refused write left no row in the non-author store" || bad "refused write persisted $left row(s)"
 
 nv "leader election / quorum / witness / epoch fencing remain unimplemented (full ADR-0005)"

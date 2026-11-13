@@ -8,7 +8,7 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=196，FAIL=0，NOT_VERIFIED=16） |
+| **Level 1 判定** | **PASS**（PASS=204，FAIL=0，NOT_VERIFIED=16） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
 | 配置作者 | **单作者规则已实施**（ADR-0011）：非作者节点配置写 409、读与数据面不受影响 |
@@ -29,6 +29,7 @@
 | 故障注入 H2-001..020（容器/进程） | 22 | 0 | 5 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
 | 故障注入 H2-009/010/011/012/016（应用级） | 5 | 0 | 0 | 事件重投幂等；租约哈希/越界篡改→启动拒绝发布快照（fail-closed）；facts 水位不一致→投影缺口指标；写故障窗口下已持久租约零丢失；IPAM 消费者故障后可恢复并排空 backlog |
 | IPAM/DDNS | 12 | 0 | 3 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
+| DNS 主从（primary/secondary） | 8 | 0 | 0 | 主建区→secondary AXFR 跟随→改记录后 serial 追平→同 serial→node-b 为 secondary 无双主→同名 primary 被拒（并修复 AXFR 应用丢 zone 后缀的整区 NXDOMAIN 缺陷） |
 | Web 控制台 | 113 | 0 | 0 | 18 套 Playwright + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
 
 ## 3. 强制项核验（任务 §8）
@@ -69,6 +70,12 @@
 - **udhcpc 改写客户端网络**：DHCP 类测试会改动 client 容器的地址/路由，DNS/后续套件前必须恢复 fixture 网络；已内建恢复。
 - **探针重装**：`make h2-down` 会删除容器，DNS 传送的 Go 探针（axfrprobe/notifyprobe）改由 `build-probes.sh` 自动重建安装。
 - **故障注入顺序**：`h2-fault-test` 曾误调 `run-all.sh`，已改为 `fault-scenarios.sh`（含应用级）。
+
+## 5c. 收尾补充（2026-11-13）
+
+- **DNS 主从与 DHCP 切换正交**：已实现并验收（`PASS=8 FAIL=0`）。单作者规则放行 secondary 创建，避免误伤 DNS 冗余。
+- **修复真实缺陷**：AXFR 应用时丢弃 zone 后缀 → 整区 NXDOMAIN（静默）。已修为存 FQDN + 回归测试。
+- **DHCP 自动切换（双链路/优先级/抢占）**：已在评估中给出方案，属产品决策项，未在本轮实施。
 
 ## 6. 原始证据索引
 

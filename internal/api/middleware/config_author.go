@@ -1,10 +1,46 @@
 package middleware
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 )
+
+// DNSSecondaryZoneExempt, when true, lets a non-author node create DNS
+// *secondary* zones.
+//
+// A secondary zone is not an authored configuration: it is a follower that
+// mirrors a primary elsewhere, and it is exactly how DNS redundancy is deployed
+// on a pair of nodes. The single-author rule (ADR-0011) exists to stop two nodes
+// publishing divergent revisions of the same resource; a secondary cannot
+// diverge because it only ever copies. The two axes -- "who may author" and
+// "who may follow" -- are therefore different, and this exemption keeps the
+// rule from blocking the DNS redundancy the deployment needs.
+//
+// Only the creation of a zone whose body says type=secondary is exempt. Every
+// other configuration write on a non-author node stays refused.
+var DNSSecondaryZoneExempt = true
+
+// isDNSSecondaryCreate reports whether this request creates a secondary zone.
+func isDNSSecondaryCreate(r *http.Request) bool {
+	if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/dns/zones") {
+		return false
+	}
+	body, err := readBodyPeek(r)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(probe.Type), "secondary")
+}
 
 // ConfigAuthor refuses configuration writes on a node that is not the
 // deployment's configuration author.
@@ -53,6 +89,10 @@ func ConfigAuthor(author bool, nodeName string) func(http.Handler) http.Handler 
 				next.ServeHTTP(w, r)
 				return
 			}
+			if DNSSecondaryZoneExempt && isDNSSecondaryCreate(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			slog.Warn("config write refused: this node is not the configuration author",
 				"method", r.Method, "path", r.URL.Path, "node", nodeName,
 				"reason", "cluster.config_author=false (ADR-0005 single-author rule)")
@@ -61,4 +101,19 @@ func ConfigAuthor(author bool, nodeName string) func(http.Handler) http.Handler 
 			_, _ = w.Write([]byte(`{"code":409,"message":"此节点不是配置作者，配置写操作已被拒绝（cluster.config_author=false）；请在配置作者节点上执行，或调整部署配置"}`))
 		})
 	}
+}
+
+// readBodyPeek reads the request body and restores it for the handler.
+//
+// The middleware needs one field out of the body; consuming it without putting
+// it back would make the handler see an empty request and fail a write that the
+// middleware had just allowed.
+func readBodyPeek(r *http.Request) ([]byte, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	const maxPeek = 1 << 16
+	buf, err := io.ReadAll(io.LimitReader(r.Body, maxPeek))
+	r.Body = io.NopCloser(bytes.NewReader(buf))
+	return buf, err
 }
