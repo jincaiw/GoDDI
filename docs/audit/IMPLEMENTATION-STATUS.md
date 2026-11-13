@@ -1930,3 +1930,13 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - `facts_hash_chain_enabled=true` 时 producer→relay→IPAM/DNS 消费者**端到端链校验**闭合；默认关闭行为不变。
 - D-13：评估为**有意保留**——`lease_store_shadow.go`/`lease_store_indexed.go` 无生产引用，仅测试/注入接缝，删除会损失注入测试能力；文档化保留。
 - 回归：`go test ./...` **102 包 ok / 0 FAIL**（修正 `legacy_upgrade_drill_test` 迁移数量断言 34→35：新增 control 迁移 035）。
+
+## 1bm. DHCP 双机热备增强：双链路 / 优先级·抢占 / 默认关闭的自动提升（ADR-0012，round 392–393）
+
+- **双心跳链路**：`dhcp_ha.listen_addr_backup`（主端第二监听，`Replicator.Run` 多监听仍单会话）+ `dhcp_ha.peer_address_backup`（备端 `Mirror.dialPeer` 遍历所有路径）。任一链路可达即视为对端存活，单线/NIC 故障不误判宕机。env：`GODDI_DHCP_HA_LISTEN_ADDR_BACKUP` / `GODDI_DHCP_HA_PEER_ADDRESS_BACKUP`。
+- **优先级/抢占**：`dhcp_ha.priority`（默认 0）、`dhcp_ha.preempt`（默认 false，避免抖动接管风暴）。
+- **自动提升（默认关闭）**：`dhcp_ha.auto_failover`（默认 false）+ `auto_failover_windows`（默认 3）。开启时备端全路径连续失败达阈值后调用与运维相同的 `Operator.Takeover`（epoch+1，接受已知 gap），持久化后退出，由 supervisor 重启为 primary。关闭时完全保持 ADR-0003/0010 的 fail-closed。env：`GODDI_DHCP_HA_AUTO_FAILOVER[_WINDOWS]`、`GODDI_DHCP_HA_PRIORITY`、`GODDI_DHCP_HA_PREEMPT`。
+- **网络监测指标**：`goddi_dhcp_ha_peer_up` / `goddi_dhcp_ha_peer_last_seen_seconds`（主备两节点均发布；standby 之前被 `haRole != standby` 挡掉，现放开）；告警 `GoDDIDHCPHAPeerDown` / `GoDDIDHCPHAPeerSilent`。
+- **测试**：`TestPeerAddrsListsEveryConfiguredPath`、`TestAutoFailoverDefaultWindows`、`TestDialPeerUsesBackupWhenPrimaryPathDown`、`TestAutoFailoverFiresOnlyWhenEnabled`、`TestDualListenAcceptsOnBothPaths`、`TestSampleProvidersPublishesPeerLiveness`；H2 演练 `make h2-auto-failover`（`tests/h2/docker-compose.autofailover.yml` + `scripts/auto-failover-drill.sh`）。
+- **H2 完整时序演练**（PASS=13~14/0）：双线 100% 丢包 → node-a paused（不 ACK）→ node-b 自动提升并重启为 primary → 旧主 node-a 重入降 standby → 新主保持 primary → 配置作者与 DHCP 角色正交（node-a 201 / node-b 409）。唯一 NOT_VERIFIED：提升后备端可分配租约需 ADR-0005 跨节点 scope 复制。
+- **回归**：`go test ./...` 102 ok/0 FAIL；`make h2-test` verdict=PASS，PASS=218 FAIL=0 NOT_VERIFIED=17（11 套件）；docs 守卫 PASS。
