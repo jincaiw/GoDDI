@@ -155,6 +155,9 @@ h2-config-author:
 h2-dns-ps-test:
 	@bash tests/h2/scripts/dns-primary-secondary-acceptance.sh
 
+h2-auto-failover:
+	@bash tests/h2/scripts/auto-failover-drill.sh
+
 h2-report:
 	@bash tests/h2/scripts/h2-report.sh
 

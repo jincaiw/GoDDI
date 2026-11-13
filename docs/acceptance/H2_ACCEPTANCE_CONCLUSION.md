@@ -8,7 +8,7 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=204，FAIL=0，NOT_VERIFIED=16） |
+| **Level 1 判定** | **PASS**（PASS=218，FAIL=0，NOT_VERIFIED=17；含 auto-failover 演练） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
 | 配置作者 | **单作者规则已实施**（ADR-0011）：非作者节点配置写 409、读与数据面不受影响 |
@@ -77,6 +77,10 @@
 - **修复真实缺陷**：AXFR 应用时丢弃 zone 后缀 → 整区 NXDOMAIN（静默）。已修为存 FQDN + 回归测试。
 - **DHCP 自动切换（双链路/优先级/抢占）**：已按 ADR-0012 实施——双心跳链路（任一通即活）、`priority`/`preempt`、
   **默认关闭的 `auto_failover`**（提升持久化 + 重启生效）。默认行为零变化（维持 fail-closed），单元/真实 TCP 集成测试通过。
+- **auto_failover 完整时序演练**（`make h2-auto-failover`，独立 compose override + restart 策略）：
+  双线 100% 丢包 → node-a paused（fail-closed 不 ACK）→ **node-b 自动提升并重启为 primary** → 旧主 node-a 重入降 standby →
+  新主 node-b 保持 primary → 配置作者与 DHCP 角色正交（node-a 仍 201，node-b 409）。**PASS=13 FAIL=0 NOT_VERIFIED=1**
+  （唯一 NOT_VERIFIED：提升后备端可分配租约需 ADR-0005 跨节点 scope 复制，未实现）。
 
 ## 6. 原始证据索引
 

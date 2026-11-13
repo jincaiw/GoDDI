@@ -1,0 +1,19 @@
+# Override for the auto-failover end-to-end drill (ADR-0012).
+#
+# Turns the standby into an auto-failing-over node with a supervisor restart
+# policy so a promotion (which takes effect on the next start) actually comes
+# back as primary. Only node-b is changed; node-a keeps the default fail-closed
+# behaviour, so the drill shows the full sequence: both lose the peer -> node-a
+# pauses, node-b promotes and restarts into primary, node-a rejoins as standby.
+#
+# The failure threshold (4 windows x 5s) is deliberately larger than the
+# promotion quiet window (3 x PeerStaleAfter = 15s); promoting sooner would be
+# refused as "the peer was answering too recently", which is the safety check
+# doing its job.
+services:
+  node-b:
+    environment:
+      GODDI_DHCP_HA_AUTO_FAILOVER: "true"
+      GODDI_DHCP_HA_AUTO_FAILOVER_WINDOWS: "4"
+      GODDI_DHCP_HA_PRIORITY: "20"
+    restart: unless-stopped
