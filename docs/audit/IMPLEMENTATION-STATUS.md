@@ -1940,3 +1940,16 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - **测试**：`TestPeerAddrsListsEveryConfiguredPath`、`TestAutoFailoverDefaultWindows`、`TestDialPeerUsesBackupWhenPrimaryPathDown`、`TestAutoFailoverFiresOnlyWhenEnabled`、`TestDualListenAcceptsOnBothPaths`、`TestSampleProvidersPublishesPeerLiveness`；H2 演练 `make h2-auto-failover`（`tests/h2/docker-compose.autofailover.yml` + `scripts/auto-failover-drill.sh`）。
 - **H2 完整时序演练**（PASS=13~14/0）：双线 100% 丢包 → node-a paused（不 ACK）→ node-b 自动提升并重启为 primary → 旧主 node-a 重入降 standby → 新主保持 primary → 配置作者与 DHCP 角色正交（node-a 201 / node-b 409）。唯一 NOT_VERIFIED：提升后备端可分配租约需 ADR-0005 跨节点 scope 复制。
 - **回归**：`go test ./...` 102 ok/0 FAIL；`make h2-test` verdict=PASS，PASS=218 FAIL=0 NOT_VERIFIED=17（11 套件）；docs 守卫 PASS。
+
+## 1bn. ADR-0013 配置复制 A 落地（路线1，全实施完成）
+
+- **决策**：ADR-0005 拆为 A（配置复制，已实现）与 B（分布式写入授权/协调器，延后，`ErrNotImplemented` 保留）。见 `docs/adr/0013-config-replication-vs-coordinator.md`（状态：Implemented）。
+- **实现**：
+  - `internal/dataplane/configtables.go` 导出 `ConfigTableSpecs`（复用 dhcpTables/dnsTables 作单一事实源）。
+  - `internal/configrepl/snapshot.go`：`ReadSnapshot`/`ApplySnapshot`（replace_whole + replace_control_authored），JSON 往返保整数；**版本用内容指纹（FNV-64）**，修正了 outbox-id 恒 0 导致 follower 永不拉取的缺陷。
+  - `internal/configrepl/puller.go`：follower 周期拉取 → 整表事务替换 → 写 `config_repl_state` 水位 → 唤醒 dns/dhcp runner。
+  - 迁移 `036_config_repl_state.sql`；端点 `GET /internal/cluster/config/snapshot`（共享 token，无 token 503）；配置 `cluster.config_replication{,_source,_token,_interval}`（默认关）。
+  - `internal/dhcp/ha` 自动提升回调改返回 bool，被拒（静默窗未满足）继续重试，避免永久停 standby。
+- **H2 验收**：`make h2-config-replication` — node-a 建 scope → node-b 自动出现（控制库+数据面）→ 杀 node-a → node-b 自动提升并**从复制 scope 直接分配租约 10.77.3.121（无手工重建）**。PASS=10 FAIL=0。
+- **边界（不宣称）**：B 未实现——作者节点自身故障的自动切换、真实分区 fail-closed、跨节点 Revision/Hash 自动一致仍 NOT_VERIFIED；A 为单作者单向只读复制，默认关闭。
+- **回归**：`go test ./...` 103 ok / 0 FAIL；docs 守卫 PASS。

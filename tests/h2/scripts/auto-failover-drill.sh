@@ -104,7 +104,7 @@ code_b=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18182/a
 [ "$code_a" = "201" ] && ok "node-a (config author) still authors config after demotion (HTTP 201)" || bad "node-a config author write returned $code_a"
 [ "$code_b" = "409" ] && ok "node-b (new DHCP primary, not config author) refuses config writes (HTTP 409)" || bad "node-b write returned $code_b"
 
-nv "promoted standby serving leases requires scope replication across nodes (ADR-0005 not implemented)"
+nv "promoted standby serving leases is proven separately by make h2-config-replication (ADR-0013 A); this drill does not enable config replication"
 
 echo "### restore the standard (non-auto-failover) pair for later suites"
 # The drill leaves node-b as the recorded primary. Recreating from the base

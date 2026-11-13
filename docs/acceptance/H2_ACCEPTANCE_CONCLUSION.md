@@ -8,7 +8,7 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=218，FAIL=0，NOT_VERIFIED=17；含 auto-failover 演练） |
+| **Level 1 判定** | **PASS**（PASS=229，FAIL=0，NOT_VERIFIED=16；含 auto-failover 与 config-replication 演练） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
 | 配置作者 | **单作者规则已实施**（ADR-0011）：非作者节点配置写 409、读与数据面不受影响 |
