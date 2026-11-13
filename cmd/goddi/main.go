@@ -930,6 +930,11 @@ func runServer(configPath string) error {
 	var dhcpRunner *dataplane.Runner
 	var haRepl *ha.Replicator
 	var haMirror *ha.Mirror
+	// autoFailoverCh carries "this standby decided to promote" to the shutdown
+	// path. Promotion is durable but takes effect on the next start, so the
+	// process exits and a supervisor restarts it into the primary role. Nil
+	// unless ha.auto_failover is enabled.
+	var autoFailoverCh chan struct{}
 
 	// The role this node runs as is resolved before anything is built from it.
 	//
@@ -1053,6 +1058,36 @@ func runServer(configPath string) error {
 				return fmt.Errorf("opening the DHCP HA mirror: %w", err)
 			}
 			haMirror = mirror
+			if effective.AutoFailover {
+				autoFailoverCh = make(chan struct{}, 1)
+				effectiveCopy := effective
+				storeCopy := dhcpStore
+				mirror.SetAutoPromote(func() {
+					// Record the promotion durably (epoch+1) with the same
+					// guarded action an operator runs. The shortfall is the
+					// gap the standby already knows; unacknowledged changes
+					// cannot contain an acknowledged binding.
+					op := ha.NewOperator(effectiveCopy, storeCopy)
+					st, serr := op.Status()
+					var gap int64
+					if serr == nil {
+						gap = st.Gap
+					}
+					out, terr := op.Takeover(ha.TakeoverOptions{
+						Confirmed: true, OldPrimaryCannotWrite: true, AcceptGap: gap,
+					})
+					if terr != nil {
+						slog.Error("HA: auto-failover promotion was refused; staying standby", "error", terr)
+						return
+					}
+					slog.Error("HA: auto-failover promoted this node; restarting to take effect",
+						"epoch", out.Epoch, "seq", out.Seq)
+					select {
+					case autoFailoverCh <- struct{}{}:
+					default:
+					}
+				})
+			}
 			// The redundancy state goes in the startup log, not only in a
 			// metric and not only when it changes. A node that comes up
 			// without the second copy it was configured for has to say so
@@ -2087,6 +2122,11 @@ func runServer(configPath string) error {
 	select {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
+	case <-autoFailoverCh:
+		slog.Error("HA: shutting down for an auto-failover promotion; a supervisor must restart this process into the primary role")
+		// Fall through to the graceful shutdown below; the process exits 0 and
+		// the supervisor (systemd Restart=always / container restart policy)
+		// brings it back, where EffectiveRole reads the recorded primary role.
 	case sig := <-quit:
 		slog.Info("received shutdown signal", "signal", sig.String())
 	}

@@ -46,6 +46,12 @@
 | `dhcp_ha.tls_key_file` | string / 空 | `GODDI_DHCP_HA_TLS_KEY_FILE` | 证书私钥；仅从受限文件/环境注入 |
 | `dhcp_ha.tls_ca_file` | string / 空 | `GODDI_DHCP_HA_TLS_CA_FILE` | 校验对端证书的根 CA |
 | `dhcp_ha.tls_server_name` | string / 空 | `GODDI_DHCP_HA_TLS_SERVER_NAME` | dial 侧校验的对端名称；空则取 peer_address 主机名 |
+| `dhcp_ha.listen_addr_backup` | string / 空 | `GODDI_DHCP_HA_LISTEN_ADDR_BACKUP` | 第二条心跳链路（第二根网线）上 primary 的监听地址；primary 同时监听两条，单线故障不影响对端存活判定 |
+| `dhcp_ha.peer_address_backup` | string / 空 | `GODDI_DHCP_HA_PEER_ADDRESS_BACKUP` | standby 侧的第二条对端路径；任一链路可达即视为对端存活 |
+| `dhcp_ha.priority` | int / `0` | `GODDI_DHCP_HA_PRIORITY` | 仅用于自动提升的优先级比较，数值大者优先；不影响健康主节点 |
+| `dhcp_ha.preempt` | bool / `false` | `GODDI_DHCP_HA_PREEMPT` | 重新加入的高优先级节点是否抢回主；默认 false，避免抖动导致接管风暴 |
+| `dhcp_ha.auto_failover` | bool / `false` | `GODDI_DHCP_HA_AUTO_FAILOVER` | **默认关闭**。开启后备节点在**所有链路**连续失联达阈值窗口且自身优先级更高时自我提升；提升持久化（epoch+1）并在下次启动生效，需 supervisor 重启进程。关闭时保持 ADR-0003/ADR-0010 的 fail-closed（备节点永不自我提升） |
+| `dhcp_ha.auto_failover_windows` | int / `0`（默认 3） | `GODDI_DHCP_HA_AUTO_FAILOVER_WINDOWS` | 连续失败窗口阈值；0 表示内置默认 3 |
 
 ## 3. 保留占位（**配置可被解析，但功能未实现 / 501**）
 
@@ -89,6 +95,12 @@
 | `GODDI_DHCP_HA_ENABLED` | 布尔 | `dhcp_ha.enabled` |
 | `GODDI_DHCP_HA_HEARTBEAT_INTERVAL` | 字符串 | `dhcp_ha.heartbeat_interval` |
 | `GODDI_DHCP_HA_LISTEN_ADDR` | 字符串 | `dhcp_ha.listen_addr` |
+| `GODDI_DHCP_HA_LISTEN_ADDR_BACKUP` | 字符串 | `dhcp_ha.listen_addr_backup` |
+| `GODDI_DHCP_HA_PEER_ADDRESS_BACKUP` | 字符串 | `dhcp_ha.peer_address_backup` |
+| `GODDI_DHCP_HA_PRIORITY` | 整数 | `dhcp_ha.priority` |
+| `GODDI_DHCP_HA_PREEMPT` | 布尔 | `dhcp_ha.preempt` |
+| `GODDI_DHCP_HA_AUTO_FAILOVER` | 布尔 | `dhcp_ha.auto_failover` |
+| `GODDI_DHCP_HA_AUTO_FAILOVER_WINDOWS` | 整数 | `dhcp_ha.auto_failover_windows` |
 | `GODDI_DHCP_HA_NODE_ID` | 字符串 | `dhcp_ha.node_id` |
 | `GODDI_DHCP_HA_PEER_ADDRESS` | 字符串 | `dhcp_ha.peer_address` |
 | `GODDI_DHCP_HA_PEER_STALE_AFTER` | 字符串 | `dhcp_ha.peer_stale_after` |

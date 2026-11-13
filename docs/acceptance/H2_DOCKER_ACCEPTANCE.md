@@ -44,6 +44,10 @@ make h2-down                  # 清理
 
 ## 最终结论（2026-11-13 更新）
 
+- **DHCP 双机热备增强（ADR-0012）**：双心跳链路（`listen_addr_backup`/`peer_address_backup`，任一通即活）+
+  `priority`/`preempt` + **默认关闭的 `auto_failover`**。默认行为不变；真实 TCP 集成测试
+  （双路径回退、双监听、开关关闭不提升）通过。
+
 - **内核级故障已转 PASS**：`make h2-fault-kernel` 在本机 linux/arm64 运行时真实注入 tc/netem 与 tmpfs 磁盘满 → H2-004/005/006/013 **PASS=11 FAIL=0**。
 - **ADR-0011 单作者规则已实施**：`cluster.config_author`；非作者节点配置写 409、读与数据面不受影响 → `make h2-config-author` **PASS=9**。
 - 全链路 `make h2-test` → **verdict=PASS，PASS=196 FAIL=0 NOT_VERIFIED=16**。

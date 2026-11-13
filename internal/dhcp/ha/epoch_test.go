@@ -152,3 +152,34 @@ func TestRecordSupersededIsDurable(t *testing.T) {
 		t.Fatalf("effective role = %q, want standby (config says primary)", role)
 	}
 }
+
+// TestPeerAddrsListsEveryConfiguredPath proves the dual-link contract: both
+// configured paths to the peer are used, and an empty backup does not add a
+// duplicate of the primary path.
+func TestPeerAddrsListsEveryConfiguredPath(t *testing.T) {
+	c := testConfig(t, config.HARoleStandby)
+	if got := c.PeerAddrs(); len(got) != 1 || got[0] != c.PeerAddress {
+		t.Fatalf("single-path PeerAddrs = %v, want [%s]", got, c.PeerAddress)
+	}
+	c.PeerAddressBackup = "10.0.0.9:9953"
+	if got := c.PeerAddrs(); len(got) != 2 || got[1] != "10.0.0.9:9953" {
+		t.Fatalf("dual-path PeerAddrs = %v, want two entries", got)
+	}
+	c.PeerAddressBackup = c.PeerAddress
+	if got := c.PeerAddrs(); len(got) != 1 {
+		t.Fatalf("duplicate backup should collapse to one path, got %v", got)
+	}
+}
+
+// TestAutoFailoverDefaultWindows proves the threshold default is three and that
+// a configured value overrides it.
+func TestAutoFailoverDefaultWindows(t *testing.T) {
+	c := testConfig(t, config.HARoleStandby)
+	if got := c.autoFailoverWindows(); got != 3 {
+		t.Fatalf("default windows = %d, want 3", got)
+	}
+	c.AutoFailoverWindows = 7
+	if got := c.autoFailoverWindows(); got != 7 {
+		t.Fatalf("configured windows = %d, want 7", got)
+	}
+}

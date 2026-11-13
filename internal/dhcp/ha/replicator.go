@@ -415,22 +415,39 @@ func (r *Replicator) enqueue(row LeaseRow) (int64, error) {
 // this contract supports, and accepting a second one silently would give two
 // nodes the same watermarks while only one of them is the one being trusted.
 func (r *Replicator) Run(ctx context.Context) error {
-	ln, err := net.Listen("tcp", r.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("ha: listening for the peer on %s: %w", r.cfg.ListenAddr, err)
+	addrs := r.cfg.ListenAddrs()
+	if len(addrs) == 0 {
+		addrs = []string{r.cfg.ListenAddr}
 	}
-	defer ln.Close()
-	if st := r.cfg.serverTLS(); st != nil {
-		ln = tls.NewListener(ln, st)
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			for _, l := range listeners {
+				l.Close()
+			}
+			return fmt.Errorf("ha: listening for the peer on %s: %w", addr, err)
+		}
+		if st := r.cfg.serverTLS(); st != nil {
+			ln = tls.NewListener(ln, st)
+		}
+		listeners = append(listeners, ln)
 	}
+	defer func() {
+		for _, l := range listeners {
+			l.Close()
+		}
+	}()
 
 	r.mu.Lock()
-	r.bound = ln.Addr()
+	r.bound = listeners[0].Addr()
 	r.mu.Unlock()
 
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		for _, l := range listeners {
+			l.Close()
+		}
 	}()
 
 	// Started with the listener rather than with a session: the decision this
@@ -438,27 +455,50 @@ func (r *Replicator) Run(ctx context.Context) error {
 	// it would be waiting for is the one that is gone.
 	go r.watchOperatorDecisions(ctx)
 
+	// A second listener is a second cable, not a second peer. Both feed the
+	// same one-at-a-time accept loop so the single-session contract holds.
+	conns := make(chan net.Conn)
+	for _, l := range listeners {
+		go func(l net.Listener) {
+			for {
+				c, aerr := l.Accept()
+				if aerr != nil {
+					return
+				}
+				select {
+				case conns <- c:
+				case <-ctx.Done():
+					c.Close()
+					return
+				}
+			}
+		}(l)
+	}
+
+	boundAddrs := make([]string, 0, len(listeners))
+	for _, l := range listeners {
+		boundAddrs = append(boundAddrs, l.Addr().String())
+	}
 	slog.Info("HA: primary is listening for its mirror",
-		"addr", ln.Addr().String(), "node_id", r.cfg.NodeID, "seq", r.Seq())
+		"addrs", boundAddrs, "node_id", r.cfg.NodeID, "seq", r.Seq())
 
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("ha: accepting a peer connection: %w", err)
+		var conn net.Conn
+		select {
+		case <-ctx.Done():
+			return nil
+		case conn = <-conns:
 		}
 		// The peer link is marked down before the failure is reported, so that
 		// the state printed with it is the state this node is actually in. The
 		// other order reported "primary" on the line announcing that the
 		// mirror had died, which is the one word an operator reading that line
 		// must not see.
-		err = r.session(ctx, conn)
+		serr := r.session(ctx, conn)
 		conn.Close()
 		r.link.markDown()
-		if err != nil && ctx.Err() == nil {
-			slog.Warn("HA: the mirror session ended", "error", err, "state", r.State())
+		if serr != nil && ctx.Err() == nil {
+			slog.Warn("HA: the mirror session ended", "error", serr, "state", r.State())
 		}
 		if ctx.Err() != nil {
 			return nil

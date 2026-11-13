@@ -51,6 +51,54 @@ type Config struct {
 	// TLSServerName overrides the name verified on the dial side; empty falls
 	// back to the host part of PeerAddress.
 	TLSServerName string
+	// ListenAddrBackup is a second address this node accepts its peer on (the
+	// second cable).
+	ListenAddrBackup string
+	// PeerAddressBackup is a second independent path to the peer. Reachable on
+	// either path is reachable, so one cable/NIC failing is not "peer dead".
+	PeerAddressBackup string
+	// Priority is the tie-break used by auto-failover; higher wins.
+	Priority int
+	// Preempt lets a higher-priority node reclaim the primary role after rejoin.
+	// Default false.
+	Preempt bool
+	// AutoFailover enables standby self-promotion after every path is lost for
+	// AutoFailoverWindows windows. Default false (fail-closed).
+	AutoFailover bool
+	// AutoFailoverWindows is the consecutive-failure threshold; 0 => default 3.
+	AutoFailoverWindows int
+}
+
+// autoFailoverWindows returns the effective consecutive-failure threshold.
+func (c Config) autoFailoverWindows() int {
+	if c.AutoFailoverWindows > 0 {
+		return c.AutoFailoverWindows
+	}
+	return 3
+}
+
+// ListenAddrs returns every configured listen address, primary first.
+func (c Config) ListenAddrs() []string {
+	addrs := make([]string, 0, 2)
+	if a := strings.TrimSpace(c.ListenAddr); a != "" {
+		addrs = append(addrs, a)
+	}
+	if a := strings.TrimSpace(c.ListenAddrBackup); a != "" && a != strings.TrimSpace(c.ListenAddr) {
+		addrs = append(addrs, a)
+	}
+	return addrs
+}
+
+// PeerAddrs returns every configured path to the peer, primary first.
+func (c Config) PeerAddrs() []string {
+	addrs := make([]string, 0, 2)
+	if a := strings.TrimSpace(c.PeerAddress); a != "" {
+		addrs = append(addrs, a)
+	}
+	if a := strings.TrimSpace(c.PeerAddressBackup); a != "" && a != strings.TrimSpace(c.PeerAddress) {
+		addrs = append(addrs, a)
+	}
+	return addrs
 }
 
 // FromConfig resolves the operator's settings into a Config.
@@ -71,15 +119,20 @@ func FromConfig(c config.DHCPHAConfig) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Enabled:           c.Enabled,
-		NodeID:            strings.TrimSpace(c.NodeID),
-		Role:              c.HARoleNormalized(),
-		ListenAddr:        strings.TrimSpace(c.ListenAddr),
-		PeerAddress:       strings.TrimSpace(c.PeerAddress),
-		PeerToken:         strings.TrimSpace(c.PeerToken),
-		ConfirmTimeout:    confirm,
-		HeartbeatInterval: heartbeat,
-		PeerStaleAfter:    stale,
+		Enabled:             c.Enabled,
+		NodeID:              strings.TrimSpace(c.NodeID),
+		Role:                c.HARoleNormalized(),
+		ListenAddr:          strings.TrimSpace(c.ListenAddr),
+		PeerAddress:         strings.TrimSpace(c.PeerAddress),
+		PeerToken:           strings.TrimSpace(c.PeerToken),
+		ConfirmTimeout:      confirm,
+		HeartbeatInterval:   heartbeat,
+		PeerStaleAfter:      stale,
+		PeerAddressBackup:   strings.TrimSpace(c.PeerAddressBackup),
+		Priority:            c.Priority,
+		Preempt:             c.Preempt,
+		AutoFailover:        c.AutoFailover,
+		AutoFailoverWindows: c.AutoFailoverWindows,
 	}, nil
 }
 

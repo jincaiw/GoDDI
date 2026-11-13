@@ -58,6 +58,21 @@ type linkHealth struct {
 	up       bool
 	lastSeen time.Time
 	peer     Watermarks
+	path     string
+}
+
+// markPathUp records which peer path the current session uses, for status.
+func (h *linkHealth) markPathUp(addr string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.path = addr
+}
+
+// Path reports the peer address the current session is using ("" if none).
+func (h *linkHealth) Path() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.path
 }
 
 func (h *linkHealth) markUp(w Watermarks) {
@@ -132,6 +147,10 @@ type Mirror struct {
 	factsApplied int64
 	fenced       bool
 	epoch        int64
+	// onPromote is invoked when auto-failover decides this standby should
+	// promote. Nil (the default) keeps the fail-closed behaviour: a standby
+	// never promotes itself. main wires it only when auto_failover is enabled.
+	onPromote func()
 }
 
 type incomingSnapshot struct {
@@ -253,9 +272,17 @@ func (m *Mirror) LinkSnapshot() (up bool, lastSeen time.Time) {
 // The standby is the side that dials. A standby that restarts has to
 // re-establish the mirror to be useful at all, and a dial loop with backoff is
 // the only shape in which its own restart is recovered from without an operator.
+// SetAutoPromote installs the callback auto-failover invokes when this standby
+// has lost the primary on every path for the configured number of windows. It is
+// only wired when ha.auto_failover is deliberately enabled; leaving it nil keeps
+// the fail-closed contract (a standby never promotes itself).
+func (m *Mirror) SetAutoPromote(fn func()) { m.onPromote = fn }
+
 func (m *Mirror) Run(ctx context.Context) error {
 	backoff := 250 * time.Millisecond
 	const maxBackoff = 5 * time.Second
+	windows := m.cfg.autoFailoverWindows()
+	failures := 0
 
 	for {
 		if ctx.Err() != nil {
@@ -266,8 +293,24 @@ func (m *Mirror) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+		failures++
+
+		// Auto-failover: only when the deployment opted in *and* this node is
+		// the higher priority of the pair. A single lost connection is not a
+		// dead primary; the threshold counts consecutive failed windows across
+		// every path, which is what "both cables gone and the peer silent"
+		// looks like.
+		if m.cfg.AutoFailover && m.onPromote != nil && failures >= windows {
+			slog.Error("HA: auto-failover threshold reached; promoting this standby",
+				"node_id", m.cfg.NodeID, "windows", windows, "priority", m.cfg.Priority,
+				"peer_paths", m.cfg.PeerAddrs())
+			m.onPromote()
+			return nil
+		}
+
 		slog.Warn("HA: the mirror lost its primary; reconnecting",
-			"peer", m.cfg.PeerAddress, "applied_seq", m.AppliedSeq(), "error", err)
+			"peer", m.cfg.PeerAddress, "applied_seq", m.AppliedSeq(), "error", err,
+			"consecutive_failures", failures, "auto_failover", m.cfg.AutoFailover)
 
 		select {
 		case <-ctx.Done():
@@ -285,19 +328,41 @@ func (m *Mirror) Run(ctx context.Context) error {
 
 // session is one connection's lifetime: dial, handshake, then read frames until
 // the link breaks.
-func (m *Mirror) session(ctx context.Context) error {
+// dialPeer connects to the peer across every configured path (the second path is
+// the second cable). It returns the first connection that opens. Only when every
+// path fails is the peer unreachable; one cable or NIC failing must not look
+// like a dead peer.
+func (m *Mirror) dialPeer(ctx context.Context) (net.Conn, string, error) {
 	d := net.Dialer{Timeout: m.cfg.PeerStaleAfter}
-	var conn net.Conn
-	var err error
-	if ct := m.cfg.clientTLS(); ct != nil {
-		td := tls.Dialer{NetDialer: &d, Config: ct}
-		conn, err = td.DialContext(ctx, "tcp", m.cfg.PeerAddress)
-	} else {
-		conn, err = d.DialContext(ctx, "tcp", m.cfg.PeerAddress)
+	addrs := m.cfg.PeerAddrs()
+	if len(addrs) == 0 {
+		return nil, "", fmt.Errorf("ha: no peer address configured")
 	}
+	var lastErr error
+	ct := m.cfg.clientTLS()
+	for _, addr := range addrs {
+		var conn net.Conn
+		var err error
+		if ct != nil {
+			td := tls.Dialer{NetDialer: &d, Config: ct}
+			conn, err = td.DialContext(ctx, "tcp", addr)
+		} else {
+			conn, err = d.DialContext(ctx, "tcp", addr)
+		}
+		if err == nil {
+			return conn, addr, nil
+		}
+		lastErr = err
+	}
+	return nil, "", fmt.Errorf("dialling peer on all paths (%v) failed: %w", addrs, lastErr)
+}
+
+func (m *Mirror) session(ctx context.Context) error {
+	conn, dialed, err := m.dialPeer(ctx)
 	if err != nil {
-		return fmt.Errorf("dialling %s: %w", m.cfg.PeerAddress, err)
+		return err
 	}
+	m.link.markPathUp(dialed)
 	defer conn.Close()
 
 	// The connection is closed when ctx is cancelled, which is what unblocks
@@ -317,7 +382,7 @@ func (m *Mirror) session(ctx context.Context) error {
 		return err
 	}
 	slog.Info("HA: mirror connected to its primary",
-		"peer", m.cfg.PeerAddress, "applied_seq", m.AppliedSeq())
+		"peer", m.link.Path(), "applied_seq", m.AppliedSeq())
 	var snapshot *incomingSnapshot
 
 	for {

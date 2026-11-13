@@ -37,6 +37,12 @@ dhcp_ha:
   confirm_timeout: 1s
   heartbeat_interval: 2s
   peer_stale_after: 5s
+  # ADR-0012：双心跳链路（第二条网线）与默认关闭的自动提升。
+  # listen_addr_backup / peer_address_backup 由部署按第二网络填写；默认留空=单链路。
+  # auto_failover 默认 false：备永不自我提升，保持 fail-closed（ADR-0003/0010）。
+  priority: 10
+  preempt: false
+  auto_failover: false
   tls_cert_file: /etc/goddi/certs/h2-node-a.crt
   tls_key_file: /etc/goddi/certs/h2-node-a.key
   tls_ca_file: /etc/goddi/certs/ca.crt
