@@ -1,0 +1,13 @@
+# Demo overlay: a healthy two-node pair with ADR-0013 configuration replication
+# enabled, so the standby also shows the same zones/scopes. No auto-failover and
+# no restart policy: this is a stable demo, not a fault drill.
+services:
+  node-a:
+    environment:
+      GODDI_CLUSTER_CONFIG_REPLICATION_TOKEN: "h2-demo-repl-token-0123456789"
+  node-b:
+    environment:
+      GODDI_CLUSTER_CONFIG_REPLICATION: "true"
+      GODDI_CLUSTER_CONFIG_REPLICATION_SOURCE: "http://node-a:6080"
+      GODDI_CLUSTER_CONFIG_REPLICATION_TOKEN: "h2-demo-repl-token-0123456789"
+      GODDI_CLUSTER_CONFIG_REPLICATION_INTERVAL: "3"
