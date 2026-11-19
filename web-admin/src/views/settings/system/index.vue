@@ -89,6 +89,7 @@ onMounted(loadData);
 
     <TLoading :loading="loading" size="small">
       <TCard :bordered="false">
+        <TEmpty v-if="!loading && !settings.length" :description="t('common.noData')" />
         <div v-for="setting in settings" :key="setting.key" class="setting-row">
           <div class="setting-meta">
             <div class="setting-label">{{ settingLabel(setting.key) }}</div>
@@ -146,11 +147,6 @@ onMounted(loadData);
 }
 .td-page-header :deep(.t-card__body) {
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .setting-row {
   display: flex;

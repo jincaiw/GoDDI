@@ -2,18 +2,16 @@ package space
 
 // The space write path.
 //
-// A space is the top of the IPAM tree, and its deletion is the one operation
-// here that can remove more than it was asked to: ipam_subnets references
-// ipam_spaces with ON DELETE CASCADE, and ipam_addresses references
-// ipam_subnets the same way. So the guard in DeleteSpace is not a courtesy
-// check -- it is the only thing standing between "delete this empty space" and
-// "delete every subnet and address under it". That is why one of the cases
-// below is about the guard itself failing to run, rather than about it
-// answering wrongly.
+// A space is the top of the IPAM tree. DELETE now retires it: the row stays
+// as a tombstone so local-only IPAM children keep a valid FK parent and the
+// retire state reaches followers. Active subnets still block retirement,
+// because a live DHCP scope must never point at a retired parent.
 
 import (
 	"database/sql"
+
 	"errors"
+	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -38,6 +36,10 @@ func newSpaceDB(t *testing.T) *sql.DB {
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL UNIQUE,
 		description TEXT,
+		lifecycle_state TEXT NOT NULL DEFAULT 'active',
+		retired_at DATETIME,
+		retired_by TEXT NOT NULL DEFAULT '',
+		retire_reason TEXT NOT NULL DEFAULT '',
 		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
@@ -45,8 +47,12 @@ func newSpaceDB(t *testing.T) *sql.DB {
 		id TEXT PRIMARY KEY,
 		space_id TEXT NOT NULL REFERENCES ipam_spaces(id) ON DELETE CASCADE,
 		name TEXT NOT NULL,
-		cidr TEXT NOT NULL
+		cidr TEXT NOT NULL,
+		lifecycle_state TEXT NOT NULL DEFAULT 'active'
 	);
+	CREATE TRIGGER ipam_spaces_delete_guard BEFORE DELETE ON ipam_spaces
+	WHEN EXISTS (SELECT 1 FROM ipam_subnets WHERE space_id = OLD.id)
+	BEGIN SELECT RAISE(ABORT, 'retire, do not delete'); END;
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -147,7 +153,7 @@ func TestACheckThatCannotRunIsNotAnEmptyAnswer(t *testing.T) {
 	}
 }
 
-func TestASpaceWithNoSubnetsIsDeletedAndTheSecondAttemptSaysSo(t *testing.T) {
+func TestASpaceWithNoSubnetsIsRetiredAndTheSecondAttemptSaysSo(t *testing.T) {
 	db := newSpaceDB(t)
 	m := NewManager(db)
 
@@ -155,22 +161,21 @@ func TestASpaceWithNoSubnetsIsDeletedAndTheSecondAttemptSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSpace: %v", err)
 	}
-	if err := m.DeleteSpace(s.ID); err != nil {
-		t.Fatalf("DeleteSpace: %v", err)
+	if err := m.RetireSpace(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("RetireSpace: %v", err)
 	}
-	if _, err := m.GetSpace(s.ID); err == nil {
-		t.Error("the space survived its own deletion")
+	retired, err := m.GetSpace(s.ID)
+	if err != nil {
+		t.Fatalf("retired space tombstone is missing: %v", err)
 	}
-	// "Removed" and "was never there" have to be tellable apart.
-	if err := m.DeleteSpace(s.ID); err == nil {
-		t.Error("deleting an absent space reported success")
+	if retired.LifecycleState != "retired" || retired.RetiredAt == "" || retired.RetiredBy != "tester" || retired.RetireReason != "no longer used" {
+		t.Fatalf("retire metadata was lost: %+v", retired)
 	}
-
-	// An empty space is reusable territory: deleting it does not reserve its
-	// name. Asserted because the opposite would be a surprising rule to
-	// discover from a 409 on a name nobody is using.
 	if _, err := m.CreateSpace("campus", "rebuilt"); err != nil {
-		t.Errorf("the name of a deleted space could not be reused: %v", err)
+		t.Errorf("the active name of a retired space could not be reused: %v", err)
+	}
+	if err := m.RetireSpace(s.ID, "tester", "again"); err == nil {
+		t.Error("retiring an already-retired space reported success")
 	}
 }
 
@@ -241,6 +246,90 @@ func TestUpdatingKeepsWhatWasNotMentioned(t *testing.T) {
 
 	if _, err := m.UpdateSpace("no-such-space", SpaceOptions{Name: "x"}); err == nil {
 		t.Error("updating a space that does not exist reported success")
+	}
+}
+
+func TestRestoreSpaceRecoversOriginalNameAndClearsTombstone(t *testing.T) {
+	db := newSpaceDB(t)
+	m := NewManager(db)
+	s, err := m.CreateSpace("campus", "the main site")
+	if err != nil {
+		t.Fatalf("CreateSpace: %v", err)
+	}
+	if err := m.RetireSpace(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("RetireSpace: %v", err)
+	}
+	if _, err := m.CreateSpace("campus", "replacement"); err != nil {
+		t.Fatalf("create replacement: %v", err)
+	}
+
+	if _, err := m.RestoreSpace(s.ID, ""); !errors.Is(err, ErrSpaceNameInUse) {
+		t.Fatalf("restore with a taken name: %v, want ErrSpaceNameInUse", err)
+	}
+	restored, err := m.RestoreSpace(s.ID, "campus-restored")
+	if err != nil {
+		t.Fatalf("RestoreSpace: %v", err)
+	}
+	if restored.Name != "campus-restored" || restored.LifecycleState != lifecycle.Active {
+		t.Fatalf("restored space = %+v", restored)
+	}
+	if restored.RetiredAt != "" || restored.RetiredBy != "" || restored.RetireReason != "" {
+		t.Fatalf("retire metadata survived restore: %+v", restored)
+	}
+	if _, err := m.UpdateSpace(s.ID, SpaceOptions{Name: "campus-again"}); err != nil {
+		t.Errorf("restored space is still read-only: %v", err)
+	}
+	if _, err := m.RestoreSpace(s.ID, "campus-third"); !errors.Is(err, ErrSpaceNotRetired) {
+		t.Fatalf("restore an active space: %v, want ErrSpaceNotRetired", err)
+	}
+}
+
+func TestPurgeSpaceRequiresRetiredEmptyTombstoneAndExactConfirmation(t *testing.T) {
+	db := newSpaceDB(t)
+	m := NewManager(db)
+	active, err := m.CreateSpace("active", "")
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := m.PurgeSpace(active.ID, active.ID); !errors.Is(err, ErrSpaceNotRetired) {
+		t.Fatalf("purge active space: %v, want ErrSpaceNotRetired", err)
+	}
+
+	empty, err := m.CreateSpace("empty", "")
+	if err != nil {
+		t.Fatalf("create empty: %v", err)
+	}
+	if err := m.RetireSpace(empty.ID, "tester", "done"); err != nil {
+		t.Fatalf("retire empty: %v", err)
+	}
+	if err := m.PurgeSpace(empty.ID, "wrong-id"); err == nil {
+		t.Fatal("purge accepted a different confirmation id")
+	}
+	if err := m.PurgeSpace(empty.ID, empty.ID); err != nil {
+		t.Fatalf("purge empty tombstone: %v", err)
+	}
+	if _, err := m.GetSpace(empty.ID); err == nil {
+		t.Fatal("purged space is still readable")
+	}
+
+	withChild, err := m.CreateSpace("with-child", "")
+	if err != nil {
+		t.Fatalf("create with child: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ipam_subnets (id, space_id, name, cidr) VALUES ('child', ?, 'child', '192.0.2.0/24')`, withChild.ID); err != nil {
+		t.Fatalf("insert child: %v", err)
+	}
+	if err := m.RetireSpace(withChild.ID, "tester", "archived child"); err == nil {
+		t.Fatal("space with an active child should not retire")
+	}
+	if _, err := db.Exec(`UPDATE ipam_subnets SET lifecycle_state='retired' WHERE id='child'`); err != nil {
+		t.Fatalf("retire child directly: %v", err)
+	}
+	if err := m.RetireSpace(withChild.ID, "tester", "archived child"); err != nil {
+		t.Fatalf("retire parent after child: %v", err)
+	}
+	if err := m.PurgeSpace(withChild.ID, withChild.ID); !errors.Is(err, ErrSpaceHasChildren) {
+		t.Fatalf("purge tombstone with child: %v, want ErrSpaceHasChildren", err)
 	}
 }
 

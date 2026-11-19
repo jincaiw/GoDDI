@@ -17,6 +17,10 @@ const i18n = createI18n({
  */
 export function setupI18n(app: App) {
   app.use(i18n);
+  // Reflect the persisted locale on <html lang> at boot. Without this the
+  // attribute stayed at its build-time default after a reload even though the
+  // UI already rendered in the stored language.
+  document?.querySelector('html')?.setAttribute('lang', getLocale());
 }
 
 export const $t = i18n.global.t as App.I18n.$T;

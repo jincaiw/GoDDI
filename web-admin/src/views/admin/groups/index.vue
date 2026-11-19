@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
@@ -19,6 +20,8 @@ import {
 
 defineOptions({ name: 'AdminGroupsPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
+
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -35,7 +38,7 @@ const assigningGroupId = ref('');
 const formData = reactive<CreateGroupRequest>({ name: '', description: '' });
 
 const formRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -71,7 +74,7 @@ const columns: PrimaryTableCol[] = [
           },
           () => t('admin.groups.assignRoles')
         ),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('group'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('group'), onClick: () => confirmDelete(r.id, r.name) }, () => t('common.delete'))
       ]);
     }
   }
@@ -126,12 +129,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('group')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteGroup(id);
@@ -171,7 +175,9 @@ onMounted(loadRoles);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('admin.groups.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('admin.groups.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('group')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('admin.groups.createGroup') }}
@@ -229,12 +235,8 @@ onMounted(loadRoles);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .role-list {
   display: flex;

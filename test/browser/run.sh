@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the 20 browser/static regression suites against an already-running isolated
+# Run the 24 browser/static regression suites against an already-running isolated
 # GoDDI server. Never point this at production: the suites create and delete
 # test rows in the configured database.
 #
@@ -29,7 +29,7 @@ if [ "${GODDI_SKIP_RESET:-0}" != "1" ]; then
   fi
 fi
 
-suites="${GODDI_SUITES:-docs contracts i18n batch16 smoke batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12 batch13 batch14 batch15 legacy}"
+suites="${GODDI_SUITES:-docs contracts i18n theme h2-report-ref keyboard route-audit batch16 smoke batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12 batch13 batch14 batch15 legacy}"
 
 total=0
 failed=0

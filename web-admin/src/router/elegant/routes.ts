@@ -47,7 +47,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'admin',
       i18nKey: 'route.admin',
       icon: 'mdi:shield-account',
-      order: 6
+      order: 6,
+      keepAlive: true
     },
     children: [
       {
@@ -62,7 +63,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'group',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -77,7 +79,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'role',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -92,7 +95,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'user',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -107,7 +111,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'token',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -122,7 +127,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'user',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]
@@ -146,7 +152,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'dhcp',
       i18nKey: 'route.dhcp',
       icon: 'mdi:lan',
-      order: 4
+      order: 4,
+      keepAlive: true
     },
     children: [
       {
@@ -161,7 +168,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -176,7 +184,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -191,7 +200,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -206,7 +216,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -221,7 +232,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]
@@ -234,7 +246,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'dns',
       i18nKey: 'route.dns',
       icon: 'mdi:dns',
-      order: 2
+      order: 2,
+      keepAlive: true
     },
     children: [
       {
@@ -249,7 +262,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -264,7 +278,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -279,7 +294,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -294,7 +310,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -309,7 +326,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -324,7 +342,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -339,7 +358,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -353,7 +373,9 @@ export const generatedRoutes: GeneratedRoute[] = [
             resource: 'dns',
             action: 'read'
           },
-          hideInMenu: true
+          activeMenu: 'dns_zones',
+          hideInMenu: true,
+          keepAlive: true
         }
       },
       {
@@ -368,7 +390,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]
@@ -394,7 +417,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'ipam',
       i18nKey: 'route.ipam',
       icon: 'mdi:ip-network',
-      order: 5
+      order: 5,
+      keepAlive: true
     },
     children: [
       {
@@ -409,7 +433,24 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'ipam',
             action: 'read'
-          }
+          },
+          keepAlive: true
+        }
+      },
+      {
+        name: 'ipam_retirement-archive',
+        path: '/ipam/retirement-archive',
+        component: 'view.ipam_retirement-archive',
+        meta: {
+          title: 'ipam_retirement-archive',
+          i18nKey: 'route.ipam_retirement-archive',
+          icon: 'mdi:archive',
+          order: 4,
+          permission: {
+            resource: 'ipam',
+            action: 'read'
+          },
+          keepAlive: true
         }
       },
       {
@@ -424,7 +465,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'ipam',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -439,7 +481,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'ipam',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]
@@ -464,7 +507,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'logs',
       i18nKey: 'route.logs',
       icon: 'mdi:file-document-multiple',
-      order: 7
+      order: 7,
+      keepAlive: true
     },
     children: [
       {
@@ -479,7 +523,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'audit',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -494,7 +539,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dhcp',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -509,7 +555,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]
@@ -526,7 +573,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       permission: {
         resource: 'settings',
         action: 'read'
-      }
+      },
+      keepAlive: true
     },
     children: [
       {
@@ -541,7 +589,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'backup',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -556,7 +605,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'settings',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       },
       {
@@ -565,7 +615,8 @@ export const generatedRoutes: GeneratedRoute[] = [
         component: 'view.settings_system',
         meta: {
           title: 'settings_system',
-          i18nKey: 'route.settings_system'
+          i18nKey: 'route.settings_system',
+          keepAlive: true
         }
       }
     ]
@@ -578,7 +629,8 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'tools',
       i18nKey: 'route.tools',
       icon: 'mdi:wrench',
-      order: 3
+      order: 3,
+      keepAlive: true
     },
     children: [
       {
@@ -593,7 +645,8 @@ export const generatedRoutes: GeneratedRoute[] = [
           permission: {
             resource: 'dns',
             action: 'read'
-          }
+          },
+          keepAlive: true
         }
       }
     ]

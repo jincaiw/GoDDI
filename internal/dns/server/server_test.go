@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
@@ -20,6 +21,12 @@ import (
 )
 
 func newTestZoneStore(t *testing.T, zoneType string, acl *zone.ZoneACL) *zone.Store {
+	t.Helper()
+	zs, _ := newTestZoneStoreWithDB(t, zoneType, acl)
+	return zs
+}
+
+func newTestZoneStoreWithDB(t *testing.T, zoneType string, acl *zone.ZoneACL) (*zone.Store, *sql.DB) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -52,7 +59,7 @@ func newTestZoneStore(t *testing.T, zoneType string, acl *zone.ZoneACL) *zone.St
 	`, zoneType, aclJSON); err != nil {
 		t.Fatal(err)
 	}
-	return zone.NewStore(dbh.DB)
+	return zone.NewStore(dbh.DB), dbh.DB
 }
 
 func TestLookupAuthoritativeDefersForwardAndStubZoneMisses(t *testing.T) {

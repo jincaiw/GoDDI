@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace } from 'tdesign-vue-next';
+import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
 import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
 import ImportAddressesDialog from '@/components/ipam/ImportAddressesDialog.vue';
 import PoolWizardDialog from '@/components/ipam/PoolWizardDialog.vue';
 import ReverseZoneDialog from '@/components/ipam/ReverseZoneDialog.vue';
 import { usePermission } from '@/composables/usePermission';
+import { lifecycleLabel, lifecycleTheme } from '@/composables/useIpamLifecycle';
 import {
   createIPAMSubnet,
   deleteIPAMSubnet,
@@ -24,6 +25,7 @@ const { t } = useI18n();
 const perm = usePermission();
 
 const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
+const lifecycleFilter = ref('active');
 const formRef = ref<FormInstanceFunctions | null>(null);
 const showModal = ref(false);
 const submitting = ref(false);
@@ -52,9 +54,9 @@ const formData = reactive<CreateIPAMSubnetRequest>({
 });
 
 const formRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }],
-  space_id: [{ required: true, message: t('ipam.spaces.title') + ' required', type: 'error' }],
-  cidr: [{ required: true, message: t('ipam.subnets.cidr') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }],
+  space_id: [{ required: true, message: t('ipam.spaces.title') + t('common.required'), type: 'error' }],
+  cidr: [{ required: true, message: t('ipam.subnets.cidr') + t('common.required'), type: 'error' }]
 };
 
 function msgError(err: unknown) {
@@ -66,22 +68,36 @@ function subnetLabel(row: IPAMSubnet) {
 }
 
 const columns: PrimaryTableCol[] = [
-  { colKey: 'name', title: t('common.name') },
-  { colKey: 'cidr', title: t('ipam.subnets.cidr') },
-  { colKey: 'vlan_id', title: t('ipam.subnets.vlanId'), width: 110 },
+  { colKey: 'name', title: t('common.name'), width: 120, ellipsis: true },
+  { colKey: 'cidr', title: t('ipam.subnets.cidr'), width: 130 },
+  { colKey: 'vlan_id', title: t('ipam.subnets.vlanId'), width: 80 },
   { colKey: 'location', title: t('ipam.subnets.location'), ellipsis: true },
+  {
+    colKey: 'lifecycle_state',
+    title: t('common.status'),
+    width: 90,
+    cell: (h, { row }) =>
+      h(
+        TTag,
+        { theme: lifecycleTheme((row as IPAMSubnet).lifecycle_state) },
+        () => lifecycleLabel(t, (row as IPAMSubnet).lifecycle_state)
+      )
+  },
   {
     colKey: 'op',
     title: t('common.actions'),
-    width: 340,
+    width: 220,
     cell: (h, { row }) => {
       const r = row as IPAMSubnet;
-      return h(TSpace, { size: 'small' }, () => [
+      if (r.lifecycle_state === 'retired') {
+        return h(TTag, { theme: 'default' }, () => t('ipam.lifecycleRetired'));
+      }
+      return h(TSpace, { class: 'td-table-actions', size: 'small', wrap: true }, () => [
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('ipam'), onClick: () => openEdit(r) }, () => t('common.edit')),
         h(TLink, { theme: 'primary', disabled: !perm.canRead('ipam'), onClick: () => openImport(r) }, () => t('ipam.subnets.importAddresses')),
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('ipam'), onClick: () => openPool(r) }, () => t('ipam.subnets.createDhcpScope')),
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('ipam'), onClick: () => openReverseZone(r) }, () => t('ipam.subnets.generateReverseZone')),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('ipam'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('ipam'), onClick: () => confirmDelete(r.id) }, () => t('ipam.subnets.retire'))
       ]);
     }
   }
@@ -90,11 +106,16 @@ const columns: PrimaryTableCol[] = [
 /** Wraps getList to also refresh the space picker in the same pass. */
 async function fetchSubnets(params: Record<string, unknown>) {
   const [result, spaces] = await Promise.all([
-    listIPAMSubnets(params),
+    listIPAMSubnets({ ...params, lifecycle_state: lifecycleFilter.value }),
     listIPAMSpaces({ page: 1, page_size: 100 })
   ]);
   spaceOptions.value = spaces.data.map(s => ({ label: s.name, value: s.id }));
   return result;
+}
+
+function handleLifecycleChange(value: string) {
+  lifecycleFilter.value = value;
+  void tableRef.value?.reload();
 }
 
 function openImport(row: IPAMSubnet) {
@@ -173,13 +194,13 @@ async function handleSubmit() {
 function confirmDelete(id: string) {
   if (!perm.canDelete('ipam')) return;
   const dlg = DialogPlugin.confirm({
-    header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    header: t('ipam.subnets.retire'),
+    body: `${t('ipam.subnets.retireConfirm')}（ID：${id}）`,
     theme: 'danger',
     onConfirm: async () => {
       try {
         await deleteIPAMSubnet(id);
-        void MessagePlugin.success(t('common.deleteSuccess'));
+        void MessagePlugin.success(t('ipam.subnets.retireSuccess'));
         await tableRef.value?.reload();
       } catch (err) {
         msgError(err);
@@ -199,6 +220,16 @@ function confirmDelete(id: string) {
           <template #icon><TIcon name="add" /></template>
           {{ t('ipam.subnets.createSubnet') }}
         </TButton>
+        <TSelect
+          :value="lifecycleFilter"
+          :options="[
+            { label: t('ipam.lifecycleActive'), value: 'active' },
+            { label: t('ipam.lifecycleRetired'), value: 'retired' },
+            { label: t('ipam.lifecycleAll'), value: 'all' }
+          ]"
+          style="width: 140px"
+          @change="handleLifecycleChange"
+        />
         <TButton variant="outline" @click="tableRef?.reload()">{{ t('common.refresh') }}</TButton>
       </TSpace>
     </TCard>
@@ -268,9 +299,10 @@ function confirmDelete(id: string) {
   justify-content: space-between;
   padding: 16px 20px;
 }
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+:deep(.td-table-actions) {
+  display: inline-flex;
+  flex-wrap: wrap;
+  white-space: normal;
+  row-gap: 4px;
 }
 </style>

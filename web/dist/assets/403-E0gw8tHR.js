@@ -1,1 +1,0 @@
-import{M as e,Y as t,z as n}from"./index-Drc8x4s-.js";import{t as r}from"./exception-base-BVS-tUri.js";var i=n({name:`403`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`403`})}}});export{i as default};

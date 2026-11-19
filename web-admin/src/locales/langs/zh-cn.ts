@@ -1,12 +1,26 @@
 const local: App.I18n.Schema = {
+  starter: {
+    layout: '布局',
+    layoutVertical: '纵向菜单',
+    layoutHorizontal: '顶部菜单'
+  },
   system: {
     title: 'GoDDI 控制台',
     updateTitle: '系统版本更新通知',
     updateContent: '检测到系统有新版本发布，是否立即刷新页面？',
     updateConfirm: '立即刷新',
-    updateCancel: '稍后再说'
+    updateCancel: '稍后再说',
+    footer: 'GoDDI 控制台 · 安全 DDI 运维',
+    loginSubtitle: '企业级 DDI 管理平台'
   },
   common: {
+    queryExample: '例如 example.com',
+    standalone: '独立模式',
+    autoAssign: '留空则自动分配',
+    hexPlaceholder: '十六进制',
+    secondsNever: '秒；0 表示永不过期',
+    notFound: '页面不存在',
+    required: ' 必填',
     action: '操作',
     add: '新增',
     addSuccess: '添加成功',
@@ -58,6 +72,15 @@ const local: App.I18n.Schema = {
     enable: '启用',
     disable: '禁用',
     enabled: '已启用',
+    url: 'URL',
+    notifications: '通知',
+    exceptionTip: '抱歉，你访问的页面出现了异常。',
+    exception403: '抱歉，你无权访问该页面。',
+    exception404: '抱歉，你访问的页面不存在。',
+    exception500: '抱歉，服务器出现了异常。',
+    noNotifications: '暂无通知',
+    loadedRows: '已加载 {total} 条记录',
+    searchNoResult: '没有匹配的页面',
     disabled: '已禁用',
     experimental: '实验功能',
     actions: '操作',
@@ -78,6 +101,10 @@ const local: App.I18n.Schema = {
     createSuccess: '创建成功',
     noPermission: '您没有权限访问此页面',
     networkError: '网络错误，请重试',
+    retry: '重试',
+    copied: '已复制！',
+    clipboardUnavailable: '剪贴板不可用',
+    enterDomain: '请输入域名',
     confirmRestore: '确认恢复此备份？此操作将覆盖当前所有数据。',
     language: '语言',
     yes: '是',
@@ -120,6 +147,13 @@ const local: App.I18n.Schema = {
       themeRadius: {
         title: '主题圆角'
       },
+      elementSwitch: '元素开关',
+      showBreadcrumb: '显示面包屑',
+      useTagTabs: '展示多标签页',
+      showFooter: '显示页脚',
+      fixedHeader: '固定顶栏',
+      watermark: '页面水印',
+      accessibility: '无障碍',
       recommendColor: '应用推荐算法的颜色',
       recommendColorDesc: '推荐颜色的算法参照',
       preset: {
@@ -128,7 +162,7 @@ const local: App.I18n.Schema = {
         applySuccess: '预设应用成功',
         default: {
           name: '默认预设',
-          desc: 'Soybean 默认主题预设'
+          desc: 'GoDDI 默认主题预设'
         },
         dark: {
           name: '暗色预设',
@@ -283,6 +317,7 @@ const local: App.I18n.Schema = {
     'ipam': 'IPAM 管理',
     'ipam_addresses': 'IP 地址',
     'ipam_spaces': '地址空间',
+    'ipam_retirement-archive': '退役归档',
     'ipam_subnets': '子网管理',
     'login': '登录',
     'logs': '日志查询',
@@ -363,11 +398,11 @@ const local: App.I18n.Schema = {
       projectNews: {
         title: '项目动态',
         moreNews: '更多动态',
-        desc1: 'Soybean 在2021年5月28日创建了开源项目 soybean-admin!',
-        desc2: 'Yanbowe 向 soybean-admin 提交了一个bug，多标签栏不会自适应。',
-        desc3: 'Soybean 准备为 soybean-admin 的发布做充分的准备工作!',
-        desc4: 'Soybean 正在忙于为soybean-admin写项目说明文档！',
-        desc5: 'Soybean 刚才把工作台页面随便写了一些，凑合能看了！'
+        desc1: 'GoDDI 控制台已完成 TDesign Starter 范式重构。',
+        desc2: '节点模式、配置复制与发布状态现已成为一等可见状态。',
+        desc3: 'DNS、DHCP、IPAM 数据面操作与配置发布路径持续收敛。',
+        desc4: '更多运维能力将按生产门禁逐项验证后开放。',
+        desc5: '旧模板示例文案已移除。'
       },
       creativity: '创意'
     }
@@ -459,6 +494,8 @@ const local: App.I18n.Schema = {
     revokeConfirm: '确定吊销该会话吗？',
     revokeOthersConfirm: '确定登出当前会话以外的所有会话吗？',
     revokeSuccess: '会话已吊销',
+    revokePartial: '已吊销 {ok} 个会话；{failed} 个吊销失败',
+    revokeFailed: '未能吊销任何会话',
   },
   auth: {
     login: '登录',
@@ -491,6 +528,13 @@ const local: App.I18n.Schema = {
     cacheHitRate: '缓存命中率',
     activeLeases: '活跃 DHCP 租约',
     ipamUsage: 'IPAM 使用率',
+    rank: '排名',
+    count: '数量',
+    trend: '趋势',
+    authorVersion: '作者配置版本',
+    sinceLastWeek: '自从上周以来',
+    rcodeNoError: '无错误响应',
+    rankInfo: '详情',
     recentEvents: '最近事件',
     systemStatus: '系统状态',
     queryChart: 'DNS 查询趋势 (24h)',
@@ -506,10 +550,10 @@ const local: App.I18n.Schema = {
     rcodes: '响应码分布',
     longTermStats: '查询统计（长期）',
     statsTotal: '总查询',
-    statsNoError: 'NOERROR',
-    statsNxDomain: 'NXDOMAIN',
-    statsServFail: 'SERVFAIL',
-    statsRefused: 'REFUSED',
+    statsNoError: '无错误',
+    statsNxDomain: '域名不存在',
+    statsServFail: '服务失败',
+    statsRefused: '已拒绝',
     statsBlocked: '拦截',
     statsCached: '缓存命中',
     statsClients: '客户端数',
@@ -520,12 +564,14 @@ const local: App.I18n.Schema = {
     zones: {
       title: 'DNS 区域管理',
       zoneName: '区域名称',
+      zoneNameInvalid: '请输入合法的域名，如 example.com',
       zoneType: '区域类型',
       tabAuthoritative: '权威区域',
       tabAllowed: '允许区域',
       tabBlocked: '阻断区域',
       typeAllowed: 'Allowed（允许）',
       typeBlocked: 'Blocked（阻断）',
+      typeValues: { primary: '主区域', secondary: '辅助区域', stub: '存根区域', forward: '转发区域', catalog: '目录区域' },
       specialHint: '特殊区域说明',
       specialHintText: '允许/阻断区域不参与常规解析：匹配允许区域的查询跳过拦截，匹配阻断区域直接返回 NXDOMAIN。',
       aclTitle: '访问控制 (ACL)',
@@ -556,6 +602,7 @@ const local: App.I18n.Schema = {
       catalogTitle: 'Catalog 成员关系',
       catalogJoin: '所属 Catalog 区域',
       catalogNone: '不加入任何 Catalog',
+      unsavedChanges: '存在未保存的 ACL 更改，确定离开吗？',
       catalogHint: '选择 Catalog 区域后将自动注册为成员（RFC 9432），成员记录随 AXFR/IXFR 同步；选择“不加入”解除挂靠。',
       catalogMembers: 'Catalog 成员区域',
       catalogMembersEmpty: '尚无成员区域加入',
@@ -632,6 +679,13 @@ const local: App.I18n.Schema = {
     apps: {
       title: 'DNS 应用',
       notAvailable: '应用运行时尚未启用',
+      colId: 'ID',
+      colName: '名称',
+      colVersion: '版本',
+      colStatus: '状态',
+      statusOn: '启用',
+      statusOff: '停用',
+      notImplemented: '501 未实现',
       hint: '应用运行时为占位实现：接口就绪后此页面将列出可用的 DNS 应用。',
     },
     dnssec: {
@@ -682,6 +736,12 @@ const local: App.I18n.Schema = {
       action: '动作',
       matchType: '匹配类型',
       responseType: '响应类型',
+      matchValues: { exact: '精确', suffix: '后缀', wildcard: '通配符', regex: '正则' },
+      responseValues: { nxdomain: 'NXDOMAIN', nodata: 'NODATA', refused: 'REFUSED', drop: '丢弃', custom_ip: '自定义 IP' },
+      listTypes: { custom: '自定义', external: '外部' },
+      actionValues: { allow: '允许', block: '阻断' },
+      applyLists: '应用列表',
+      rules: '规则',
       sourceIp: '来源 IP',
       sourceCidr: '来源 CIDR',
       createBlockList: '新建阻止列表',
@@ -719,6 +779,11 @@ const local: App.I18n.Schema = {
       colExpires: '过期时间',
     },
     client: {
+    upstreamHint: '留空查询本节点权威快照；填写则外发',
+    localResult: '本地权威应答：该名称未发送到外部解析器。',
+    externalResult: '外部上游应答：该名称已发送到指定上游服务器。',
+    source: '查询来源',
+    unknownSource: '未知',
       title: 'DNS 调试客户端',
       importToZone: '导入到区域',
       selectZone: '选择目标区域',
@@ -754,6 +819,7 @@ const local: App.I18n.Schema = {
       endTime: '结束时间',
       release: '释放',
       clientId: '客户端 ID',
+      statusValues: { active: '活跃', offered: '已提供', expired: '已过期', released: '已释放', conflict: '冲突' },
     },
     reservations: {
       title: 'DHCP 保留地址',
@@ -772,10 +838,35 @@ const local: App.I18n.Schema = {
     },
   },
   ipam: {
+    archive: {
+      title: '退役归档',
+      kind: '资源类型',
+      resourceId: '资源 ID',
+      retiredAt: '退役时间',
+      retiredBy: '操作人',
+      reason: '原因',
+      allocatedChildren: '保留地址数',
+      historyChildren: '历史记录数',
+      kindValues: { space: '地址空间', subnet: '子网' },
+      localOnlyHint: '归档仅展示本节点保留的退役父资源与子数据计数；本地运行观测和审计历史不参与配置复制。',
+      empty: '暂无退役资源',
+      restore: '恢复',
+      restoreConfirm: '确定恢复 {name}？将重新启用该资源，本地保留的地址与历史不受影响。',
+      restoreSuccess: '资源已恢复',
+      purge: '清除',
+      purgeConfirm: '确定永久清除 {name}？仅无保留子数据的空墓碑可清除，此操作不可恢复。',
+      purgeSuccess: '墓碑已清除'
+    },
+    lifecycleActive: '活跃',
+    lifecycleRetired: '已退役',
+    lifecycleAll: '全部',
     spaces: {
       title: '地址空间',
       createSpace: '新建地址空间',
       editSpace: '编辑地址空间',
+      retire: '退役',
+      retireConfirm: '确定退役该地址空间？父记录会保留，活跃配置中的名称可以复用',
+      retireSuccess: '地址空间已退役',
     },
     subnets: {
       title: '子网管理',
@@ -787,6 +878,9 @@ const local: App.I18n.Schema = {
       createDhcpScope: '创建 DHCP 作用域',
       generateReverseZone: '生成反向区域',
       importAddresses: '导入地址',
+      retire: '退役',
+      retireConfirm: '确定退役该子网？本地地址与历史会保留，活跃 DHCP 依赖仍会阻止退役',
+      retireSuccess: '子网已退役',
     },
     reverseZone: {
       title: '生成反向区域',
@@ -895,6 +989,10 @@ const local: App.I18n.Schema = {
       stepConfirm: '确认',
       conflicts: '暂不建议创建该作用域的原因',
       warnings: '需要知道的事',
+      gatewayConventionWarning: '没有地址被标记为网关，计划将第一个可用地址 {ip} 作为路由器。若实际网关不同，请在作用域中显式设置路由器。',
+      scopeOverlapConflict: '作用域“{name}”已分发 {start}–{end}，与拟建范围 {proposedStart}–{proposedEnd} 重叠。',
+      scopeDisabledOverlapWarning: '作用域“{name}”已禁用，但其地址池 {start}–{end} 与拟建范围重叠；日后启用会导致两个作用域争用同一地址。',
+      scopeSameSubnetWarning: '作用域“{name}”已服务子网 {subnet}，其地址池 {start}–{end} 与拟建范围不重叠；同一子网存在两个作用域不常见，建议检查。',
       range: '将下发的地址范围',
       router: '默认网关',
       routerSource: '网关来源',
@@ -985,6 +1083,13 @@ const local: App.I18n.Schema = {
       resourceId: '资源 ID',
       details: '详情',
       ip: 'IP 地址',
+      actionValues: {
+        create: '创建', update: '更新', delete: '删除', login: '登录', logout: '退出', publish: '发布', rollback: '回滚', retire: '退役',
+        get: '读取', assign_role: '分配角色', set_permissions: '设置权限',
+        dns_dynamic_update: 'DNS 动态更新', ddns_record_create: 'DDNS 记录创建', ddns_record_delete: 'DDNS 记录删除',
+        dhcp_lease_bind: 'DHCP 租约绑定', dhcp_lease_release: 'DHCP 租约释放', dhcp_lease_decline: 'DHCP 租约拒绝', dhcp_lease_expire: 'DHCP 租约过期',
+        dhcp_ha_degrade: 'HA 降级', dhcp_ha_takeover: 'HA 接管', dhcp_ha_fence: 'HA 隔离', dhcp_ha_rejoin: 'HA 重入'
+      },
     },
     dns: {
       title: 'DNS 查询日志',
@@ -1008,6 +1113,7 @@ const local: App.I18n.Schema = {
       hostname: '主机名',
       scope: '地址池',
       message: '消息',
+      eventValues: { discover: '发现', offer: '提供', request: '请求', ack: '确认', nak: '拒绝', decline: '拒绝地址', release: '释放', inform: '查询', conflict: '冲突' },
     },
   },
   settings: {
@@ -1052,6 +1158,10 @@ const local: App.I18n.Schema = {
       restoreBackup: '恢复备份',
       restoreConfirm: '确定要恢复此备份吗？当前数据将被覆盖。',
       deleteBackup: '删除备份',
+      statusCompleted: '已完成',
+      statusFailed: '失败',
+      statusRunning: '进行中',
+      typeFull: '完整备份',
     },
     configVersions: {
       title: '配置版本',
@@ -1064,6 +1174,7 @@ const local: App.I18n.Schema = {
         dns_records: 'DNS 记录',
       },
       revisionsTitle: '修订历史',
+      noteValues: { created: '创建', rollback: '回滚', updated: '更新', published: '发布', imported: '导入', restored: '恢复' },
       filterResourceType: '资源类型',
       filterResourceId: '资源 ID',
       resourceIdPlaceholder: '例如区域 ID',
@@ -1139,6 +1250,8 @@ const local: App.I18n.Schema = {
   },
   haStatus: {
     subtitle: 'DHCP HA 双节点状态（只读，5 秒自动刷新）',
+    stateValues: { primary: '主机', standby: '备机', 'primary-degraded': '主机降级', paused: '已暂停', fenced: '已隔离', unknown: '未知' },
+    roleValues: { primary: '主机', standby: '备机', monitor: '监控' },
     standalone: '当前为单机模式（未启用 DHCP HA）',
     autoOn: '自动刷新',
     autoOff: '手动刷新',
@@ -1154,7 +1267,24 @@ const local: App.I18n.Schema = {
     peerFacts: '对端 facts 序列',
     peerLastSeen: '对端最后可见',
     source: '数据来源',
-    readOnly: '只读端点，不暴露密钥'
+    readOnly: '只读端点，不暴露密钥',
+    replAlertTitle: '配置复制异常',
+    replAlertHint: '备机可能仍在提供旧配置；接管前必须核对',
+    replHealthy: '配置复制正常',
+    replLastSync: '最近同步',
+    replSource: '复制源',
+    replUnknown: '状态未知',
+    replLoadError: '配置复制状态读取失败',
+    replExpected: '作者配置版本',
+    replApplied: '本节点已应用版本',
+    replBehindTitle: '配置复制落后',
+    replBehindHint: '本节点尚未应用作者的最新配置；请核对同步状态后再执行接管'
+  },
+  nodeMode: {
+    single: '单机',
+    primary: 'HA · 主机',
+    standby: 'HA · 备机',
+    degraded: 'HA · 状态未知'
   },
 };
 

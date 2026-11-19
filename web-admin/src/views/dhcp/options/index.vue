@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace } from 'tdesign-vue-next';
@@ -17,6 +18,7 @@ import {
 
 defineOptions({ name: 'DHCPOptionsPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -37,14 +39,14 @@ const priorityOptions = [
 ];
 
 const formRules = {
-  value: [{ required: true, message: t('dhcp.options.optionValue') + ' required', type: 'error' }],
+  value: [{ required: true, message: t('dhcp.options.optionValue') + t('common.required'), type: 'error' }],
   scope_id: [{ required: true, message: t('dhcp.options.scopeRequired'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
   { colKey: 'code', title: t('dhcp.options.code'), width: 90 },
   { colKey: 'value', title: t('dhcp.options.optionValue'), ellipsis: true },
-  { colKey: 'scope_id', title: t('dhcp.options.scope'), ellipsis: true },
+  { colKey: 'scope_name', title: t('dhcp.options.scope'), ellipsis: true },
   { colKey: 'priority', title: t('common.priority'), width: 120 },
   {
     colKey: 'op',
@@ -54,7 +56,7 @@ const columns: PrimaryTableCol[] = [
       const r = row as DHCPOption;
       return h(TSpace, { size: 'small' }, () => [
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('dhcp'), onClick: () => openEdit(r) }, () => t('common.edit')),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id, `option ${r.code}: ${r.value}`) }, () => t('common.delete'))
       ]);
     }
   }
@@ -113,12 +115,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('dhcp')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteDHCPOption(id);
@@ -138,7 +141,9 @@ onMounted(loadScopes);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dhcp.options.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dhcp.options.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('dhcp')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('dhcp.options.createOption') }}
@@ -160,13 +165,13 @@ onMounted(loadScopes);
           <TInputNumber v-model="formData.code" :min="1" :max="254" style="width: 100%" />
         </TFormItem>
         <TFormItem :label="t('dhcp.options.optionValue')" name="value">
-          <TInput v-model="formData.value" />
+          <TInput v-model="formData.value" :placeholder="t('dhcp.options.optionValue')" />
         </TFormItem>
         <TFormItem :label="t('common.priority')" name="priority">
           <TSelect v-model="formData.priority" :options="priorityOptions" />
         </TFormItem>
         <TFormItem :label="t('dhcp.options.scope')" name="scope_id">
-          <TSelect v-model="formData.scope_id" :options="scopeOptions" filterable :disabled="!!editing" />
+          <TSelect v-model="formData.scope_id" :options="scopeOptions" filterable :placeholder="t('dhcp.options.scope')" :disabled="!!editing" />
         </TFormItem>
       </TForm>
     </TDialog>
@@ -183,11 +188,7 @@ onMounted(loadScopes);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

@@ -11,9 +11,9 @@ PASS="${GODDI_ADMIN_PASS:-AdminPass-0123456789}"
 export GODDI_BASE_URL="$BASE" GODDI_ADMIN_PASS="$PASS"
 cd "$H2DIR/../../test/browser"
 total=0; fails=0; errs=0
-for f in contracts.cjs i18n.cjs docs.cjs batch2.cjs batch3.cjs batch4.cjs batch5.cjs batch6.cjs \
-         batch7.cjs batch8.cjs batch9.cjs batch10.cjs batch11.cjs batch12.cjs batch13.cjs \
-         batch14.cjs batch15.cjs batch16.cjs; do
+for f in contracts.cjs i18n.cjs keyboard.cjs docs.cjs route-audit.cjs batch2.cjs batch3.cjs \
+         batch4.cjs batch5.cjs batch6.cjs batch7.cjs batch8.cjs batch9.cjs batch10.cjs \
+         batch11.cjs batch12.cjs batch13.cjs batch14.cjs batch15.cjs batch16.cjs; do
   [ -f "$f" ] || continue
   out=$(node "$f" 2>&1)
   p=$(printf '%s' "$out" | grep -c '^PASS'); fa=$(printf '%s' "$out" | grep -c '^FAIL'); er=$(printf '%s' "$out" | grep -c '^errors: [1-9]')

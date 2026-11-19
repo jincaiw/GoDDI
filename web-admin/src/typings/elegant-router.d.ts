@@ -46,6 +46,7 @@ declare module "@elegant-router/types" {
     "iframe-page": "/iframe-page/:url";
     "ipam": "/ipam";
     "ipam_addresses": "/ipam/addresses";
+    "ipam_retirement-archive": "/ipam/retirement-archive";
     "ipam_spaces": "/ipam/spaces";
     "ipam_subnets": "/ipam/subnets";
     "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?";
@@ -145,6 +146,7 @@ declare module "@elegant-router/types" {
     | "dns_zone-detail"
     | "dns_zones"
     | "ipam_addresses"
+    | "ipam_retirement-archive"
     | "ipam_spaces"
     | "ipam_subnets"
     | "logs_audit"

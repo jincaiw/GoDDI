@@ -149,10 +149,12 @@ type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-const addressColumns = `id, subnet_id, space_id, ip_address, status, mac_address, hostname,
-	dns_record_id, dhcp_lease_id, owner, device, location, description, last_seen,
-	observed_state, observed_at, observed_source, observed_mac, observed_hostname,
-	allocated_at, allocated_by, created_at, updated_at`
+const addressColumns = `a.id, a.subnet_id, a.space_id, a.ip_address, a.status, a.mac_address, a.hostname,
+	a.dns_record_id, a.dhcp_lease_id, a.owner, a.device, a.location, a.description, a.last_seen,
+	COALESCE(o.state, 'unknown'), o.observed_at, COALESCE(o.source, ''),
+	COALESCE(o.mac_address, ''), COALESCE(o.hostname, ''),
+	a.allocated_at, a.allocated_by, a.created_at, a.updated_at
+	FROM ipam_addresses a LEFT JOIN ipam_address_observations o ON o.address_id = a.id`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -190,7 +192,7 @@ func scanAddress(row rowScanner) (*Address, error) {
 
 // GetAddress retrieves an address by ID.
 func (m *Manager) GetAddress(id string) (*Address, error) {
-	a, err := scanAddress(m.db.QueryRow(`SELECT `+addressColumns+` FROM ipam_addresses WHERE id = ?`, id))
+	a, err := scanAddress(m.db.QueryRow(`SELECT `+addressColumns+` WHERE a.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrAddressNotFound, id)
 	}
@@ -210,7 +212,7 @@ func (m *Manager) GetAddressByIP(subnetID, ip string) (*Address, error) {
 		return nil, err
 	}
 	a, err := scanAddress(m.db.QueryRow(
-		`SELECT `+addressColumns+` FROM ipam_addresses WHERE subnet_id = ? AND ip_address = ?`,
+		`SELECT `+addressColumns+` WHERE a.subnet_id = ? AND a.ip_address = ?`,
 		subnetID, canonical))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -227,7 +229,7 @@ func (m *Manager) GetAddressBySpaceIP(spaceID, ip string) (*Address, error) {
 		return nil, err
 	}
 	a, err := scanAddress(m.db.QueryRow(
-		`SELECT `+addressColumns+` FROM ipam_addresses WHERE space_id = ? AND ip_address = ?`,
+		`SELECT `+addressColumns+` WHERE a.space_id = ? AND a.ip_address = ?`,
 		spaceID, canonical))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -237,7 +239,7 @@ func (m *Manager) GetAddressBySpaceIP(spaceID, ip string) (*Address, error) {
 
 func getAddressBySpaceIPTx(tx querier, spaceID, ip string) (*Address, error) {
 	a, err := scanAddress(tx.QueryRow(
-		`SELECT `+addressColumns+` FROM ipam_addresses WHERE space_id = ? AND ip_address = ?`,
+		`SELECT `+addressColumns+` WHERE a.space_id = ? AND a.ip_address = ?`,
 		spaceID, ip))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -251,19 +253,19 @@ func (m *Manager) ListAddresses(filter AddressFilter) ([]Address, int64, error) 
 	var args []any
 
 	if filter.SubnetID != "" {
-		conditions = append(conditions, "subnet_id = ?")
+		conditions = append(conditions, "a.subnet_id = ?")
 		args = append(args, filter.SubnetID)
 	}
 	if filter.SpaceID != "" {
-		conditions = append(conditions, "space_id = ?")
+		conditions = append(conditions, "a.space_id = ?")
 		args = append(args, filter.SpaceID)
 	}
 	if filter.Status != "" {
-		conditions = append(conditions, "status = ?")
+		conditions = append(conditions, "a.status = ?")
 		args = append(args, string(filter.Status))
 	}
 	if filter.ObservedState != "" {
-		conditions = append(conditions, "observed_state = ?")
+		conditions = append(conditions, "o.state = ?")
 		args = append(args, string(filter.ObservedState))
 	}
 	if filter.IPAddress != "" {
@@ -271,19 +273,19 @@ func (m *Manager) ListAddresses(filter AddressFilter) ([]Address, int64, error) 
 		if err != nil {
 			return nil, 0, err
 		}
-		conditions = append(conditions, "ip_address = ?")
+		conditions = append(conditions, "a.ip_address = ?")
 		args = append(args, canonical)
 	}
 	if filter.MACAddress != "" {
-		conditions = append(conditions, "mac_address = ?")
+		conditions = append(conditions, "a.mac_address = ?")
 		args = append(args, filter.MACAddress)
 	}
 	if filter.Hostname != "" {
-		conditions = append(conditions, "hostname LIKE ?")
+		conditions = append(conditions, "a.hostname LIKE ?")
 		args = append(args, "%"+filter.Hostname+"%")
 	}
 	if filter.Owner != "" {
-		conditions = append(conditions, "owner = ?")
+		conditions = append(conditions, "a.owner = ?")
 		args = append(args, filter.Owner)
 	}
 	if filter.Search != "" {
@@ -293,10 +295,10 @@ func (m *Manager) ListAddresses(filter AddressFilter) ([]Address, int64, error) 
 		// so "find this address" would come back with the whole neighbourhood
 		// and the operator would have to pick their row out of it by eye.
 		if canonical, err := NormalizeIP(filter.Search); err == nil {
-			conditions = append(conditions, "(ip_address = ? OR hostname LIKE ? OR mac_address LIKE ? OR owner LIKE ?)")
+			conditions = append(conditions, "(a.ip_address = ? OR a.hostname LIKE ? OR a.mac_address LIKE ? OR a.owner LIKE ?)")
 			args = append(args, canonical, like, like, like)
 		} else {
-			conditions = append(conditions, "(ip_address LIKE ? OR hostname LIKE ? OR mac_address LIKE ? OR owner LIKE ?)")
+			conditions = append(conditions, "(a.ip_address LIKE ? OR a.hostname LIKE ? OR a.mac_address LIKE ? OR a.owner LIKE ?)")
 			args = append(args, like, like, like, like)
 		}
 	}
@@ -307,14 +309,14 @@ func (m *Manager) ListAddresses(filter AddressFilter) ([]Address, int64, error) 
 	}
 
 	var total int64
-	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_addresses "+whereClause, args...).Scan(&total); err != nil {
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_addresses a LEFT JOIN ipam_address_observations o ON o.address_id = a.id "+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	page, pageSize, offset := normalizePage(filter.Page, filter.PageSize)
 
-	querySQL := `SELECT ` + addressColumns + ` FROM ipam_addresses ` + whereClause + `
-		ORDER BY ip_address ASC LIMIT ? OFFSET ?`
+	querySQL := `SELECT ` + addressColumns + ` ` + whereClause + `
+		ORDER BY a.ip_address ASC LIMIT ? OFFSET ?`
 	rows, err := m.db.Query(querySQL, append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -412,7 +414,7 @@ func (m *Manager) TransitionAddress(id string, to Status, actor, reason, source 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	current, err := scanAddress(tx.QueryRow(`SELECT `+addressColumns+` FROM ipam_addresses WHERE id = ?`, id))
+	current, err := scanAddress(tx.QueryRow(`SELECT `+addressColumns+` WHERE a.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrAddressNotFound, id)
 	}
@@ -761,6 +763,21 @@ func (m *Manager) ObserveBySpaceIPTx(tx *sql.Tx, spaceID, ip string, obs Observa
 		string(obs.State), obs.Source, nullIfEmpty(obs.MAC), nullIfEmpty(obs.Hostname), obs.LeaseID, current.ID); err != nil {
 		return false, fmt.Errorf("record observation: %w", err)
 	}
+	if _, err := tx.Exec(`
+		INSERT INTO ipam_address_observations
+			(address_id, state, observed_at, source, mac_address, hostname, lease_id, created_at, updated_at)
+		VALUES (?, ?, datetime('now'), ?, ?, ?, ?, datetime('now'), datetime('now'))
+		ON CONFLICT(address_id) DO UPDATE SET
+			state = excluded.state,
+			observed_at = datetime('now'),
+			source = excluded.source,
+			mac_address = excluded.mac_address,
+			hostname = excluded.hostname,
+			lease_id = COALESCE(NULLIF(excluded.lease_id, ''), ipam_address_observations.lease_id),
+			updated_at = datetime('now')`,
+		current.ID, string(obs.State), obs.Source, nullIfEmpty(obs.MAC), nullIfEmpty(obs.Hostname), obs.LeaseID); err != nil {
+		return false, fmt.Errorf("record observation row: %w", err)
+	}
 	if !changed {
 		return false, nil
 	}
@@ -818,7 +835,7 @@ type subnetRow struct {
 
 func loadSubnet(q querier, subnetID string) (*subnetRow, error) {
 	s := &subnetRow{}
-	err := q.QueryRow("SELECT id, space_id, cidr FROM ipam_subnets WHERE id = ?", subnetID).
+	err := q.QueryRow("SELECT id, space_id, cidr FROM ipam_subnets WHERE id = ? AND lifecycle_state = 'active'", subnetID).
 		Scan(&s.ID, &s.SpaceID, &s.CIDR)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrSubnetNotFound, subnetID)
@@ -1030,7 +1047,7 @@ func (m *Manager) NonCanonicalAddresses(limit int) ([]Address, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := m.db.Query(`SELECT `+addressColumns+` FROM ipam_addresses LIMIT ?`, limit)
+	rows, err := m.db.Query(`SELECT `+addressColumns+` LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

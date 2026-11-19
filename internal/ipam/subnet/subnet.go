@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jasonwa/goddi/internal/dhcp/scope"
 	"github.com/jasonwa/goddi/internal/ipam/address"
+	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
 )
 
 // ErrSubnetNotFound means the subnet does not exist.
@@ -29,17 +30,40 @@ var ErrSubnetNotFound = address.ErrSubnetNotFound
 // like a bug.
 var ErrDHCPv6Unsupported = errors.New("DHCPv6 is not supported")
 
+// ErrSubnetRetired means an active-only operation was aimed at a retired subnet.
+var ErrSubnetRetired = errors.New("subnet is retired")
+
+// ErrSubnetNotRetired means a restore was aimed at an active subnet.
+var ErrSubnetNotRetired = errors.New("subnet is not retired")
+
+// ErrSubnetActiveConflict means the archived CIDR now overlaps a live sibling.
+var ErrSubnetActiveConflict = errors.New("subnet conflicts with an active subnet")
+
+// ErrSpaceNotActive means a retired subnet cannot be restored under a retired space.
+var ErrSpaceNotActive = errors.New("parent space is not active")
+
+// ErrSubnetHasPreservedChildren means a purge was aimed at a tombstone still
+// holding local address or history rows.
+var ErrSubnetHasPreservedChildren = errors.New("subnet still has preserved child data")
+
+// ErrPurgeConfirmation means the caller did not name the exact resource being purged.
+var ErrPurgeConfirmation = errors.New("purge confirmation must name the resource id")
+
 // Subnet represents an IPAM subnet.
 type Subnet struct {
-	ID          string `json:"id"`
-	SpaceID     string `json:"space_id"`
-	Name        string `json:"name"`
-	CIDR        string `json:"cidr"`
-	VLANID      int    `json:"vlan_id,omitempty"`
-	Location    string `json:"location,omitempty"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID             string `json:"id"`
+	SpaceID        string `json:"space_id"`
+	Name           string `json:"name"`
+	CIDR           string `json:"cidr"`
+	VLANID         int    `json:"vlan_id,omitempty"`
+	Location       string `json:"location,omitempty"`
+	Description    string `json:"description,omitempty"`
+	LifecycleState string `json:"lifecycle_state"`
+	RetiredAt      string `json:"retired_at,omitempty"`
+	RetiredBy      string `json:"retired_by,omitempty"`
+	RetireReason   string `json:"retire_reason,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // SubnetOptions holds parameters for creating or updating a subnet.
@@ -53,13 +77,14 @@ type SubnetOptions struct {
 
 // SubnetFilter holds filter parameters for listing subnets.
 type SubnetFilter struct {
-	SpaceID  string `json:"space_id,omitempty"`
-	Name     string `json:"name,omitempty"`
-	CIDR     string `json:"cidr,omitempty"`
-	VLANID   *int   `json:"vlan_id,omitempty"`
-	Location string `json:"location,omitempty"`
-	Page     int    `json:"page,omitempty"`
-	PageSize int    `json:"page_size,omitempty"`
+	SpaceID        string `json:"space_id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	CIDR           string `json:"cidr,omitempty"`
+	VLANID         *int   `json:"vlan_id,omitempty"`
+	Location       string `json:"location,omitempty"`
+	LifecycleState string `json:"lifecycle_state,omitempty"`
+	Page           int    `json:"page,omitempty"`
+	PageSize       int    `json:"page_size,omitempty"`
 }
 
 // UsageStats represents IP usage statistics for a subnet.
@@ -116,7 +141,7 @@ func (m *Manager) CreateSubnet(spaceID, name, cidr string, opts SubnetOptions) (
 	}
 
 	var spaceExists int
-	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_spaces WHERE id = ?", spaceID).Scan(&spaceExists); err != nil {
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_spaces WHERE id = ? AND lifecycle_state = ?", spaceID, lifecycle.Active).Scan(&spaceExists); err != nil {
 		return nil, fmt.Errorf("failed to verify space: %w", err)
 	}
 	if spaceExists == 0 {
@@ -192,9 +217,11 @@ func (m *Manager) GetSubnet(id string) (*Subnet, error) {
 	var location, description sql.NullString
 
 	err := m.db.QueryRow(`
-		SELECT id, space_id, name, cidr, vlan_id, location, description, created_at, updated_at
+		SELECT id, space_id, name, cidr, vlan_id, location, description, lifecycle_state,
+			COALESCE(retired_at, ''), COALESCE(retired_by, ''), COALESCE(retire_reason, ''),
+			created_at, updated_at
 		FROM ipam_subnets WHERE id = ?`, id,
-	).Scan(&s.ID, &s.SpaceID, &s.Name, &s.CIDR, &vlanID, &location, &description, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.SpaceID, &s.Name, &s.CIDR, &vlanID, &location, &description, &s.LifecycleState, &s.RetiredAt, &s.RetiredBy, &s.RetireReason, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrSubnetNotFound, id)
 	}
@@ -235,6 +262,14 @@ func (m *Manager) ListSubnets(filter SubnetFilter) ([]Subnet, int64, error) {
 		conditions = append(conditions, "location LIKE ?")
 		args = append(args, "%"+filter.Location+"%")
 	}
+	state := filter.LifecycleState
+	if state == "" {
+		state = lifecycle.Active
+	}
+	if state != "all" {
+		conditions = append(conditions, "lifecycle_state = ?")
+		args = append(args, state)
+	}
 
 	whereClause := ""
 	if len(conditions) > 0 {
@@ -260,7 +295,9 @@ func (m *Manager) ListSubnets(filter SubnetFilter) ([]Subnet, int64, error) {
 	}
 	offset := (page - 1) * pageSize
 
-	querySQL := `SELECT id, space_id, name, cidr, vlan_id, location, description, created_at, updated_at
+	querySQL := `SELECT id, space_id, name, cidr, vlan_id, location, description, lifecycle_state,
+			COALESCE(retired_at, ''), COALESCE(retired_by, ''), COALESCE(retire_reason, ''),
+			created_at, updated_at
 		FROM ipam_subnets ` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, offset)
 
@@ -275,7 +312,7 @@ func (m *Manager) ListSubnets(filter SubnetFilter) ([]Subnet, int64, error) {
 		var s Subnet
 		var vlanID sql.NullInt64
 		var location, description sql.NullString
-		if err := rows.Scan(&s.ID, &s.SpaceID, &s.Name, &s.CIDR, &vlanID, &location, &description, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.SpaceID, &s.Name, &s.CIDR, &vlanID, &location, &description, &s.LifecycleState, &s.RetiredAt, &s.RetiredBy, &s.RetireReason, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		if vlanID.Valid {
@@ -297,6 +334,9 @@ func (m *Manager) UpdateSubnet(id string, opts SubnetOptions) (*Subnet, error) {
 	existing, err := m.GetSubnet(id)
 	if err != nil {
 		return nil, err
+	}
+	if existing.LifecycleState == lifecycle.Retired {
+		return nil, ErrSubnetRetired
 	}
 
 	if opts.Name != "" {
@@ -380,21 +420,19 @@ func (m *Manager) resizeAddresses(subnetID, spaceID, oldCIDR, newCIDR string, ne
 	return nil
 }
 
-// DeleteSubnet deletes a subnet, refusing when anything still depends on it.
+// RetireSubnet marks a subnet as retired instead of deleting it.
 //
-// The dependency scan runs a second time inside the deletion transaction. The
-// first scan produces the error message; the second one is the authoritative
-// decision, because between the two a scope can be created, and a check that
-// runs only outside the transaction is exactly the check that misses it.
-func (m *Manager) DeleteSubnet(id string) error {
+// Live DHCP scopes, their leases and reverse zones still block retirement:
+// those are active paths that would continue to use the subnet. Address rows
+// and ipam_history are no longer blockers because retirement keeps them as
+// archived children under the tombstoned parent.
+func (m *Manager) RetireSubnet(id, actor, reason string) error {
 	deps, err := m.CheckDependencies(id)
 	if err != nil {
 		return err
 	}
-	if len(deps) > 0 {
-		var cidr string
-		_ = m.db.QueryRow("SELECT cidr FROM ipam_subnets WHERE id = ?", id).Scan(&cidr)
-		return &DependencyError{SubnetID: id, CIDR: cidr, Deps: deps}
+	if blocking := retireBlockingDependencies(deps); len(blocking) > 0 {
+		return &DependencyError{SubnetID: id, CIDR: dependencyCIDR(m.db, id), Deps: blocking}
 	}
 
 	tx, err := m.db.Begin()
@@ -407,22 +445,16 @@ func (m *Manager) DeleteSubnet(id string) error {
 	if err != nil {
 		return err
 	}
-	if len(deps) > 0 {
-		var cidr string
-		_ = tx.QueryRow("SELECT cidr FROM ipam_subnets WHERE id = ?", id).Scan(&cidr)
-		return &DependencyError{SubnetID: id, CIDR: cidr, Deps: deps}
+	if blocking := retireBlockingDependencies(deps); len(blocking) > 0 {
+		return &DependencyError{SubnetID: id, CIDR: dependencyCIDR(tx, id), Deps: blocking}
 	}
 
-	if _, err := tx.Exec("DELETE FROM ipam_addresses WHERE subnet_id = ?", id); err != nil {
-		return fmt.Errorf("failed to delete addresses: %w", err)
-	}
-	if _, err := tx.Exec("DELETE FROM ipam_history WHERE subnet_id = ?", id); err != nil {
-		return fmt.Errorf("failed to delete history: %w", err)
-	}
-
-	result, err := tx.Exec("DELETE FROM ipam_subnets WHERE id = ?", id)
+	result, err := tx.Exec(`UPDATE ipam_subnets SET
+			lifecycle_state = ?, retired_at = datetime('now'), retired_by = ?, retire_reason = ?,
+			updated_at = datetime('now')
+		WHERE id = ? AND lifecycle_state = ?`, lifecycle.Retired, actor, reason, id, lifecycle.Active)
 	if err != nil {
-		return fmt.Errorf("failed to delete subnet: %w", err)
+		return fmt.Errorf("failed to retire subnet: %w", err)
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
@@ -430,6 +462,96 @@ func (m *Manager) DeleteSubnet(id string) error {
 	}
 	return tx.Commit()
 }
+
+// RestoreSubnet brings a retired subnet back into active service.
+//
+// The same checks that block retirement are repeated at restore time: the
+// parent must be active, no active sibling may overlap the CIDR, and no live
+// DHCP or DNS dependency may have appeared while the subnet was archived.
+// Local address and history rows are preserved untouched.
+func (m *Manager) RestoreSubnet(id string) (*Subnet, error) {
+	existing, err := m.GetSubnet(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.LifecycleState != lifecycle.Retired {
+		return nil, ErrSubnetNotRetired
+	}
+
+	var parentState string
+	if err := m.db.QueryRow(`SELECT lifecycle_state FROM ipam_spaces WHERE id = ?`, existing.SpaceID).Scan(&parentState); err != nil {
+		return nil, fmt.Errorf("check parent space: %w", err)
+	}
+	if parentState != lifecycle.Active {
+		return nil, fmt.Errorf("%w: parent space is %s", ErrSpaceNotActive, parentState)
+	}
+	if err := m.checkOverlap(existing.CIDR, id, existing.SpaceID); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSubnetActiveConflict, err)
+	}
+	deps, err := m.CheckDependencies(id)
+	if err != nil {
+		return nil, err
+	}
+	if blocking := retireBlockingDependencies(deps); len(blocking) > 0 {
+		return nil, &DependencyError{SubnetID: id, CIDR: existing.CIDR, Deps: blocking}
+	}
+
+	result, err := m.db.Exec(`UPDATE ipam_subnets SET
+			lifecycle_state = ?, retired_at = NULL, retired_by = '', retire_reason = '',
+			updated_at = datetime('now')
+		WHERE id = ? AND lifecycle_state = ?`, lifecycle.Active, id, lifecycle.Retired)
+	if err != nil {
+		return nil, fmt.Errorf("restore subnet: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrSubnetNotFound, id)
+	}
+	return m.GetSubnet(id)
+}
+
+// PurgeSubnet permanently removes a retired subnet tombstone.
+//
+// A purge never cascades: local address and history rows are exactly the data
+// the tombstone exists to preserve. The operator must archive/export them
+// first; this endpoint only removes an empty tombstone. The confirmation must
+// be the exact resource id, matching the confirmation shown in the archive UI.
+func (m *Manager) PurgeSubnet(id, confirmation string) error {
+	s, err := m.GetSubnet(id)
+	if err != nil {
+		return err
+	}
+	if s.LifecycleState != lifecycle.Retired {
+		return ErrSubnetNotRetired
+	}
+	if confirmation != id {
+		return ErrPurgeConfirmation
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin purge: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var addresses, history int64
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM ipam_addresses WHERE subnet_id = ?`, id).Scan(&addresses); err != nil {
+		return fmt.Errorf("count addresses for purge: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM ipam_history WHERE subnet_id = ?`, id).Scan(&history); err != nil {
+		return fmt.Errorf("count history for purge: %w", err)
+	}
+	if addresses > 0 || history > 0 {
+		return fmt.Errorf("%w: %d addresses, %d history rows", ErrSubnetHasPreservedChildren, addresses, history)
+	}
+	if _, err := tx.Exec(`DELETE FROM ipam_subnets WHERE id = ? AND lifecycle_state = ?`, id, lifecycle.Retired); err != nil {
+		return fmt.Errorf("purge subnet: %w", err)
+	}
+	return tx.Commit()
+}
+
+// DeleteSubnet is kept as a compatibility alias; HTTP DELETE now retires.
+func (m *Manager) DeleteSubnet(id string) error { return m.RetireSubnet(id, "", "") }
 
 // GetUsageStats returns IP usage statistics for a subnet.
 func (m *Manager) GetUsageStats(subnetID string) (*UsageStats, error) {
@@ -540,6 +662,9 @@ func (m *Manager) GenerateDHCPScope(subnetID string) (*scope.ScopeOptions, error
 	s, err := m.GetSubnet(subnetID)
 	if err != nil {
 		return nil, err
+	}
+	if s.LifecycleState == lifecycle.Retired {
+		return nil, ErrSubnetRetired
 	}
 
 	startIP, endIP, err := UsableHostRange(s.CIDR)
@@ -711,7 +836,7 @@ func (m *Manager) checkOverlap(cidr, excludeID, spaceID string) error {
 		return fmt.Errorf("invalid CIDR: %w", err)
 	}
 
-	rows, err := m.db.Query("SELECT id, cidr FROM ipam_subnets WHERE space_id = ?", spaceID)
+	rows, err := m.db.Query("SELECT id, cidr FROM ipam_subnets WHERE space_id = ? AND lifecycle_state = ?", spaceID, lifecycle.Active)
 	if err != nil {
 		return fmt.Errorf("check overlap: %w", err)
 	}

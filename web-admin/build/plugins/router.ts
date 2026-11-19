@@ -30,7 +30,8 @@ const ROUTE_META: Partial<Record<RouteKey, Partial<RouteMeta>>> = {
                   "resource": "dns",
                   "action": "read"
             },
-            "hideInMenu": true
+            "hideInMenu": true,
+            "activeMenu": "dns_zones"
       },
       "dns_forwarders": {
             "icon": "mdi:swap-horizontal",
@@ -283,6 +284,7 @@ export function setupElegantRouter() {
       if (constantRoutes.includes(key)) {
         meta.constant = true;
       }
+
 
       return meta;
     }

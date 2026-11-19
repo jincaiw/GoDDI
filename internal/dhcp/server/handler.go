@@ -123,9 +123,20 @@ func (s *Server) HandleDiscover(msg *dhcpv4.DHCPv4, ifaceName string, serverIP n
 		slog.Debug("DHCP: found reservation for DISCOVER", "mac", mac, "ip", targetIP)
 	}
 
+	// A client that already holds an in-pool binding in this scope keeps it
+	// across a new DISCOVER. Reservations above are authoritative: an operator
+	// assigning a different address must win over affinity.
+	if reservID == "" {
+		if own, ownErr := s.leaseMgr.GetLeaseByMAC(mac); ownErr == nil && own != nil &&
+			own.ScopeID == sc.ID && ipInRange(net.ParseIP(own.IPAddress), net.ParseIP(sc.StartIP), net.ParseIP(sc.EndIP)) {
+			targetIP = own.IPAddress
+			slog.Debug("DHCP: reusing live lease for DISCOVER", "mac", mac, "ip", targetIP)
+		}
+	}
+
 	// Step 3: Reserve an address, or refresh the reservation.
 	var offer *lease.Lease
-	if reservID != "" {
+	if targetIP != "" {
 		offer, err = s.leaseMgr.ReserveAddress(sc.ID, targetIP, mac, hostname)
 		if err != nil && !errors.Is(err, lease.ErrAddressTaken) {
 			return nil, fmt.Errorf("failed to reserve reserved IP %s: %w", targetIP, err)

@@ -32,15 +32,23 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
    step('reservation dialog (TDesign)', ins>=3, `inputs=${ins}`);
    const suffix=Date.now().toString().slice(-4);
    let ip='';
-   const taken = await p.evaluate(async () => {
+   const fixture = await p.evaluate(async () => {
      const token=sessionStorage.getItem('token'), csrf=sessionStorage.getItem('csrf_token');
-     const h={Authorization:`Bearer ${token}`,'X-CSRF-Token':csrf||''};
-     const r=await fetch('/api/v1/dhcp/reservations?page_size=500',{headers:h});
-     const d=await r.json().catch(()=>null);
-     return (d?.data||[]).map(x=>x.ip_address);
+     const h={Authorization:`Bearer ${token}`, 'X-CSRF-Token':csrf||''};
+     const scopes=await (await fetch('/api/v1/dhcp/scopes?page_size=100',{headers:h})).json();
+     const scope=(scopes.data||[]).find(s=>s.enabled) || (scopes.data||[])[0];
+     const res=await (await fetch('/api/v1/dhcp/reservations?page_size=500',{headers:h})).json();
+     const leases=await (await fetch('/api/v1/dhcp/leases?page_size=500',{headers:h})).json();
+     return {scope, taken:[...(res.data||[]).map(x=>x.ip_address), ...(leases.data||[]).map(x=>x.ip_address)]};
    });
-   for(let n=100;n<=200;n++){const c='198.18.0.'+n;if(!taken.includes(c)){ip=c;break}}
-   if(!ip) ip='198.18.0.'+(100+Math.floor(Math.random()*100));
+   const scope=fixture.scope;
+   if(scope){
+     const prefix=String(scope.start_ip||'').split('.').slice(0,3).join('.');
+     const start=Number(String(scope.start_ip||'').split('.').pop()||0);
+     const end=Number(String(scope.end_ip||'').split('.').pop()||0);
+     for(let n=start;n<=end;n++){const c=prefix+'.'+n;if(!fixture.taken.includes(c)){ip=c;break}}
+   }
+   if(!ip) throw new Error('no free IP in enabled DHCP scope');
    await p.locator('.t-dialog input').nth(0).fill(ip);
    const mac='02:00:00:de:ad:'+suffix.slice(0,2);
    await p.locator('.t-dialog input').nth(1).fill(mac);

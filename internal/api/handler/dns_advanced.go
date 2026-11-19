@@ -12,6 +12,15 @@ import (
 	"github.com/jasonwa/goddi/internal/metrics"
 )
 
+// blockingUntilValue keeps the zero time out of the JSON contract: the UI
+// uses null to mean "no temporary disable is in effect".
+func blockingUntilValue(until time.Time) interface{} {
+	if until.IsZero() {
+		return nil
+	}
+	return until
+}
+
 // --- Temporary blocking disable (T4) ---
 
 // TemporaryDisableBlocking handles POST /api/v1/dns/security/temporary-disable
@@ -39,7 +48,7 @@ func TemporaryDisableBlocking(w http.ResponseWriter, r *http.Request) {
 	enabled, until := DNSServices.Filter.BlockingStatus()
 	response.OK(w, map[string]interface{}{
 		"blocking_enabled":     enabled,
-		"disabled_until":       until,
+		"disabled_until":       blockingUntilValue(until),
 		"disabled_for_minutes": req.Minutes,
 	})
 }
@@ -54,7 +63,7 @@ func GetBlockingStatus(w http.ResponseWriter, r *http.Request) {
 	enabled, until := DNSServices.Filter.BlockingStatus()
 	response.OK(w, map[string]interface{}{
 		"blocking_enabled": enabled,
-		"disabled_until":   until,
+		"disabled_until":   blockingUntilValue(until),
 	})
 }
 

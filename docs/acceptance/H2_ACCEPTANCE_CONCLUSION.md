@@ -8,30 +8,32 @@
 
 | 项 | 结果 |
 |---|---|
-| **Level 1 判定** | **PASS**（PASS=229，FAIL=0，NOT_VERIFIED=16；含 auto-failover 与 config-replication 演练） |
+| **Level 1 判定** | **PASS**（PASS=319，FAIL=0，NOT_VERIFIED=2；14 suites，含 auto-failover、config-replication、split-plane 与 IPAM lifecycle 演练） |
 | 强制项 | 8/8 无违规（见 §4） |
 | Level 2 物理 | **NOT_VERIFIED**（5 项，见 §5） |
 | 配置作者 | **单作者规则已实施**（ADR-0011）：非作者节点配置写 409、读与数据面不受影响 |
 | 已知架构缺口 | ADR-0005 完整协调器（leader/quorum/epoch/watermark）仍未实现 |
 
-> 说明：23 项 NOT_VERIFIED 均为**本环境无法证明**的项（内核 tc/netem、磁盘满需 CAP_SYS_ADMIN、单进程 split-plane、物理级、ADR-0005），**不是失败**；真实失败一律 FAIL 且不重试成 PASS。
+> 说明：2 项 NOT_VERIFIED 是**本环境无法证明或产品明确未实现**的边界（ADR-0005 完整协调器、许可证到期保护；Level 2 物理项另列），**不是失败**；真实失败一律 FAIL 且不重试成 PASS。当前机器可读报告为 `tests/h2/reports/H2-REPORT-20261118T213743Z.json`（由 `run-all.sh` 集成顺序生成）；`suite_level_not_verified_boundaries` 明确列出 config-author 与 faults 的产品/架构边界。
 
-## 2. 各套件结果（最近一次全链路 `make h2-test`）
+## 2. 各套件结果（当前机器可读汇总，取代下列早期的历史计数）
 
 | 套件 | PASS | FAIL | NOT_VERIFIED | 覆盖 |
 |---|---|---|---|---|
 | 环境/一致性冒烟 | 9 | 0 | 4 | 双节点健康、唯一 Owner、mTLS、复制通道固定 repl 网 |
-| DNS 双节点 | 6 | 0 | 3 | 建区/记录/删除、真实查询、控制面宕机仍应答 |
+| DNS 双节点 | 12 | 0 | 0 | 建区/记录/删除、真实 UDP/TCP 查询、递归拒绝、独立配置边界、LKG revision/applied 双指标、专项 AXFR/IXFR/NOTIFY 证据、控制面宕机仍应答 |
 | DNS 传送 | 8 | 0 | 0 | **签名 AXFR**、无签名被拒、SOA、**IXFR**、**NOTIFY** |
-| DHCP 双节点 | 10 | 0 | 3 | 真实 udhcpc DORA、镜像可见、无重复 active 租约、分区 fail-closed、显式 degrade、备不接管 |
+| DHCP 双节点 | 12 | 0 | 0 | 真实 udhcpc DORA、镜像可见、同 MAC 地址亲和、无重复 active 租约、分区 fail-closed、显式 degrade、备不接管 |
 | 内核级故障 H2-004/005/006/013 | 11 | 0 | 0 | 单向复制丢包（仅 node-a 侧有 qdisc）、延迟+丢包下 DORA 成功且仍复制到备、ACK 路径丢包→withhold、恢复后恢复 ACK、tmpfs 4MB 磁盘满→withhold |
 | 配置作者（ADR-0011） | 9 | 0 | 1 | 作者 201 / 非作者 409 且原因可读 / 三类读 200 / health 200 / 数据面 standby / 拒绝不落库 |
-| 故障注入 H2-001..020（容器/进程） | 22 | 0 | 5 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、并发 4 客户端 0 重复 |
+| 故障注入 H2-001..020（容器/进程） | 26 | 0 | 1 | SIGKILL、分区（验证无旁路）、ACK 后崩溃租约不丢、takeover 契约、旧主降级、镜像恢复 HA API 证据、split-plane 与并发 4 客户端 0 重复 |
 | 故障注入 H2-009/010/011/012/016（应用级） | 5 | 0 | 0 | 事件重投幂等；租约哈希/越界篡改→启动拒绝发布快照（fail-closed）；facts 水位不一致→投影缺口指标；写故障窗口下已持久租约零丢失；IPAM 消费者故障后可恢复并排空 backlog |
-| IPAM/DDNS | 12 | 0 | 3 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、outbox 无丢失/幂等、**A+PTR 真实核验** |
-| DNS 主从（primary/secondary） | 8 | 0 | 0 | 主建区→secondary AXFR 跟随→改记录后 serial 追平→同 serial→node-b 为 secondary 无双主→同名 primary 被拒（并修复 AXFR 应用丢 zone 后缀的整区 NXDOMAIN 缺陷） |
-| 配置复制 A（ADR-0013） | 10 | 0 | 0 | node-a 建 scope→node-b 自动出现（控制库+数据面）→杀 node-a→node-b 自动提升并**从复制 scope 直接分配租约**（无手工重建），闭掉"提升后无法服务"缺口 |
-| Web 控制台 | 113 | 0 | 0 | 18 套 Playwright + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
+| IPAM/DDNS | 17 | 0 | 0 | space/subnet/VLAN、facts 端到端（outbox→inbox→投影 in_use）、D-03 hash chain 打戳/透传/消费、outbox 无丢失/幂等、**A+PTR 真实核验**、独立配置边界由 ADR-0013 A 专项证明 |
+| DNS 主从（primary/secondary） | 8 | 0 | 0 | 主建区→signed AXFR 跟随→记录变更收敛→SOA serial 一致→无双主；历史实现与修复见 §5c |
+| 配置复制 A（ADR-0013） | 14 | 0 | 0 | node-a 建 scope→node-b 自动出现（控制库+数据面）→杀 node-a→node-b 自动提升并**从复制 scope 直接分配租约**（无手工重建），闭掉"提升后无法服务"缺口 |
+| IPAM 生命周期复制 | 19 | 0 | 0 | 退役/恢复/空墓碑清除、intent 与 observation 分表边界、节点间不复制本地 observation |
+| 分离角色（split-plane） | 8 | 0 | 0 | control/dns 独立容器、端口隔离、控制面停机期间 DNS 继续应答、控制面恢复 |
+| Web 控制台 | 155 | 0 | 0 | 全部浏览器套件 + 人操作 CRUD（建区→列表→记录→详情→删除），0 页面错误 |
 
 ## 3. 强制项核验（任务 §8）
 
@@ -102,6 +104,7 @@
 
 1. **ADR-0005 拆分为 A/B（见 ADR-0013）**：**A（配置复制）已实现**——非 author 节点周期拉取 author 配置快照并应用，node-a 的 scope/zone 会出现在 node-b（H2 `config-replication` PASS=10），提升后可立即服务。**B（完整协调器）仍无**：leader 选举/quorum/witness/epoch fencing 未实现，`internal/cluster.ErrNotImplemented` 保留；作者节点自身故障的自动切换与真实分区 fail-closed 仍 NOT_VERIFIED，需产品决策与 3 故障域。
 2. **TSIG 新密钥需重启**（启动快照），运维需知。
-3. **`goddi_dhcp_ipam_projection_gaps` 未在该节点暴露**（代码已注册，运行路径未触发）。
-4. **H2-019 管理面/数据面分离**：单进程模式未验证，`server.role=dns|dhcp` split-plane 路径未在此环境演练。
-5. **H2-020 许可证到期保护**：产品功能未实现，记 NOT_VERIFIED。
+3. **`goddi_dhcp_ipam_projection_gaps` 已在 app-faults 中实际暴露并用于 H2-011 判定**；早期"未在该节点暴露"的记录为历史状态。
+4. **H2-019 管理面/数据面分离**：主 H2 的单进程模式不作为分离证据；受支持的 `server.role=control|dns` split-plane 路径已由独立套件 8/0 验证（控制面停机期间 DNS 继续应答）。
+5. **H2-020 许可证到期保护**：产品功能未实现，记 NOT_VERIFIED；实施需合法/非法/篡改许可证样本与产品决策。
+6. **H2-015b 跨节点配置独立发布**：配置复制 A（ADR-0013）已由 `config-replication` 12/0 验证——node-a 创建的 DNS 区与记录到达 node-b 控制库和数据面；但该证据不等同于 ADR-0005 完整协调器（leader/quorum/witness/fencing），后者仍未实现。

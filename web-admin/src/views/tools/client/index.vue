@@ -15,6 +15,8 @@ import { usePermission } from '@/composables/usePermission';
 
 defineOptions({ name: 'DNSClientPage' });
 
+/** Starter tool page: TCard sections + TForm query + TTable answers + TDialog import. */
+
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -31,9 +33,9 @@ const zoneOptions = ref<Array<{ label: string; value: string }>>([]);
 const importForm = reactive({ zone_id: '', name: '', type: 'A', value: '', ttl: 3600 });
 
 const importRules = {
-  zone_id: [{ required: true, message: t('dns.zones.title') + ' required', type: 'error' }],
-  name: [{ required: true, message: t('dns.records.recordName') + ' required', type: 'error' }],
-  value: [{ required: true, message: t('dns.records.recordValue') + ' required', type: 'error' }]
+  zone_id: [{ required: true, message: t('dns.zones.title') + t('common.required'), type: 'error' }],
+  name: [{ required: true, message: t('dns.records.recordName') + t('common.required'), type: 'error' }],
+  value: [{ required: true, message: t('dns.records.recordValue') + t('common.required'), type: 'error' }]
 };
 
 const answerColumns: PrimaryTableCol[] = [
@@ -61,7 +63,7 @@ function msgError(err: unknown) {
 async function handleQuery() {
   if (!perm.canRead('dns')) return;
   if (!queryForm.name) {
-    void MessagePlugin.warning('Please enter a domain name');
+    void MessagePlugin.warning(t('common.enterDomain'));
     return;
   }
   querying.value = true;
@@ -128,19 +130,21 @@ async function handleImportSubmit() {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dns.client.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dns.client.title') }}</h2>
+      </div>
     </TCard>
 
     <TCard :bordered="false">
       <TForm :data="queryForm" layout="inline" @submit="handleQuery">
         <TFormItem :label="t('dns.client.queryName')">
-          <TInput v-model="queryForm.name" placeholder="example.com" style="width: 240px" @enter="handleQuery" />
+          <TInput v-model="queryForm.name" :placeholder="t('common.queryExample')" style="width: 240px" @enter="handleQuery" />
         </TFormItem>
         <TFormItem :label="t('dns.client.queryType')">
           <TSelect v-model="queryForm.type" :options="typeOptions" style="width: 130px" />
         </TFormItem>
         <TFormItem :label="t('dns.client.upstream')">
-          <TInput v-model="queryForm.upstream" placeholder="Optional" clearable style="width: 200px" />
+          <TInput v-model="queryForm.upstream" :placeholder="t('dns.client.upstreamHint')" clearable style="width: 240px" />
         </TFormItem>
         <TFormItem>
           <TButton theme="primary" type="submit" :loading="querying" :disabled="!perm.canRead('dns')">
@@ -151,11 +155,14 @@ async function handleImportSubmit() {
     </TCard>
 
     <TCard v-if="queryResult" :bordered="false" :title="t('dns.client.response')">
+      <TAlert v-if="queryResult.source === 'local-authoritative'" theme="success" :message="t('dns.client.localResult')" class="result-alert" />
+      <TAlert v-else-if="queryResult.source === 'upstream'" theme="warning" :message="t('dns.client.externalResult')" class="result-alert" />
       <TDescriptions :column="2" class="result-meta">
         <TDescriptionsItem :label="t('dns.client.queryTime')">
           {{ (queryResult.duration / 1e6).toFixed(2) }}ms
         </TDescriptionsItem>
         <TDescriptionsItem :label="t('dns.client.server')">{{ queryResult.upstream }}</TDescriptionsItem>
+        <TDescriptionsItem :label="t('dns.client.source')">{{ queryResult.source || t('dns.client.unknownSource') }}</TDescriptionsItem>
       </TDescriptions>
       <TTable :columns="answerColumns" :data="queryResult.answers || []" row-key="name" size="small" stripe hover />
     </TCard>
@@ -198,10 +205,8 @@ async function handleImportSubmit() {
 .td-page-header :deep(.t-card__body) {
   padding: 16px 20px;
 }
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+.result-alert {
+  margin-bottom: 16px;
 }
 .result-meta {
   margin-bottom: 16px;

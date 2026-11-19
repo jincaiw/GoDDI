@@ -88,14 +88,14 @@ func ExportIPAM(db *sql.DB) (json.RawMessage, error) {
 	data := map[string]interface{}{}
 
 	// Export spaces.
-	spaces, err := exportTable(db, "SELECT id, name, description, created_at, updated_at FROM ipam_spaces")
+	spaces, err := exportTable(db, "SELECT id, name, description, lifecycle_state, retired_at, retired_by, retire_reason, created_at, updated_at FROM ipam_spaces")
 	if err != nil {
 		return nil, fmt.Errorf("exporting spaces: %w", err)
 	}
 	data["spaces"] = spaces
 
 	// Export subnets.
-	subnets, err := exportTable(db, "SELECT id, space_id, name, cidr, vlan_id, location, description, created_at, updated_at FROM ipam_subnets")
+	subnets, err := exportTable(db, "SELECT id, space_id, name, cidr, vlan_id, location, description, lifecycle_state, retired_at, retired_by, retire_reason, created_at, updated_at FROM ipam_subnets")
 	if err != nil {
 		return nil, fmt.Errorf("exporting subnets: %w", err)
 	}
@@ -107,6 +107,14 @@ func ExportIPAM(db *sql.DB) (json.RawMessage, error) {
 		return nil, fmt.Errorf("exporting addresses: %w", err)
 	}
 	data["addresses"] = addresses
+
+	// Observations are local runtime facts, but a backup must preserve them
+	// with the intent rows they describe. They are never part of config replication.
+	observations, err := exportTable(db, "SELECT address_id, state, observed_at, source, mac_address, hostname, lease_id, created_at, updated_at FROM ipam_address_observations")
+	if err != nil {
+		return nil, fmt.Errorf("exporting address observations: %w", err)
+	}
+	data["observations"] = observations
 
 	return json.Marshal(data)
 }

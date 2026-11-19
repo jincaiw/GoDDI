@@ -53,6 +53,47 @@ for _ in $(seq 1 15); do
 done
 [ "${lb:-0}" -ge 1 ] && ok "scope projected into node-b DHCP data plane (leases.db)" || bad "scope not projected into node-b data plane (got '$lb')"
 
+echo "### author a DNS zone and record on node-a; ADR-0013 A must carry them"
+ZNAME="crzone.test."
+za=$(curl -s -X POST http://127.0.0.1:18181/api/v1/dns/zones "${HA[@]}" -d "{\"name\":\"$ZNAME\",\"type\":\"primary\"}" | jget "d['data']['id']")
+if [ -n "$za" ]; then
+  curl -s -X POST "http://127.0.0.1:18181/api/v1/dns/zones/$za/records" "${HA[@]}" \
+    -d '{"name":"www","type":"A","ttl":60,"value":"192.0.2.177"}' -o /dev/null
+  zone_seen=no
+  for _ in $(seq 1 20); do
+    cbz=$(docker exec node-b sh -c "sqlite3 /var/lib/goddi/goddi.db \"select count(*) from dns_zones where name='$ZNAME';\"" 2>/dev/null | tr -d '\r')
+    [ "${cbz:-0}" -ge 1 ] && { zone_seen=yes; break; }
+    sleep 1
+  done
+  [ "$zone_seen" = "yes" ] && ok "DNS zone authored on node-a replicated to node-b control DB" || bad "DNS zone did not reach node-b control DB"
+  record_seen=no
+  for _ in $(seq 1 20); do
+    cbr=$(docker exec node-b sh -c "sqlite3 /var/lib/goddi/dnsdata.db \"select count(*) from dns_records r join dns_zones z on z.id=r.zone_id where z.name='$ZNAME' and r.name like 'www%';\"" 2>/dev/null | tr -d '\r')
+    [ "${cbr:-0}" -ge 1 ] && { record_seen=yes; break; }
+    sleep 1
+  done
+  [ "$record_seen" = "yes" ] && ok "DNS record authored on node-a projected into node-b data plane" || bad "DNS record did not reach node-b data plane"
+else bad "DNS zone create on node-a failed"; fi
+echo "### author IPAM space/subnet on node-a; ADR-0013 A must carry them"
+SP=$(curl -s -X POST http://127.0.0.1:18181/api/v1/ipam/spaces "${HA[@]}" -d '{"name":"crspace","description":"h2 config-replication"}' | jget "d['data']['id']")
+if [ -n "$SP" ]; then
+  curl -s -X POST http://127.0.0.1:18181/api/v1/ipam/subnets "${HA[@]}" \
+    -d "{\"space_id\":\"$SP\",\"name\":\"crsubnet\",\"cidr\":\"10.77.4.0/24\",\"vlan_id\":140}" -o /dev/null
+  ipam_seen=no
+  for _ in $(seq 1 20); do
+    cb=$(docker exec node-b sh -c "sqlite3 /var/lib/goddi/goddi.db \"select count(*) from ipam_spaces where name='crspace';\"" 2>/dev/null | tr -d '\r')
+    [ "${cb:-0}" -ge 1 ] && { ipam_seen=yes; break; }
+    sleep 1
+  done
+  [ "$ipam_seen" = "yes" ] && ok "IPAM space authored on node-a replicated to node-b control DB" || bad "IPAM space did not reach node-b"
+  subnet_seen=no
+  for _ in $(seq 1 20); do
+    cb=$(docker exec node-b sh -c "sqlite3 /var/lib/goddi/goddi.db \"select count(*) from ipam_subnets where name='crsubnet';\"" 2>/dev/null | tr -d '\r')
+    [ "${cb:-0}" -ge 1 ] && { subnet_seen=yes; break; }
+    sleep 1
+  done
+  [ "$subnet_seen" = "yes" ] && ok "IPAM subnet authored on node-a replicated to node-b control DB" || bad "IPAM subnet did not reach node-b"
+else bad "IPAM space create on node-a failed"; fi
 echo "### baseline DORA must succeed on node-a"
 setmac(){ docker exec client sh -c "ip link set eth0 down; ip link set eth0 address $1; ip link set eth0 up" >/dev/null 2>&1; }
 udhcpc(){ docker exec client sh -c 'rm -f /tmp/u.log; udhcpc -i eth0 -n -q -f -x hostname:h2c -t 8 -T 2 >/tmp/u.log 2>&1; echo EXIT=$?; cat /tmp/u.log'; }

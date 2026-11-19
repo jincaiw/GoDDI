@@ -3,8 +3,9 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
 (async()=>{
  const b=await chromium.launch(launchOpts());
  const p=await b.newPage({viewport:{width:1440,height:900}});
- const errs=[]; p.on('pageerror',e=>errs.push('PAGEERROR: '+e.message));
- p.on('console',m=>{if(m.type()==='error'){const x=m.text().slice(0,150);if(!/501|Not Implemented/.test(x))errs.push('CONSOLE: '+x)}});
+ const errs=[]; let expectNegative=false;
+ p.on('pageerror',e=>errs.push('PAGEERROR: '+e.message));
+ p.on('console',m=>{if(m.type()==='error'){const x=m.text().slice(0,150);if(expectNegative && /400 \(Bad Request\)|404 \(Not Found\)|409 \(Conflict\)/.test(x)) return;if(!/501|Not Implemented/.test(x))errs.push('CONSOLE: '+x)}});
  const step=(n,ok,x='')=>console.log(`${ok?'PASS':'FAIL'} | ${n}${x?' | '+x:''}`);
  const api=async (method,path,body)=>await p.evaluate(async ({method,path,body})=>{
    const token=sessionStorage.getItem('token'), csrf=sessionStorage.getItem('csrf_token');
@@ -41,6 +42,34 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
    await api('POST','/ipam/addresses/allocate',{subnet_id:subid,owner:'td-seed'});
  }
 
+ // Lifecycle restore and purge are state transitions with real guards;
+ // exercise them through the same API the archive UI uses.
+ {
+   const rs = Date.now().toString() + Math.floor(Math.random()*1000);
+   const created = await api('POST','/ipam/spaces',{name:'td-restore-space-'+rs});
+   const rid = created.data?.data?.id;
+   const retired = rid ? await api('DELETE','/ipam/spaces/'+rid) : null;
+   const restored = rid ? await api('POST','/ipam/spaces/'+rid+'/restore',{}) : null;
+   const after = rid ? await api('GET','/ipam/spaces/'+rid) : null;
+   step('retired space restored through API',
+     retired?.status===200 && restored?.status===200 && after?.data?.data?.lifecycle_state==='active');
+   expectNegative=true;
+   if (rid) await api('POST','/ipam/spaces/'+rid+'/purge',{confirmation:rid});
+   await p.waitForTimeout(200); expectNegative=false;
+ }
+ {
+   const ps = Date.now().toString() + Math.floor(Math.random()*1000);
+   const created = await api('POST','/ipam/spaces',{name:'td-purge-space-'+ps});
+   const pid = created.data?.data?.id;
+   if (pid) await api('DELETE','/ipam/spaces/'+pid);
+   expectNegative=true;
+   const wrong = pid ? await api('POST','/ipam/spaces/'+pid+'/purge',{confirmation:'wrong-id'}) : null;
+   const purged = pid ? await api('POST','/ipam/spaces/'+pid+'/purge',{confirmation:pid}) : null;
+   const after = pid ? await api('GET','/ipam/spaces/'+pid) : null;
+   await p.waitForTimeout(200); expectNegative=false;
+   step('retired empty tombstone purged with exact confirmation',
+     wrong?.status===400 && purged?.status===200 && after?.status===404);
+ }
  // ipam/subnets: 3 TDesign dialogs via row actions
  await p.goto(BASE+'/ipam/subnets',{waitUntil:'networkidle'}); await p.waitForTimeout(1000);
  step('subnets page loads', (await p.locator('body').innerText()).includes('子网管理'), `rows=${await p.locator('.t-table tbody tr').count()}`);

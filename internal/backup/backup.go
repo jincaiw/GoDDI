@@ -735,29 +735,74 @@ func restoreDHCP(db execOrQuery, data json.RawMessage) error {
 
 func restoreIPAM(db execOrQuery, data json.RawMessage) error {
 	var d struct {
-		Spaces    []map[string]interface{} `json:"spaces"`
-		Subnets   []map[string]interface{} `json:"subnets"`
-		Addresses []map[string]interface{} `json:"addresses"`
+		Spaces       []map[string]interface{} `json:"spaces"`
+		Subnets      []map[string]interface{} `json:"subnets"`
+		Addresses    []map[string]interface{} `json:"addresses"`
+		Observations []map[string]interface{} `json:"observations"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
 		return fmt.Errorf("parsing IPAM backup: %w", err)
 	}
-	for _, table := range []string{"ipam_addresses", "ipam_subnets", "ipam_spaces"} {
+	for _, table := range []string{"ipam_address_observations", "ipam_addresses", "ipam_subnets", "ipam_spaces"} {
 		if _, err := db.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("clearing %s: %w", table, err)
 		}
 	}
 	if err := restoreRows(db, "ipam_spaces", d.Spaces,
-		[]string{"id", "name", "description", "created_at", "updated_at"}, nil); err != nil {
+		[]string{"id", "name", "description", "lifecycle_state", "retired_at", "retired_by", "retire_reason", "created_at", "updated_at"},
+		map[string]interface{}{"lifecycle_state": "active", "retired_by": "", "retire_reason": ""}); err != nil {
 		return err
 	}
 	if err := restoreRows(db, "ipam_subnets", d.Subnets,
-		[]string{"id", "space_id", "name", "cidr", "vlan_id", "location", "description", "created_at", "updated_at"}, nil); err != nil {
+		[]string{"id", "space_id", "name", "cidr", "vlan_id", "location", "description", "lifecycle_state", "retired_at", "retired_by", "retire_reason", "created_at", "updated_at"},
+		map[string]interface{}{"lifecycle_state": "active", "retired_by": "", "retire_reason": ""}); err != nil {
 		return err
 	}
-	return restoreRows(db, "ipam_addresses", d.Addresses,
+	if err := restoreRows(db, "ipam_addresses", d.Addresses,
 		[]string{"id", "subnet_id", "ip_address", "status", "mac_address", "hostname", "dns_record_id", "dhcp_lease_id", "owner", "device", "location", "description", "last_seen", "created_at", "updated_at"},
-		map[string]interface{}{"status": "available"})
+		map[string]interface{}{"status": "available"}); err != nil {
+		return err
+	}
+	return restoreObservationRows(db, d.Observations)
+}
+
+// restoreObservationRows upserts local observation facts.
+//
+// Reinserting an address fires the compatibility trigger in migration 039,
+// which creates an "unknown" observation row. A plain INSERT would collide
+// with that row, so the backup's authoritative observation must update it.
+func restoreObservationRows(db execOrQuery, rows []map[string]interface{}) error {
+	columns := []string{"address_id", "state", "observed_at", "source", "mac_address", "hostname", "lease_id", "created_at", "updated_at"}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
+	updates := make([]string, 0, len(columns)-1)
+	for _, column := range columns[1:] {
+		updates = append(updates, column+"=excluded."+column)
+	}
+	query := fmt.Sprintf("INSERT INTO ipam_address_observations (%s) VALUES (%s) ON CONFLICT(address_id) DO UPDATE SET %s",
+		strings.Join(columns, ","), placeholders, strings.Join(updates, ","))
+	for i, row := range rows {
+		args := make([]interface{}, len(columns))
+		for j, column := range columns {
+			value, ok := row[column]
+			if !ok || value == nil || value == "" && (column == "created_at" || column == "updated_at") {
+				switch column {
+				case "state":
+					value = "unknown"
+				case "source":
+					value = ""
+				case "created_at", "updated_at":
+					value = time.Now().Format(time.RFC3339)
+				default:
+					value = nil
+				}
+			}
+			args[j] = value
+		}
+		if _, err := db.Exec(query, args...); err != nil {
+			return fmt.Errorf("restoring ipam_address_observations row %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func restoreSecurity(db execOrQuery, data json.RawMessage) error {

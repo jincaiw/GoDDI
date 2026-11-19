@@ -6,7 +6,7 @@ import { toggleHtmlClass } from '@/utils/common';
 import { $t } from '@/locales';
 
 export function setupLoading() {
-  const themeColor = localStg.get('themeColor') || '#646cff';
+  const themeColor = localStg.get('themeColor') || '#0052D9';
   const darkMode = localStg.get('darkMode') || false;
   const palette = getColorPalette(themeColor);
 

@@ -4,6 +4,8 @@ x-env: &env
   GODDI_ADMIN_USERNAME: "admin"
   GODDI_ADMIN_PASSWORD: "AdminPass-0123456789"
   GODDI_LOG_LEVEL: info
+  # Lab-only: exercise the already-shipped D-03 facts hash chain end to end.
+  GODDI_DHCP_FACTS_HASH_CHAIN_ENABLED: "true"
 
 services:
   node-a:

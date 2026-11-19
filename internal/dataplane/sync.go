@@ -305,6 +305,12 @@ func (r *Replicator) localRevision(d Domain) (int64, error) {
 // connection that cursor holds -- with no error and no timeout.
 func readAll(ctx context.Context, db *sql.DB, t table) ([][]interface{}, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(t.columns, ", "), t.name)
+	// The data-plane projection keeps only id/space_id/cidr, so retired
+	// parents must be excluded at the source. Otherwise a retired IPAM subnet
+	// would keep answering DHCP fact-to-space lookups after its API delete.
+	if t.name == "ipam_subnets" {
+		query += " WHERE lifecycle_state = 'active'"
+	}
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading %s: %v", ErrControlUnavailable, t.name, err)

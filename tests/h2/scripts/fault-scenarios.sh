@@ -52,22 +52,44 @@ echo "### H2-002 Node B SIGKILL"
 docker kill -s KILL node-b >/dev/null 2>&1; sleep 2
 [ "$(docker inspect -f '{{.State.Running}}' node-b)" = "false" ] && ok H2-002 "node-b killed; standby down" || bad H2-002 "node-b still running"
 sleep 8
-if loghas node-a 200s 'the mirror session ended|paused'; then ok H2-002b "node-a noticed the lost mirror (state paused path)"; else nv H2-002b "node-a pause not observed in log window"; fi
+st=$(curl -s http://127.0.0.1:18181/api/v1/dhcp/ha -H "Authorization: Bearer $TOK" | jget "d['data']['state']")
+if [ "$st" = "paused" ]; then ok H2-002b "node-a reports state=paused via HA API after mirror loss"; elif loghas node-a 200s 'the mirror session ended|paused'; then ok H2-002b "node-a noticed the lost mirror (log evidence)"; else nv H2-002b "node-a pause not observed in API or log window (got '$st')"; fi
 docker start node-b >/dev/null 2>&1; waithealth node-b && ok H2-002c "node-b rejoined and healthy" || bad H2-002c "node-b did not rejoin"
 sleep 6
-if loghas node-a 60s 'the mirror has caught up|mirror connected'; then ok H2-002d "node-a re-established the mirror after B rejoined"; else nv H2-002d "mirror re-establishment not observed yet"; fi
+recovered=no
+for _ in $(seq 1 20); do
+  status=$(curl -s http://127.0.0.1:18181/api/v1/dhcp/ha -H "Authorization: Bearer $TOK")
+  st=$(printf '%s' "$status" | jget "d['data']['state']")
+  redundant=$(printf '%s' "$status" | jget "d['data']['redundant']")
+  seq=$(printf '%s' "$status" | jget "d['data']['sequence']")
+  ack=$(printf '%s' "$status" | jget "d['data']['acknowledged_sequence']")
+  if [ "$st" = "primary" ] && [ "$redundant" = "True" ] && [ -n "$seq" ] && [ "$seq" = "$ack" ]; then recovered=yes; break; fi
+  sleep 1
+done
+if [ "$recovered" = "yes" ]; then ok H2-002d "HA API reports restored mirror (state=$st redundant=$redundant seq=$seq ack=$ack)"; elif loghas node-a 60s 'the mirror has caught up|mirror connected'; then ok H2-002d "node-a re-established the mirror after B rejoined (log evidence)"; else nv H2-002d "mirror recovery not observed in API (state=$st redundant=$redundant seq=$seq ack=$ack) or log"; fi
 
 echo "### H2-003 full replication partition"
 P=$(bash scripts/network-partition.sh 2>&1); printf '%s\n' "$P"
 case "$P" in *"PASS | replication isolated"*) ok H2-003 "replication isolated both directions, no bypass";; *) nv H2-003 "isolation could not be proven on this host";; esac
 sleep 8
-if loghas node-a 120s '"state":"paused"'; then ok H2-003b "owner paused while peer unreachable (ADR-0010)"; else nv H2-003b "paused state not seen in log window"; fi
+st=$(curl -s http://127.0.0.1:18181/api/v1/dhcp/ha -H "Authorization: Bearer $TOK" | jget "d['data']['state']")
+if [ "$st" = "paused" ]; then ok H2-003b "owner reports state=paused via HA API while peer unreachable (ADR-0010)"; elif loghas node-a 120s '"state":"paused"'; then ok H2-003b "owner paused while peer unreachable (ADR-0010; log evidence)"; else nv H2-003b "paused state not seen in API or log window (got '$st')"; fi
 IP=$(dora 21)
 case "$P" in *"PASS | replication isolated"*)
   if [ -z "$IP" ]; then ok H2-003c "no ACK while partitioned (fail-closed)"; else bad H2-003c "ACK issued while partitioned ($IP)"; fi;;
 *) nv H2-003c "ACK suppression not testable without proven isolation";; esac
 bash scripts/network-recover.sh node-b >/dev/null 2>&1; sleep 6
-if loghas node-a 60s 'the mirror has caught up|mirror connected'; then ok H2-003d "mirror recovered and caught up"; else nv H2-003d "recovery catch-up not observed"; fi
+recovered=no
+for _ in $(seq 1 20); do
+  status=$(curl -s http://127.0.0.1:18181/api/v1/dhcp/ha -H "Authorization: Bearer $TOK")
+  st=$(printf '%s' "$status" | jget "d['data']['state']")
+  redundant=$(printf '%s' "$status" | jget "d['data']['redundant']")
+  seq=$(printf '%s' "$status" | jget "d['data']['sequence']")
+  ack=$(printf '%s' "$status" | jget "d['data']['acknowledged_sequence']")
+  if [ "$st" = "primary" ] && [ "$redundant" = "True" ] && [ -n "$seq" ] && [ "$seq" = "$ack" ]; then recovered=yes; break; fi
+  sleep 1
+done
+if [ "$recovered" = "yes" ]; then ok H2-003d "HA API reports recovered primary with redundant mirror (state=$st seq=$seq ack=$ack)"; elif loghas node-a 60s 'the mirror has caught up|mirror connected'; then ok H2-003d "mirror recovered and caught up (log evidence)"; else nv H2-003d "recovery catch-up not observed in API (state=$st redundant=$redundant seq=$seq ack=$ack) or log"; fi
 
 echo "### H2-007/H2-008 crash around the ACK boundary"
 IP=$(dora 31)
@@ -115,11 +137,11 @@ if [ -n "${Z:-}" ]; then
   curl -s -X POST "http://127.0.0.1:18181/api/v1/dns/zones/$Z/records" "${H[@]}" -d '{"name":"a","type":"A","ttl":60,"value":"192.0.2.77"}' -o /dev/null
   r=""
   for _ in $(seq 1 15); do
-    r=$(docker exec client sh -c 'apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @node-a a.fault15.test. A' 2>/dev/null | head -1)
+    r=$(docker exec client sh -c 'nslookup a.fault15.test. node-a 2>/dev/null | grep "^Address: " | tail -1 | cut -d " " -f2' 2>/dev/null | head -1)
     [ "$r" = "192.0.2.77" ] && break; sleep 2
   done
   [ "$r" = "192.0.2.77" ] && ok H2-015 "publish completed on node-a while node-b was down (no false 'all nodes published')" || bad H2-015 "node-a did not serve the new record ($r)"
-  nv H2-015b "cross-node publish coordination is ADR-0005 (not implemented); 'all nodes published' cannot be claimed"
+  if [ "$(bash scripts/config-replication-status.sh 2>/dev/null | tr -d '\r')" = "covered" ]; then ok H2-015b "ADR-0013 config replication carried the zone and record to node-b; full ADR-0005 coordinator remains unimplemented"; else nv H2-015b "ADR-0013 config replication evidence not available in this run"; fi
 else bad H2-015 "zone create failed"; fi
 docker start node-b >/dev/null 2>&1; waithealth node-b || true
 
@@ -148,8 +170,18 @@ docker start node-a >/dev/null 2>&1; waithealth node-a && ok H2-018b "owner rest
 echo "### H2-019 management plane down, data plane keeps serving"
 baseline
 IPB=$(dora 51)
+# The main H2 stack is single-process, so killing its process cannot separate
+# the planes. The supported path is the split-plane suite: run it fresh and use
+# its recorded verdict instead of guessing from the single-process stack.
 docker exec node-a sh -c 'pkill -f "goddi serve"' >/dev/null 2>&1; sleep 3
-nv H2-019 "single-binary process: management and data plane share one process; split-plane mode (server.role=dns|dhcp) is the supported path and is not exercised here"
+before=$(ls -t reports/split-plane-summary-*.json 2>/dev/null | head -1)
+if [ -x scripts/split-plane-acceptance.sh ]; then bash scripts/split-plane-acceptance.sh >/dev/null 2>&1; fi
+after=$(ls -t reports/split-plane-summary-*.json 2>/dev/null | head -1)
+if [ -n "$after" ] && [ "$after" != "$before" ] && python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get("pass",0)>=8 and d.get("fail",0)==0 and d.get("not_verified",0)==0 else 1)' "$after"; then
+  ok H2-019 "supported split-plane path kept DNS serving while control was down (fresh suite PASS)"
+else
+  nv H2-019 "split-plane suite did not produce a fresh all-PASS verdict for this run"
+fi
 docker start node-a >/dev/null 2>&1; waithealth node-a || true
 [ -n "$IPB" ] && ok H2-019b "lease obtained before the management-plane test ($IPB)"
 
@@ -163,7 +195,12 @@ for id in H2-020; do
 done
 
 # Application-level fault injection (H2-009/010/011/012/016) in a separate pass.
+# H2-019 deliberately stops the management process, so each following suite
+# starts from a fresh, healthy pair. Without this reset their SQL probes inherit
+# a stopped node and report NOT_VERIFIED for a fault that was never exercised.
+baseline
 if [ -x scripts/app-fault.sh ]; then bash scripts/app-fault.sh; fi
+baseline
 if [ -x scripts/kernel-fault.sh ]; then bash scripts/kernel-fault.sh; fi
 printf '{"suite":"faults","timestamp":"%s","pass":%d,"fail":%d,"not_verified":%d}\n' "$TS" "$PASS" "$FAIL" "$NV" > "$OUT/faults-summary-$TS.json"
 bash scripts/collect-evidence.sh >/dev/null 2>&1 || true

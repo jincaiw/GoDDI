@@ -9,23 +9,23 @@ import { ApiError } from '@/service/api/goddi/client';
 import { getIPAMPoolPlan, type DHCPScopePlan, type PlanAddress, type ScopeDraft } from '@/service/api/goddi/ipam';
 import { createDHCPScope } from '@/service/api/goddi/dhcp';
 
+defineOptions({ name: 'IPAMPoolWizardDialog' });
+
 const props = defineProps<{
-  show: boolean;
   subnetId: string;
   subnetLabel: string;
 }>();
 
 const emit = defineEmits<{
-  (event: 'update:show', value: boolean): void;
   (event: 'created'): void;
 }>();
 
+// v-model:show is a model ref, the same idiom RemoteTable uses, instead of a
+// hand-written props/emit getter-setter pair.
+const show = defineModel<boolean>('show', { required: true });
+
 const { t } = useI18n();
 const perm = usePermission();
-const visible = computed({
-  get: () => props.show,
-  set: (value: boolean) => emit('update:show', value)
-});
 
 const step = ref<'plan' | 'confirm'>('plan');
 const loading = ref(false);
@@ -50,6 +50,29 @@ const routerSourceText = computed(() => {
       return t('ipam.pool.routerFromNothing');
   }
 });
+
+/** The API returns backend-authored prose. Localize the one stable warning
+ *  by shape; unknown future warnings stay visible verbatim rather than being
+ *  hidden behind a guess. */
+function planMessage(text: string) {
+  let m = text.match(/^no address is marked gateway, so the plan proposes (\S+) /);
+  if (m) return t('ipam.pool.gatewayConventionWarning', { ip: m[1] });
+  m = text.match(/^scope "(.+)" already hands out (\S+)\.\.(\S+), which overlaps the proposed (\S+)\.\.(\S+)$/);
+  if (m) {
+    return t('ipam.pool.scopeOverlapConflict', {
+      name: m[1], start: m[2], end: m[3], proposedStart: m[4], proposedEnd: m[5]
+    });
+  }
+  m = text.match(/^scope "(.+)" is disabled but its pool (\S+)\.\.(\S+) overlaps/);
+  if (m) {
+    return t('ipam.pool.scopeDisabledOverlapWarning', { name: m[1], start: m[2], end: m[3] });
+  }
+  m = text.match(/^scope "(.+)" already serves subnet (\S+) with a pool that does not overlap this one \((\S+)\.\.(\S+)\)/);
+  if (m) {
+    return t('ipam.pool.scopeSameSubnetWarning', { name: m[1], subnet: m[2], start: m[3], end: m[4] });
+  }
+  return text;
+}
 
 /** Enough of a fingerprint to compare two of them by eye; the whole value
  *  goes back on the wire. */
@@ -78,7 +101,7 @@ const excludedColumns: PrimaryTableCol[] = [
 ];
 
 function close() {
-  visible.value = false;
+  show.value = false;
 }
 
 function reset() {
@@ -155,19 +178,16 @@ async function create() {
   }
 }
 
-watch(
-  () => props.show,
-  show => {
-    if (show) {
-      reset();
-      void load();
-    }
+watch(show, visible => {
+  if (visible) {
+    reset();
+    void load();
   }
-);
+});
 </script>
 
 <template>
-  <TDialog v-model:visible="visible" :header="t('ipam.pool.title')" width="780px" :footer="false">
+  <TDialog v-model:visible="show" :header="t('ipam.pool.title')" width="780px" :footer="false">
     <TAlert v-if="subnetLabel" theme="info" :message="`${t('ipam.subnets.title')}: ${subnetLabel}`" class="mb-4" />
 
     <TLoading :loading="loading" size="small">
@@ -194,12 +214,12 @@ watch(
         <template v-if="step === 'plan'">
           <TAlert v-if="plan.conflicts.length > 0" theme="error" :title="t('ipam.pool.conflicts')" class="mb-4">
             <ul class="list">
-              <li v-for="(conflict, index) in plan.conflicts" :key="index">{{ conflict }}</li>
+              <li v-for="(conflict, index) in plan.conflicts" :key="index">{{ planMessage(conflict) }}</li>
             </ul>
           </TAlert>
           <TAlert v-if="plan.warnings.length > 0" theme="warning" :title="t('ipam.pool.warnings')" class="mb-4">
             <ul class="list">
-              <li v-for="(warning, index) in plan.warnings" :key="index">{{ warning }}</li>
+              <li v-for="(warning, index) in plan.warnings" :key="index">{{ planMessage(warning) }}</li>
             </ul>
           </TAlert>
 
@@ -300,7 +320,7 @@ watch(
 }
 .empty {
   margin: 0 0 18px;
-  color: #999;
+  color: var(--td-text-color-placeholder);
   font-size: 13px;
 }
 .list {

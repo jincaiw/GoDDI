@@ -69,6 +69,7 @@ func TestErrorHelpers(t *testing.T) {
 		{"Forbidden", func(w http.ResponseWriter) { Forbidden(w, "no") }, http.StatusForbidden, 403},
 		{"NotFound", func(w http.ResponseWriter) { NotFound(w, "gone") }, http.StatusNotFound, 404},
 		{"Conflict", func(w http.ResponseWriter) { Conflict(w, "dup") }, http.StatusConflict, 409},
+		{"PreconditionFailed", func(w http.ResponseWriter) { PreconditionFailed(w, "stale") }, http.StatusPreconditionFailed, 412},
 		{"TooManyRequests", func(w http.ResponseWriter) { TooManyRequests(w, "slow") }, http.StatusTooManyRequests, 429},
 		{"InternalError", func(w http.ResponseWriter) { InternalError(w, "oops") }, http.StatusInternalServerError, 500},
 		{"ServiceUnavailable", func(w http.ResponseWriter) { ServiceUnavailable(w, "down", nil) }, http.StatusServiceUnavailable, 503},

@@ -43,26 +43,8 @@ func ExecuteDNSQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SEC-07: Validate upstream address to prevent SSRF.
-	if req.Upstream != "" {
-		if err := validateUpstreamAddress(req.Upstream); err != nil {
-			response.BadRequest(w, err.Error())
-			return
-		}
-	} else {
-		// If upstream is empty, use configured forwarders or safe defaults.
-		if DNSServices != nil && DNSServices.Forwarder != nil {
-			forwarders := DNSServices.Forwarder.GetForwarders()
-			if len(forwarders) > 0 {
-				req.Upstream = forwarders[0].Address
-			}
-		}
-		if req.Upstream == "" {
-			req.Upstream = "8.8.8.8:53"
-		}
-	}
-
-	// Parse query type.
+	// Parse query type before choosing a path: both local and upstream
+	// lookups need the same typed question.
 	qtype := dns.TypeA
 	if req.Type != "" {
 		var ok bool
@@ -73,16 +55,46 @@ func ExecuteDNSQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Use the DNS client to execute the query.
-	var dnsClient *client.DNSClient
-	if DNSServices != nil && DNSServices.DNSClient != nil {
-		dnsClient = DNSServices.DNSClient
-	} else {
-		dnsClient = client.NewDNSClient(10 * time.Second) // fallback when service container is unavailable
-	}
-
 	start := time.Now()
-	result, _, err := dnsClient.Query(req.Name, qtype, req.Upstream)
+	var result *client.QueryResult
+	var err error
+	if req.Upstream == "" {
+		// D-04: an empty upstream is a request to inspect this node's applied
+		// authoritative snapshot. Never turn a private name into an outbound
+		// query just because no upstream was supplied.
+		if DNSServices == nil || DNSServices.DNSServer == nil {
+			response.ServiceUnavailable(w, "本地权威快照不可用，未执行外部查询", nil)
+			return
+		}
+		clientIP := r.RemoteAddr
+		if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
+			clientIP = host
+		}
+		msg, denied, found := DNSServices.DNSServer.DebugLocalAuthoritative(req.Name, qtype, clientIP)
+		if denied {
+			response.Forbidden(w, "查询被区域 ACL 拒绝，未执行外部查询")
+			return
+		}
+		if !found || msg == nil {
+			response.BadRequest(w, "本节点没有该名称的本地权威数据；未执行外部查询")
+			return
+		}
+		result = client.ResultFromMessage(req.Name, qtype, "local-authoritative", msg, time.Since(start))
+	} else {
+		// Explicit upstreams are external by definition. The console labels
+		// them as such so the operator knows the name leaves the deployment.
+		if err := validateUpstreamAddress(req.Upstream); err != nil {
+			response.BadRequest(w, err.Error())
+			return
+		}
+		var dnsClient *client.DNSClient
+		if DNSServices != nil && DNSServices.DNSClient != nil {
+			dnsClient = DNSServices.DNSClient
+		} else {
+			dnsClient = client.NewDNSClient(10 * time.Second)
+		}
+		result, _, err = dnsClient.Query(req.Name, qtype, req.Upstream)
+	}
 	if err != nil {
 		if result != nil {
 			logDNSClientQuery(r, result.QueryName, qtype, result.ResponseCode, result.Upstream, start, false)

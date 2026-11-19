@@ -6,7 +6,7 @@
 ## 环境（tests/h2）
 - **node-a**：合法 DHCP Owner（primary）；**node-b**：被动镜像（standby）。
 - **client**：真实 DNS/DHCP 客户端容器；**relay**：DHCP Relay 测试组件；**fault-injector**：网络/进程故障注入；**observer**：证据采集。
-- 三张独立网络：`mgmt-net`(172.29/24)、`repl-net`(172.28/24，固定 IP)、`client-net`(172.30/24)。
+- 三张独立网络：`mgmt-net`(10.77.1.0/24)、`repl-net`(10.77.2.0/24，固定 IP)、`client-net`(10.77.3.0/24)。分离角色套件另用 `10.78.0.0/24`。
 - 复制通道固定绑定 `repl-net`（`dhcp_ha.listen_addr` 为节点 repl IP:9953），不与管理网共享。
 - **mTLS**：`tests/h2/scripts/gen-certs.sh` 生成私有 CA + 每节点证书（SAN 绑定 repl IP），配置 `dhcp_ha.tls_{cert,key,ca}_file`。
 - 每节点独立 SQLite + Lease WAL + 配置 + 证书目录；Docker Volume `node-a-data`/`node-b-data` 持久化；**无共享 DB/WAL**。
@@ -35,14 +35,14 @@ make h2-up && make h2-test    # 环境 + 全部套件 + 证据 + 汇总报告
 make h2-fault-test            # H2-001..020 故障场景
 make h2-fault-kernel          # tc/netem 与磁盘故障（Linux CI 才可验证）
 make h2-web-test              # 控制台全页面回归 + 人操作 CRUD 走查
-make h2-report                # 只汇总 reports/*-summary-*.json 与 faults-*.jsonl
+make h2-report                # 汇总 reports/*-summary-*.json 与 app/kernel/faults JSONL
 make h2-down                  # 清理
 ```
 `make h2-report` 产出 `tests/h2/reports/H2-REPORT-<ts>.json`：每套件 PASS/FAIL/NOT_VERIFIED、
 故障场景判定、未运行套件（NOT_RUN，不当作 PASS）、以及 **Level 2 物理项清单（固定 NOT_VERIFIED）**。
 汇总判定：任一 FAIL → FAIL；全部通过但有未运行 → NOT_VERIFIED；否则 PASS。
 
-## 最终结论（2026-11-13 更新）
+## 最终结论（2026-11-18 更新）
 
 - **DHCP 双机热备增强（ADR-0012）**：双心跳链路（`listen_addr_backup`/`peer_address_backup`，任一通即活）+
   `priority`/`preempt` + **默认关闭的 `auto_failover`**。默认行为不变；真实 TCP 集成测试
@@ -50,9 +50,9 @@ make h2-down                  # 清理
 
 - **内核级故障已转 PASS**：`make h2-fault-kernel` 在本机 linux/arm64 运行时真实注入 tc/netem 与 tmpfs 磁盘满 → H2-004/005/006/013 **PASS=11 FAIL=0**。
 - **ADR-0011 单作者规则已实施**：`cluster.config_author`；非作者节点配置写 409、读与数据面不受影响 → `make h2-config-author` **PASS=9**。
-- 全链路 `make h2-test` → **verdict=PASS，PASS=196 FAIL=0 NOT_VERIFIED=16**。
+- 当前机器可读汇总：`tests/h2/reports/H2-REPORT-20261118T213743Z.json`（`run-all.sh` 集成顺序） → **verdict=PASS，PASS=319 FAIL=0 NOT_VERIFIED=2**；14 suites 无缺失，fault scenarios 46 PASS / 1 NOT_VERIFIED，web 155/0。
 
-## 早期结论
+## 历史结论（保留，计数以当前汇总为准）
 见 [`H2_ACCEPTANCE_CONCLUSION.md`](H2_ACCEPTANCE_CONCLUSION.md)：Level 1 **PASS**（PASS=171 / FAIL=0 / NOT_VERIFIED=23，8/8 强制项无违规）；Level 2 物理 5 项 **NOT_VERIFIED**；已知缺口（ADR-0005 等）已列明。
 
 ## 状态（滚动）

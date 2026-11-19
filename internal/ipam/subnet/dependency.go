@@ -80,6 +80,28 @@ func plural(n int, one, many string) string {
 // addresses produces a usable error rather than a 4000-line one.
 const MaxListedDependencies = 20
 
+// retireBlockingDependencies keeps only dependencies that would still be
+// served after retirement. Address rows and ipam_history are preserved by a
+// retire transition, so they are evidence to archive rather than blockers.
+func retireBlockingDependencies(deps []Dependency) []Dependency {
+	out := make([]Dependency, 0, len(deps))
+	for _, d := range deps {
+		switch d.Kind {
+		case "address", "address_detail":
+			continue
+		default:
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func dependencyCIDR(q querier, id string) string {
+	var cidr string
+	_ = q.QueryRow("SELECT cidr FROM ipam_subnets WHERE id = ?", id).Scan(&cidr)
+	return cidr
+}
+
 // CheckDependencies returns everything that would be broken by deleting the
 // subnet. An empty result means the deletion is safe.
 func (m *Manager) CheckDependencies(subnetID string) ([]Dependency, error) {

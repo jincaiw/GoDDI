@@ -2,6 +2,8 @@ import { create as createAxios } from 'axios'
 import type { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { setAuthStorage, getCsrfToken, clearAuthStorage } from '@/store/modules/auth/shared'
 import { router } from '@/router'
+import { GODDI_REQUEST_CONFIG, SKIP_REFRESH_HEADER } from '@/service/request/goddi'
+import { normalizeList } from '@/service/request/goddi-helpers'
 
 export interface ApiResponse<T = unknown> {
   code: number
@@ -55,18 +57,7 @@ export interface PaginatedApiResponse<T = unknown> {
 // browser talks to the vite dev server (avoids CORS), which forwards to the
 // GoDDI backend (VITE_SERVICE_BASE_URL in .env.test). In all other cases the
 // backend serves the UI and API on the same origin, so '/api/v1' is correct.
-const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
-
-const client: AxiosInstance = createAxios({
-  baseURL: isHttpProxy ? '/proxy-default/api/v1' : '/api/v1',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
-
-// Flag to mark refresh requests so interceptor skips them
-const SKIP_REFRESH_HEADER = 'X-Skip-Refresh-Interceptor'
+const client: AxiosInstance = createAxios({ ...GODDI_REQUEST_CONFIG })
 
 interface PendingRequest {
   resolve: (value?: unknown) => void
@@ -212,17 +203,7 @@ export async function getList<T>(
   params?: Record<string, unknown>
 ): Promise<{ data: T[]; meta: PaginatedApiResponse<T>['meta'] }> {
   const response = await client.get<unknown>(url, { params })
-  const body = response.data as Record<string, unknown>
-  // Handle paginated response format: { code, data: [], meta: {...} }
-  if (body.data !== undefined && body.meta !== undefined) {
-    return { data: body.data as T[], meta: body.meta as PaginatedApiResponse<T>['meta'] }
-  }
-  // Handle direct array format: { code, data: [] }
-  if (Array.isArray(body.data)) {
-    return { data: body.data as T[], meta: { total: body.data.length, page: 1, page_size: body.data.length, pages: 1 } }
-  }
-  // Fallback: return empty
-  return { data: [], meta: { total: 0, page: 1, page_size: 20, pages: 0 } }
+  return normalizeList<T>(response.data)
 }
 
 export async function post<T>(url: string, data?: unknown): Promise<T> {

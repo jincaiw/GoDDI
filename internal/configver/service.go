@@ -156,12 +156,11 @@ func (s *Service) Publish(req PublishRequest) (*PublishResult, error) {
 		existing, err := revisionByIdempotencyKey(tx, req.IdempotencyKey)
 		switch {
 		case err == nil:
-			if existing.ResourceType != req.ResourceType || existing.ResourceID != req.ResourceID {
-				return nil, &ConflictError{
-					ResourceType:     req.ResourceType,
-					ResourceID:       req.ResourceID,
-					ExpectedRevision: req.ExpectedRevision,
-					ActualRevision:   existing.Revision,
+			if existing.ResourceType != req.ResourceType || existing.ResourceID != req.ResourceID || existing.ContentHash != hash {
+				return nil, &IdempotencyConflictError{
+					ResourceType:   req.ResourceType,
+					ResourceID:     req.ResourceID,
+					IdempotencyKey: req.IdempotencyKey,
 				}
 			}
 			changes, err := s.diffAgainstBase(tx, existing)

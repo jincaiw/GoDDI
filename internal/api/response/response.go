@@ -146,6 +146,14 @@ func ConflictWithData(w http.ResponseWriter, message string, data interface{}) {
 	})
 }
 
+// PreconditionFailed sends a 412 Precondition Failed response.
+func PreconditionFailed(w http.ResponseWriter, message string) {
+	writeJSON(w, http.StatusPreconditionFailed, Response{
+		Code:    412,
+		Message: message,
+	})
+}
+
 // TooManyRequests sends a 429 Too Many Requests response.
 func TooManyRequests(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusTooManyRequests, Response{

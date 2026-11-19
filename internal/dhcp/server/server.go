@@ -82,6 +82,13 @@ type Server struct {
 	// default SQLite constructor leaves it nil and retains the existing path.
 	durableGate DurableLeaseGate
 
+	// sendGuard is an optional, fail-closed authorization check performed
+	// immediately before any DHCP packet is written to the socket. It is the
+	// last line of defence for a node whose write authority may have been
+	// revoked after the lease was committed; nil preserves the historical
+	// single-node behaviour.
+	sendGuard func() error
+
 	// startupGate is optional. When configured, Start must complete recovery
 	// before binding UDP :67. The default constructor leaves it nil.
 	startupGate StartupGate
@@ -419,6 +426,23 @@ func NewWithLeaseStore(store LeaseStore, leaseDB *sql.DB, interfaces []string, e
 // complete.
 func (s *Server) SetDurableLeaseGate(gate DurableLeaseGate) {
 	s.durableGate = gate
+}
+
+// SetSendAuthorizationGuard installs an optional check consulted immediately
+// before every DHCP reply is written (OFFER, ACK, NAK, INFORM). A non-nil
+// guard that returns an error makes the server stay silent: no packet is sent,
+// and no NAK is generated, because an unauthorized node has nothing to say.
+// Leaving it unset keeps the existing deployment behaviour.
+func (s *Server) SetSendAuthorizationGuard(fn func() error) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	s.sendGuard = fn
+}
+
+func (s *Server) sendAuthorization() func() error {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	return s.sendGuard
 }
 
 // SetStartupGate installs an explicit recovery gate. Start will run recovery
@@ -881,6 +905,17 @@ func (s *Server) sendResponse(resp *dhcpv4.DHCPv4, req *dhcpv4.DHCPv4, addr net.
 	} else {
 		// Broadcast to client.
 		dest = &net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+	}
+
+	// Last-line ownership recheck: the lease may have been committed while
+	// this node still held write authority, but that authority can be
+	// revoked before the packet reaches the wire. Fail closed with silence.
+	if guard := s.sendAuthorization(); guard != nil {
+		if err := guard(); err != nil {
+			slog.Warn("DHCP: withholding response; send authorization was revoked",
+				"error", err, "dest", dest, "message_type", resp.MessageType().String())
+			return
+		}
 	}
 
 	data := resp.ToBytes()

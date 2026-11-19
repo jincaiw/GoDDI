@@ -1,0 +1,27 @@
+env: development
+server:
+  name: "GoDDI-split-dns"
+  http_addr: ":6080"
+  public_url: "http://127.0.0.1:18192"
+  data_dir: /var/lib/goddi
+  role: dns
+database:
+  driver: "sqlite"
+  dsn: /var/lib/goddi/goddi.db
+dataplane:
+  sync_interval_seconds: 1
+dns:
+  enabled: true
+  listeners:
+    udp: {enabled: true, address: ":53"}
+    tcp: {enabled: true, address: ":53"}
+dhcp:
+  enabled: false
+  interfaces: []
+security:
+  jwt_secret: "h2-split-jwt-secret-not-for-production"
+  encryption_key: "h2-split-encryption-key-0123456789"
+  totp_enabled: false
+  login_rate_limit: 5
+log:
+  level: info

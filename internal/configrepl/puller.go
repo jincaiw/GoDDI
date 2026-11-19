@@ -93,17 +93,38 @@ func (p *Puller) pullOnce(ctx context.Context) (bool, error) {
 	// Version is a content fingerprint, not a monotonic counter, so "unchanged"
 	// is equality. A follower with no prior state always applies once.
 	if p.haveState && snap.Version == p.lastVer {
+		// A successful pull is a liveness signal even when the configuration is
+		// unchanged. config_repl_state.synced_at is the console's replication
+		// health clock: if it only moved on an actual apply, a perfectly healthy
+		// idle follower would be reported as stale a few seconds later.
+		if err := p.touchState(ctx, snap.Version); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
-	rows, err := ApplySnapshot(ctx, p.db, snap, p.specs)
+	// Config rows AND the applied-version watermark must land in one commit.
+	// Otherwise a crash or a state-write failure leaves the in-memory lastVer
+	// ahead of the database, and every future pull is treated as a no-op even
+	// though the configuration never applied.
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("configrepl: begin apply: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := ApplySnapshotTx(ctx, tx, snap, p.specs)
 	if err != nil {
 		return false, err
 	}
-	p.lastVer = snap.Version
-	p.haveState = true
-	if err := p.saveState(ctx, snap.Version, rows, ""); err != nil {
+	if err := saveStateTx(ctx, tx, p.cfg.SourceURL, snap.Version, rows, ""); err != nil {
 		return false, err
 	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("configrepl: commit apply: %w", err)
+	}
+	// Only now advance the in-memory watermark; a failed state write keeps
+	// the previous version so the next pull retries the apply.
+	p.lastVer = snap.Version
+	p.haveState = true
 	if p.onApplied != nil {
 		p.onApplied()
 	}
@@ -147,16 +168,27 @@ func (p *Puller) loadState(ctx context.Context) error {
 	return nil
 }
 
+// stateWriter is satisfied by both *sql.DB and *sql.Tx so the watermark can
+// be written in the same transaction as the configuration apply.
+type stateWriter interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (p *Puller) saveState(ctx context.Context, version int64, rows int, lastErr string) error {
-	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO config_repl_state (source_node, applied_version, applied_rows, last_error, synced_at)
-		VALUES (?, ?, ?, ?, datetime('now'))
+	return saveStateTx(ctx, p.db, p.cfg.SourceURL, version, rows, lastErr)
+}
+
+func saveStateTx(ctx context.Context, q stateWriter, source string, version int64, rows int, lastErr string) error {
+	_, err := q.ExecContext(ctx, `
+		INSERT INTO config_repl_state (source_node, applied_version, applied_rows, last_error, synced_at, expected_version)
+		VALUES (?, ?, ?, ?, datetime('now'), ?)
 		ON CONFLICT(source_node) DO UPDATE SET
 			applied_version = excluded.applied_version,
 			applied_rows    = excluded.applied_rows,
 			last_error      = excluded.last_error,
-			synced_at       = excluded.synced_at`,
-		p.cfg.SourceURL, version, rows, lastErr)
+			synced_at       = excluded.synced_at,
+			expected_version = excluded.expected_version`,
+		source, version, rows, lastErr, version)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
 			return nil // state table not present (older DB); replication still works, just no watermark
@@ -166,6 +198,36 @@ func (p *Puller) saveState(ctx context.Context, version int64, rows int, lastErr
 	return nil
 }
 
+// touchState records a successful pull without changing the applied watermark.
+// A successful fetch also clears a previous transient error (for example an
+// author that was briefly unreachable); a failed APPLY is still retried because
+// its version differs from lastVer, so it cannot be hidden by this path.
+func (p *Puller) touchState(ctx context.Context, expectedVersion int64) error {
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE config_repl_state SET synced_at = datetime('now'), last_error = '', expected_version = ?
+		WHERE source_node = ?`, expectedVersion, p.cfg.SourceURL)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil // older DB without the state table; replication still works
+		}
+		return fmt.Errorf("configrepl: touching repl state: %w", err)
+	}
+	return nil
+}
+
 func (p *Puller) recordError(ctx context.Context, cause error) {
+	// An error is not a new apply: preserve the last successful applied_rows
+	// watermark instead of zeroing it, or a healthy replica would look like it
+	// never applied anything after a transient author outage.
+	res, err := p.db.ExecContext(ctx,
+		`UPDATE config_repl_state SET last_error = ? WHERE source_node = ?`,
+		cause.Error(), p.cfg.SourceURL)
+	if err == nil {
+		if n, e := res.RowsAffected(); e == nil && n > 0 {
+			return
+		}
+	}
+	// No state row yet (or an older DB): record a full state row so the
+	// console still sees an unknown/failed replica instead of nothing.
 	_ = p.saveState(ctx, p.lastVer, 0, cause.Error())
 }

@@ -19,11 +19,11 @@ H=(-H "Authorization: Bearer $TOK" -H "X-CSRF-Token: $CS" -H 'Content-Type: appl
 sq(){ docker exec node-a sh -c "sqlite3 -noheader $1 \"$2\"" 2>/dev/null | tr -d '\r'; }
 # The same query against the volume, for when the node has exited (a fail-closed
 # startup leaves nothing to exec into).
-sqvol(){ docker run --rm -v goddi-h2_node-a-data:/d alpine:3.24 sh -c "sqlite3 -noheader /d/$1 \"$2\"" 2>/dev/null | tr -d '\r'; }
+sqvol(){ docker run --rm --entrypoint sh -v goddi-h2_node-a-data:/d goddi:h2 -c "sqlite3 -noheader /d/$1 \"$2\"" 2>/dev/null | tr -d '\r'; }
 # Restore every tamper even if the script is interrupted: a half-restored H2 pair
 # would make later suites fail for the wrong reason.
 TAMPERED_LEASE=""; TAMPERED_ORIG=""
-cleanup(){ docker exec client sh -c 'ip link set eth0 down 2>/dev/null; ip addr flush dev eth0 2>/dev/null; ip link set eth0 address 02:00:00:00:00:aa; ip link set eth0 up; ip addr add 10.77.3.3/24 dev eth0 2>/dev/null; ip route add default via 10.77.3.1 2>/dev/null; true' >/dev/null 2>&1
+cleanup(){ CLIENT_IP=$(bash scripts/client-fixture-ip.sh); docker exec client sh -c "ip link set eth0 down 2>/dev/null; ip addr flush dev eth0 2>/dev/null; ip link set eth0 address 02:00:00:00:00:aa; ip link set eth0 up; ip addr add $CLIENT_IP/24 dev eth0 2>/dev/null; ip route add default via 10.77.3.1 2>/dev/null; true" >/dev/null 2>&1
   docker exec node-a sh -c 'chmod 644 /var/lib/goddi/leases.db /var/lib/goddi/leases.db-wal /var/lib/goddi/goddi.db /var/lib/goddi/goddi.db-wal 2>/dev/null; true' >/dev/null 2>&1
   if [ -n "${TAMPERED_LEASE:-}" ]; then
     sqvol leases.db "delete from dhcp_leases where ip_address='203.0.113.250';" >/dev/null 2>&1

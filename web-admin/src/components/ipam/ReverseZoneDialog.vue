@@ -6,24 +6,23 @@ import { usePermission } from '@/composables/usePermission';
 import { createDNSZone } from '@/service/api/goddi/dns';
 import { planReverseZone, type ReverseZonePlan } from '@/service/api/goddi/ipam';
 
+defineOptions({ name: 'IPAMReverseZoneDialog' });
+
 const props = defineProps<{
-  show: boolean;
   subnetId: string;
   subnetLabel: string;
 }>();
 
 const emit = defineEmits<{
-  (event: 'update:show', value: boolean): void;
   (event: 'created'): void;
 }>();
 
+// v-model:show is a model ref, the same idiom RemoteTable uses, instead of a
+// hand-written props/emit getter-setter pair.
+const show = defineModel<boolean>('show', { required: true });
+
 const { t } = useI18n();
 const perm = usePermission();
-
-const visible = computed({
-  get: () => props.show,
-  set: (value: boolean) => emit('update:show', value)
-});
 
 const loading = ref(false);
 const creating = ref(false);
@@ -32,10 +31,17 @@ const plan = ref<ReverseZonePlan | null>(null);
 const selected = ref('');
 const ttl = ref(3600);
 
+const candidateOptions = computed(() =>
+  (plan.value?.candidates || []).map(name => ({
+    label: name === plan.value?.zone_name ? `${name} (${t('ipam.reverseZone.mostSpecific')})` : name,
+    value: name
+  }))
+);
+
 const canCreate = computed(() => !!plan.value && !!selected.value && perm.canWrite('dns'));
 
 function close() {
-  visible.value = false;
+  show.value = false;
 }
 
 function reset() {
@@ -78,20 +84,17 @@ async function create() {
   }
 }
 
-watch(
-  () => props.show,
-  show => {
-    if (show) {
-      reset();
-      void load();
-    }
+watch(show, visible => {
+  if (visible) {
+    reset();
+    void load();
   }
-);
+});
 </script>
 
 <template>
   <TDialog
-    v-model:visible="visible"
+    v-model:visible="show"
     :header="t('ipam.reverseZone.title')"
     :confirm-btn="{ loading: creating, disabled: !canCreate, content: t('ipam.reverseZone.create') }"
     :cancel-btn="t('common.cancel')"
@@ -109,14 +112,7 @@ watch(
             <TTag variant="light">{{ plan.cidr }}</TTag>
           </TFormItem>
           <TFormItem :label="t('ipam.reverseZone.candidates')">
-            <TRadioGroup v-model="selected" class="candidate-list">
-              <TRadio v-for="name in plan.candidates" :key="name" :value="name">
-                {{ name }}
-                <TTag v-if="name === plan.zone_name" size="small" theme="primary" variant="light" class="ml-2">
-                  {{ t('ipam.reverseZone.mostSpecific') }}
-                </TTag>
-              </TRadio>
-            </TRadioGroup>
+            <TSelect v-model="selected" :options="candidateOptions" />
           </TFormItem>
           <TFormItem :label="t('ipam.reverseZone.ttl')">
             <TInputNumber v-model="ttl" :min="60" style="width: 100%" />
@@ -155,6 +151,6 @@ watch(
 .hint {
   margin: 10px 0 0;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--td-text-color-placeholder);
 }
 </style>

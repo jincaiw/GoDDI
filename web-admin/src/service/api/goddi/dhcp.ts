@@ -89,8 +89,8 @@ export interface DHCPLease {
   scope_id: string
   scope_name: string
   status: string
-  start_time: string
-  end_time: string
+  lease_start: string
+  lease_end: string
   client_id: string
 }
 

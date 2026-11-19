@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import SectionTitle from '@/components/ipam/SectionTitle.vue';
+import { ipamStatusLabel, ipamStatusTheme } from '@/composables/useIpamLifecycle';
 import {
   getIPAMAddressView,
   type AddressHistoryEntry,
@@ -14,21 +15,18 @@ import {
   type ScopeSummary
 } from '@/service/api/goddi/ipam';
 
+defineOptions({ name: 'IPAMAddressDetailDrawer' });
+
 const props = defineProps<{
-  show: boolean;
   spaceId: string;
   ip: string;
 }>();
 
-const emit = defineEmits<{
-  (event: 'update:show', value: boolean): void;
-}>();
+// v-model:show is a model ref, the same idiom RemoteTable uses, instead of a
+// hand-written props/emit getter-setter pair.
+const show = defineModel<boolean>('show', { required: true });
 
 const { t } = useI18n();
-const visible = computed({
-  get: () => props.show,
-  set: (value: boolean) => emit('update:show', value)
-});
 
 const loading = ref(false);
 const view = ref<AddressView | null>(null);
@@ -36,19 +34,10 @@ const loadFailed = ref('');
 
 const title = computed(() => (props.ip ? `${t('ipam.detail.title')} · ${props.ip}` : t('ipam.detail.title')));
 
-function statusTheme(status: string): 'success' | 'warning' | 'danger' | 'default' {
-  const map: Record<string, 'success' | 'warning' | 'danger' | 'default'> = {
-    used: 'success',
-    available: 'default',
-    reserved: 'warning',
-    conflict: 'danger'
-  };
-  return map[status] || 'default';
-}
 
 function historyTitle(entry: AddressHistoryEntry) {
-  if (entry.old_status && entry.new_status) return `${entry.action}: ${entry.old_status} → ${entry.new_status}`;
-  return entry.new_status ? `${entry.action}: ${entry.new_status}` : entry.action;
+  if (entry.old_status && entry.new_status) return `${entry.action}: ${ipamStatusLabel(t, entry.old_status)} → ${ipamStatusLabel(t, entry.new_status)}`;
+  return entry.new_status ? `${entry.action}: ${ipamStatusLabel(t, entry.new_status)}` : entry.action;
 }
 
 const dnsColumns: PrimaryTableCol[] = [
@@ -116,7 +105,7 @@ const leaseColumns: PrimaryTableCol[] = [
     colKey: 'status',
     title: t('common.status'),
     width: 110,
-    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as LeaseSummary).status))
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => ipamStatusLabel(t, String((row as LeaseSummary).status)))
   },
   { colKey: 'lease_end', title: t('ipam.detail.leaseEnd'), width: 180 }
 ];
@@ -156,9 +145,9 @@ async function load() {
 }
 
 watch(
-  () => [props.show, props.spaceId, props.ip] as const,
-  ([show]) => {
-    if (show) {
+  () => [show.value, props.spaceId, props.ip] as const,
+  ([visible]) => {
+    if (visible) {
       view.value = null;
       void load();
     }
@@ -168,7 +157,7 @@ watch(
 </script>
 
 <template>
-  <TDrawer v-model:visible="visible" :header="title" size="700px" placement="right" :footer="false">
+  <TDrawer v-model:visible="show" :header="title" size="700px" placement="right" :footer="false">
     <TLoading :loading="loading" size="small">
       <template v-if="view">
         <TAlert
@@ -188,8 +177,8 @@ watch(
           <TDescriptionsItem :label="t('ipam.addresses.ip')" :span="2">
             <TSpace size="small" align="center">
               <span>{{ view.address.ip_address }}</span>
-              <TTag size="small" :theme="statusTheme(view.address.status)" variant="light">
-                {{ view.address.status }}
+              <TTag size="small" :theme="ipamStatusTheme(view.address.status)" variant="light">
+                {{ ipamStatusLabel(t, view.address.status) }}
               </TTag>
             </TSpace>
           </TDescriptionsItem>
@@ -210,7 +199,7 @@ watch(
 
         <template v-if="view.access.dns">
           <SectionTitle :text="t('ipam.detail.dnsRecords')" :count="view.dns_records.length" />
-          <p v-if="view.dns_records.length === 0" class="empty">{{ t('ipam.detail.dnsRecordsEmpty') }}</p>
+          <TEmpty v-if="view.dns_records.length === 0" size="small" class="section-empty" :description="t('ipam.detail.dnsRecordsEmpty')" />
           <TTable
             v-else
             size="small"
@@ -226,17 +215,18 @@ watch(
           <SectionTitle :text="t('ipam.detail.scopes')" :count="view.dhcp_scopes.length" />
           <!-- A bounded list read as exhaustive would claim "does not cover". -->
           <TAlert v-if="view.scopes_truncated" theme="info" :message="t('ipam.detail.scopesTruncated')" class="mb-2" />
-          <p v-if="view.dhcp_scopes.length === 0" class="empty">
-            {{ view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty') }}
-          </p>
+          <TEmpty
+            v-if="view.dhcp_scopes.length === 0" size="small" class="section-empty"
+            :description="view.scopes_truncated ? t('ipam.detail.scopesUnknown') : t('ipam.detail.scopesEmpty')"
+          />
           <TTable v-else size="small" :columns="scopeColumns" :data="view.dhcp_scopes" row-key="id" stripe hover />
 
           <SectionTitle :text="t('ipam.detail.leases')" :count="view.dhcp_leases.length" />
-          <p v-if="view.dhcp_leases.length === 0" class="empty">{{ t('ipam.detail.leasesEmpty') }}</p>
+          <TEmpty v-if="view.dhcp_leases.length === 0" size="small" class="section-empty" :description="t('ipam.detail.leasesEmpty')" />
           <TTable v-else size="small" :columns="leaseColumns" :data="view.dhcp_leases" row-key="id" stripe hover />
 
           <SectionTitle :text="t('ipam.detail.reservations')" :count="view.dhcp_reservations.length" />
-          <p v-if="view.dhcp_reservations.length === 0" class="empty">{{ t('ipam.detail.reservationsEmpty') }}</p>
+          <TEmpty v-if="view.dhcp_reservations.length === 0" size="small" class="section-empty" :description="t('ipam.detail.reservationsEmpty')" />
           <TTable
             v-else
             size="small"
@@ -249,7 +239,7 @@ watch(
         </template>
 
         <SectionTitle :text="t('ipam.detail.history')" :count="view.history.length" />
-        <p v-if="view.history.length === 0" class="empty">{{ t('ipam.detail.historyEmpty') }}</p>
+        <TEmpty v-if="view.history.length === 0" size="small" class="section-empty" :description="t('ipam.detail.historyEmpty')" />
         <TTimeline v-else>
           <TTimelineItem
             v-for="(entry, index) in view.history"
@@ -264,7 +254,12 @@ watch(
         </TTimeline>
       </template>
 
-      <TEmpty v-else-if="!loading" :description="loadFailed || t('ipam.detail.nothingToShow')" />
+      <TAlert v-else-if="loadFailed" theme="error" role="alert" :message="loadFailed">
+        <template #operation>
+          <TButton size="small" theme="primary" variant="outline" @click="load">{{ t('common.retry') }}</TButton>
+        </template>
+      </TAlert>
+      <TEmpty v-else-if="!loading" :description="t('ipam.detail.nothingToShow')" />
     </TLoading>
   </TDrawer>
 </template>
@@ -279,10 +274,12 @@ watch(
 .mb-2 {
   margin-bottom: 8px;
 }
-.empty {
-  margin: 0 0 18px;
-  color: #999;
+.section-empty {
+  margin: 4px 0 18px;
+}
+.section-empty :deep(.t-empty__description) {
   font-size: 13px;
+  color: var(--td-text-color-placeholder);
 }
 .conflict-list {
   margin: 0;
@@ -293,7 +290,7 @@ watch(
 }
 .history-meta {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--td-text-color-placeholder);
 }
 :deep(.tag-row) {
   display: flex;

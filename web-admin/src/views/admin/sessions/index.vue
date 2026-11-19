@@ -4,32 +4,26 @@ import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
+import { formatAPITime } from '@/utils/datetime';
 import { deleteSession, listSessions, type SessionInfo } from '@/service/api/goddi/auth';
 import { useAuthStore } from '@/store/modules/auth';
 
 defineOptions({ name: 'AdminSessionsPage' });
 
-const { t, locale } = useI18n();
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
+
+const { t } = useI18n();
 const authStore = useAuthStore();
 
 const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
 const revokingOthers = ref(false);
 
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(locale.value, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  });
+function formatTime(value: string | null | undefined): string {
+  return formatAPITime(value);
 }
 
 function isCurrentSession(row: SessionInfo) {
-  return row.user_id === authStore.userInfo.userId;
+  return Boolean(authStore.currentSessionId) && row.id === authStore.currentSessionId;
 }
 
 const columns = computed<PrimaryTableCol[]>(() => [
@@ -63,7 +57,15 @@ const columns = computed<PrimaryTableCol[]>(() => [
     title: t('common.actions'),
     width: 100,
     cell: (h, { row }) =>
-      h(TLink, { theme: 'danger', onClick: () => confirmRevoke((row as SessionInfo).id) }, () => t('sessions.revoke'))
+      h(
+        TLink,
+        {
+          theme: 'danger',
+          disabled: isCurrentSession(row as SessionInfo),
+          onClick: () => confirmRevoke((row as SessionInfo).id)
+        },
+        () => t('sessions.revoke')
+      )
   }
 ]);
 
@@ -78,6 +80,7 @@ function confirmRevoke(id: string) {
     header: t('sessions.revoke'),
     body: t('sessions.revokeConfirm'),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteSession(id);
@@ -96,12 +99,12 @@ function confirmRevokeOthers() {
     header: t('sessions.revokeOthers'),
     body: t('sessions.revokeOthersConfirm'),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       revokingOthers.value = true;
       try {
-        // Keep the most recently created session (assumed to be the current one).
-        // The list is paged server-side now, so walk every page: a person
-        // clicking "revoke others" means all of them, not just the first page.
+        // Keep the session that owns the current access token. Walking every
+        // page still matters: one click means all other sessions, not page one.
         const all: SessionInfo[] = [];
         const pageSize = 100;
         for (let page = 1; ; page += 1) {
@@ -109,16 +112,29 @@ function confirmRevokeOthers() {
           all.push(...result.data);
           if (result.data.length < pageSize || all.length >= result.meta.total) break;
         }
-        const sorted = [...all].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        const keepId = sorted[0]?.id;
-        for (const target of all.filter(s => s.id !== keepId)) {
+        const keepId = authStore.currentSessionId;
+        if (!keepId || !all.some(s => s.id === keepId)) {
+          void MessagePlugin.error(t('common.failed'));
+          return;
+        }
+        const targets = all.filter(s => s.id !== keepId);
+        let succeeded = 0;
+        for (const target of targets) {
           try {
             await deleteSession(target.id);
+            succeeded += 1;
           } catch {
-            // Continue revoking the remaining sessions.
+            // Keep going: one failed revoke must not hide the others' status.
           }
         }
-        void MessagePlugin.success(t('sessions.revokeSuccess'));
+        const failed = targets.length - succeeded;
+        if (failed === 0) {
+          void MessagePlugin.success(t('sessions.revokeSuccess'));
+        } else if (succeeded === 0) {
+          void MessagePlugin.error(t('sessions.revokeFailed'));
+        } else {
+          void MessagePlugin.warning(t('sessions.revokePartial', { ok: succeeded, failed }));
+        }
         await tableRef.value?.reload();
       } finally {
         revokingOthers.value = false;
@@ -132,7 +148,9 @@ function confirmRevokeOthers() {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('sessions.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('sessions.title') }}</h2>
+      </div>
       <TButton theme="primary" :loading="revokingOthers" @click="confirmRevokeOthers">
         {{ t('sessions.revokeOthers') }}
       </TButton>
@@ -152,11 +170,7 @@ function confirmRevokeOthers() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

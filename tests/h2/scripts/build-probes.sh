@@ -14,4 +14,8 @@ for tool in axfrprobe notifyprobe; do
   fi
   docker cp "$TMP/$tool" "client:/usr/local/bin/$tool" >/dev/null 2>&1 || { echo "FAIL | could not install $tool into client"; exit 1; }
 done
-echo "PASS | DNS probes installed in the client container (axfrprobe, notifyprobe)"
+if ! (cd "$ROOT" && CGO_ENABLED=0 GOOS=linux go build -mod=readonly -o "$TMP/dns-query" "./tests/h2/tools/dnsprobe"); then
+  echo "FAIL | could not build dns-query"; exit 1
+fi
+docker cp "$TMP/dns-query" "client:/usr/local/bin/dns-query" >/dev/null 2>&1 || { echo "FAIL | could not install dns-query into client"; exit 1; }
+echo "PASS | DNS probes installed in the client container (axfrprobe, notifyprobe, dns-query)"

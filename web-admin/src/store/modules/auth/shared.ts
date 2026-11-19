@@ -13,6 +13,20 @@ export function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) || '';
 }
 
+export function getSessionIdFromToken(token: string): string {
+  if (!token) return '';
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return '';
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const decoded = JSON.parse(atob(padded)) as { sid?: string };
+    return decoded.sid || '';
+  } catch {
+    return '';
+  }
+}
+
 export function getCsrfToken(): string {
   return sessionStorage.getItem(CSRF_KEY) || '';
 }

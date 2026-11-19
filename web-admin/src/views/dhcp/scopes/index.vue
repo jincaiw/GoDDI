@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Progress as TProgress, Space as TSpace, Switch as TSwitch } from 'tdesign-vue-next';
@@ -16,6 +17,7 @@ import {
 
 defineOptions({ name: 'DHCPScopesPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -37,10 +39,10 @@ const formData = reactive<CreateDHCPScopeRequest>({
 });
 
 const formRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }],
-  subnet: [{ required: true, message: t('dhcp.scopes.subnet') + ' required', type: 'error' }],
-  start_ip: [{ required: true, message: t('dhcp.scopes.startIp') + ' required', type: 'error' }],
-  end_ip: [{ required: true, message: t('dhcp.scopes.endIp') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }],
+  subnet: [{ required: true, message: t('dhcp.scopes.subnet') + t('common.required'), type: 'error' }],
+  start_ip: [{ required: true, message: t('dhcp.scopes.startIp') + t('common.required'), type: 'error' }],
+  end_ip: [{ required: true, message: t('dhcp.scopes.endIp') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -81,7 +83,7 @@ const columns: PrimaryTableCol[] = [
       const r = row as DHCPScope;
       return h(TSpace, { size: 'small' }, () => [
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('dhcp'), onClick: () => openEdit(r) }, () => t('common.edit')),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id, r.name) }, () => t('common.delete'))
       ]);
     }
   }
@@ -156,12 +158,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('dhcp')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteDHCPScope(id);
@@ -179,7 +182,9 @@ function confirmDelete(id: string) {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dhcp.scopes.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dhcp.scopes.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('dhcp')" theme="primary" @click="openCreateScope">
         <template #icon><TIcon name="add" /></template>
         {{ t('dhcp.scopes.createScope') }}
@@ -198,7 +203,7 @@ function confirmDelete(id: string) {
     >
       <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
         <TFormItem :label="t('common.name')" name="name">
-          <TInput v-model="formData.name" />
+          <TInput v-model="formData.name" :placeholder="t('common.name')" />
         </TFormItem>
         <TFormItem :label="t('dhcp.scopes.subnet')" name="subnet">
           <TInput v-model="formData.subnet" placeholder="192.168.1.0/24" />
@@ -213,7 +218,7 @@ function confirmDelete(id: string) {
           <TInputNumber v-model="formData.lease_time" :min="60" style="width: 100%" />
         </TFormItem>
         <TFormItem :label="t('common.description')" name="comment">
-          <TTextarea v-model="formData.comment" :autosize="{ minRows: 2, maxRows: 4 }" />
+          <TTextarea v-model="formData.comment" :placeholder="t('common.description')" :autosize="{ minRows: 2, maxRows: 4 }" />
         </TFormItem>
         <TFormItem :label="t('common.enabled')" name="enabled">
           <TSwitch v-model="formData.enabled" />
@@ -233,11 +238,7 @@ function confirmDelete(id: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

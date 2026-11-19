@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
 import { usePermission } from '@/composables/usePermission';
+import { formatAPITime } from '@/utils/datetime';
 import {
   createBackup,
   deleteBackup,
@@ -15,6 +17,8 @@ import {
 } from '@/service/api/goddi/backup';
 
 defineOptions({ name: 'BackupSettingsPage' });
+
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog confirmations. */
 
 const { t } = useI18n();
 const perm = usePermission();
@@ -27,6 +31,18 @@ function formatSize(bytes: number | undefined | null): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function backupTypeLabel(value: string): string {
+  if (value === 'full') return t('settings.backup.typeFull');
+  return value;
+}
+
+function backupStatusLabel(value: string): string {
+  if (value === 'completed') return t('settings.backup.statusCompleted');
+  if (value === 'failed') return t('settings.backup.statusFailed');
+  if (value === 'running') return t('settings.backup.statusRunning');
+  return value;
 }
 
 function backupName(row: Backup): string {
@@ -44,7 +60,7 @@ const columns: PrimaryTableCol[] = [
     colKey: 'type',
     title: t('settings.backup.backupType'),
     width: 120,
-    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as Backup).type))
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => backupTypeLabel(String((row as Backup).type)))
   },
   {
     colKey: 'status',
@@ -53,10 +69,10 @@ const columns: PrimaryTableCol[] = [
     cell: (h, { row }) => {
       const s = (row as Backup).status;
       const theme = s === 'completed' ? 'success' : s === 'failed' ? 'danger' : 'warning';
-      return h(TTag, { size: 'small', theme, variant: 'light' }, () => String(s));
+      return h(TTag, { size: 'small', theme, variant: 'light' }, () => backupStatusLabel(String(s)));
     }
   },
-  { colKey: 'created_at', title: t('common.createdAt'), width: 180 },
+  { colKey: 'created_at', title: t('common.createdAt'), width: 180, cell: (_h, { row }) => formatAPITime((row as Backup).created_at) },
   {
     colKey: 'op',
     title: t('common.actions'),
@@ -80,7 +96,7 @@ const columns: PrimaryTableCol[] = [
         ),
         h(
           TLink,
-          { theme: 'danger', disabled: !perm.canWrite('backup'), onClick: () => confirmDelete(r.id) },
+          { theme: 'danger', disabled: !perm.canWrite('backup'), onClick: () => confirmDelete(r.id, r.description || r.file_path || r.type) },
           () => t('common.delete')
         )
       ]);
@@ -123,8 +139,9 @@ function confirmRestore(row: Backup) {
   if (!perm.canWrite('backup')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.confirmRestore'),
-    body: `${t('settings.backup.backupName')}: ${backupName(row)}\n${t('common.createdAt')}: ${row.created_at}\n${t('settings.backup.backupSize')}: ${formatSize(row.size_bytes)}`,
+    body: `${t('settings.backup.backupName')}: ${backupName(row)}\n${t('common.createdAt')}: ${formatAPITime(row.created_at)}\n${t('settings.backup.backupSize')}: ${formatSize(row.size_bytes)}`,
     theme: 'warning',
+    confirmBtn: { theme: 'warning', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await restoreBackup(row.id);
@@ -138,12 +155,13 @@ function confirmRestore(row: Backup) {
   });
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canWrite('backup')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteBackup(id);
@@ -161,7 +179,9 @@ function confirmDelete(id: string) {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('settings.backup.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('settings.backup.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('backup')" theme="primary" :loading="creating" @click="handleCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('settings.backup.createBackup') }}
@@ -182,11 +202,7 @@ function confirmDelete(id: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

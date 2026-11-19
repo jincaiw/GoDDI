@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { computed, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
@@ -6,6 +7,7 @@ import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
 import AddressDetailDrawer from '@/components/ipam/AddressDetailDrawer.vue';
 import { usePermission } from '@/composables/usePermission';
+import { ipamStatusLabel, ipamStatusTheme } from '@/composables/useIpamLifecycle';
 import {
   allocateIP,
   listIPAMAddresses,
@@ -46,7 +48,7 @@ const allocateForm = reactive<AllocateIPRequest>({
 });
 
 const formRules = {
-  subnet_id: [{ required: true, message: t('ipam.subnets.title') + ' required', type: 'error' }]
+  subnet_id: [{ required: true, message: t('ipam.subnets.title') + t('common.required'), type: 'error' }]
 };
 
 const statusOptions = [
@@ -56,12 +58,6 @@ const statusOptions = [
   { label: t('ipam.addresses.statusConflict'), value: 'conflict' }
 ];
 
-const statusTheme: Record<string, 'success' | 'default' | 'warning' | 'danger'> = {
-  used: 'success',
-  available: 'default',
-  reserved: 'warning',
-  conflict: 'danger'
-};
 
 const params = computed<Record<string, unknown>>(() => {
   const p: Record<string, unknown> = {};
@@ -82,7 +78,7 @@ const columns: PrimaryTableCol[] = [
     width: 110,
     cell: (h, { row }) => {
       const s = String((row as IPAMAddress).status);
-      return h(TTag, { size: 'small', theme: statusTheme[s] || 'default', variant: 'light' }, () => s);
+      return h(TTag, { size: 'small', theme: ipamStatusTheme(s), variant: 'light' }, () => ipamStatusLabel(t, s));
     }
   },
   { colKey: 'hostname', title: t('ipam.addresses.hostname'), ellipsis: true },
@@ -156,7 +152,7 @@ function confirmRelease(id: string) {
   if (!perm.canWrite('ipam')) return;
   const dlg = DialogPlugin.confirm({
     header: t('ipam.addresses.release'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(id),
     theme: 'warning',
     onConfirm: async () => {
       try {
@@ -215,7 +211,7 @@ void loadSubnets();
           <TSelect v-model="allocateForm.subnet_id" :options="subnetOptions" />
         </TFormItem>
         <TFormItem :label="t('ipam.addresses.ip')">
-          <TInput v-model="allocateForm.ip_address" placeholder="Auto-assign if empty" />
+          <TInput v-model="allocateForm.ip_address" :placeholder="t('common.autoAssign')" />
         </TFormItem>
         <TFormItem :label="t('ipam.addresses.hostname')">
           <TInput v-model="allocateForm.hostname" />
@@ -253,11 +249,6 @@ void loadSubnets();
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .filter-bar :deep(.t-card__body) {
   padding: 12px 16px;

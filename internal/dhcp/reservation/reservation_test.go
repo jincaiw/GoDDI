@@ -38,6 +38,7 @@ func newReservationDB(t *testing.T) *sql.DB {
 	schema := `
 	CREATE TABLE dhcp_scopes (
 		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
 		subnet TEXT NOT NULL,
 		start_ip TEXT NOT NULL,
 		end_ip TEXT NOT NULL
@@ -53,8 +54,8 @@ func newReservationDB(t *testing.T) *sql.DB {
 		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
-	INSERT INTO dhcp_scopes (id, subnet, start_ip, end_ip)
-		VALUES ('scope-lan', '192.0.2.0/24', '192.0.2.100', '192.0.2.110');
+	INSERT INTO dhcp_scopes (id, name, subnet, start_ip, end_ip)
+		VALUES ('scope-lan', 'lan', '192.0.2.0/24', '192.0.2.100', '192.0.2.110');
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -310,6 +311,20 @@ func TestListingCountsTheFilteredSetAndBoundsThePage(t *testing.T) {
 	// Page 0 is page 1 rather than a negative offset.
 	if page0, _, err := m.ListReservations(ReservationFilter{Page: 0}); err != nil || len(page0) != 3 {
 		t.Errorf("page 0 returned %d rows (%v), want 3", len(page0), err)
+	}
+}
+
+func TestListingIncludesTheScopeName(t *testing.T) {
+	m := NewManager(newReservationDB(t))
+	if _, err := m.CreateReservation(scopeID, "192.0.2.105", "AA:BB:CC:DD:EE:01", "printer", ReservationOptions{}); err != nil {
+		t.Fatalf("CreateReservation: %v", err)
+	}
+	rows, _, err := m.ListReservations(ReservationFilter{})
+	if err != nil {
+		t.Fatalf("ListReservations: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ScopeName != "lan" {
+		t.Fatalf("scope name = %q in %+v, want lan", rows[0].ScopeName, rows)
 	}
 }
 

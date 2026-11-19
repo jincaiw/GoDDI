@@ -70,4 +70,86 @@ function launchOpts() {
   return opts;
 }
 
-module.exports = { BASE, USER, PASS, SHOT_DIR, EXEC: chromiumPath(), shot, launchOpts };
+// --- Harness correctness helpers -------------------------------------------
+//
+// Four rounds of this project produced FALSE DEFECTS because the probe was
+// wrong, not the app: an over-broad request interception also aborted /auth/me
+// (redirecting to login), an address list was read without its space filter,
+// a theme scheme was written to localStorage only to be overwritten by
+// overrideThemeSettings, and a `.t-dialog__body` selector missed the real
+// `.t-dialog__body__icon` node. These helpers make those mistakes loud.
+
+/**
+ * Fail unless a page is really showing application content. A probe that
+ * silently lands on /login reports every feature as broken; assert first.
+ */
+async function assertAuthenticated(page, context = 'probe') {
+  const url = page.url();
+  if (url.includes('/login')) {
+    throw new Error(`[${context}] landed on /login - the probe is unauthenticated, results are meaningless`);
+  }
+  const hasShell = await page.evaluate(() => Boolean(document.querySelector('.td-shell, .td-page')));
+  if (!hasShell) throw new Error(`[${context}] no app shell rendered - page did not mount`);
+}
+
+/**
+ * Abort only the listed API patterns. Intercepting a broad `**\/api\/**`
+ * pattern also kills /auth/me and makes every page look like an error state.
+ */
+async function failOnly(page, patterns) {
+  for (const pattern of patterns) {
+    if (pattern === '**/api/**' || pattern === '**/api/v1/**') {
+      throw new Error('failOnly refuses broad patterns: name the exact endpoint, e.g. **/api/v1/dns/zones**');
+    }
+    await page.route(pattern, route => route.abort());
+  }
+}
+
+/**
+ * Read a dialog by visibility, not by index. TDesign keeps hidden clones in
+ * the DOM, so `.t-dialog` alone resolves several nodes and `.first()` may be
+ * an invisible one. Returns the visible dialog locator.
+ */
+function visibleDialog(page) {
+  return page.locator('.t-dialog:visible').first();
+}
+
+/** Full innerText of the single visible dialog, or null. */
+async function visibleDialogText(page) {
+  return page.evaluate(() => {
+    const dialogs = [...document.querySelectorAll('.t-dialog')].filter(d => d.getBoundingClientRect().height > 0);
+    return dialogs.length ? dialogs[0].innerText.replace(/\s+/g, ' ').trim() : null;
+  });
+}
+
+/**
+ * Read the RemoteTable error state. The alert carries `.remote-table-error`,
+ * NOT `.t-alert--theme-error` - that guessed class does not exist and made
+ * correct pages look broken in earlier rounds.
+ */
+async function remoteTableError(page, timeout = 6000) {
+  const alert = page.locator('.remote-table-error').first();
+  try {
+    await alert.waitFor({ state: 'visible', timeout });
+  } catch {
+    return null;
+  }
+  const text = (await alert.innerText()).replace(/\s+/g, ' ').trim();
+  const hasRetry = (await alert.locator('button').count()) > 0;
+  return { text, hasRetry };
+}
+
+module.exports = {
+  BASE,
+  USER,
+  PASS,
+  SHOT_DIR,
+  EXEC: chromiumPath(),
+  shot,
+  launchOpts,
+  assertAuthenticated,
+  failOnly,
+  visibleDialog,
+  visibleDialogText,
+  remoteTableError
+};

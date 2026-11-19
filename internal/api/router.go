@@ -393,6 +393,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			// Enterprise STATIC creation stays closed until tenant and writer authority exist.
 			r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/ddi/tenants/{tenantId}/ipam/spaces/{spaceId}/allocations", handler.EnterpriseStaticAllocation)
 
+			r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/ipam/retirement-audit", handler.ListIPAMRetirementAudit)
+
 			// IPAM Spaces.
 			r.Route("/ipam/spaces", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/", handler.ListIPAMSpaces)
@@ -401,6 +403,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/", handler.GetIPAMSpace)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Put("/", handler.UpdateIPAMSpace)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "delete")).Delete("/", handler.DeleteIPAMSpace)
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/restore", handler.RestoreIPAMSpace)
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "delete")).Post("/purge", handler.PurgeIPAMSpace)
 				})
 			})
 
@@ -412,6 +416,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/", handler.GetIPAMSubnet)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Put("/", handler.UpdateIPAMSubnet)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "delete")).Delete("/", handler.DeleteIPAMSubnet)
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "write")).Post("/restore", handler.RestoreIPAMSubnet)
+					r.With(rbac.RequirePermission(rbacMgr, "ipam", "delete")).Post("/purge", handler.PurgeIPAMSubnet)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/stats", handler.GetIPAMSubnetStats)
 					r.With(rbac.RequirePermission(rbacMgr, "ipam", "read")).Get("/dependencies", handler.GetIPAMSubnetDependencies)
 					// A preview of a write, so it needs the write permission:
@@ -511,6 +517,19 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/", handler.GetSSOSettings)
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Put("/", handler.UpdateSSOSettings)
 			})
+
+			// ADR-0013 read-only replication status for the console. The shared
+			// replication secret is never returned. Author/standalone roles are
+			// derived from configuration; follower health comes from the durable
+			// apply watermark through the same handler the tests exercise.
+			r.With(rbac.RequirePermission(rbacMgr, "settings", "read")).Get("/cluster/config-replication",
+				handler.ConfigReplicationStatusHandler(db.DB, handler.ConfigReplicationInfo{
+					Enabled:         cfg.Cluster.ConfigReplication,
+					IsAuthor:        cfg.Cluster.IsConfigAuthor(),
+					Source:          cfg.Cluster.ConfigReplicationSource,
+					IntervalSeconds: cfg.Cluster.ConfigReplicationInterval,
+					NodeID:          cfg.Cluster.NodeName,
+				}))
 
 			// Cluster.
 			r.Route("/cluster", func(r chi.Router) {

@@ -2,6 +2,73 @@
 @import './nprogress.css';
 @import './transition.css';
 
+/* Legacy spacing utilities used by older view markup (mb-4, mt-3, ...).
+   These were referenced but never defined, so the affected dialogs and lists
+   rendered with collapsed vertical rhythm. They are mapped onto the TDesign
+   spacing scale instead of a Tailwind dependency. */
+.mb-2 { margin-bottom: var(--td-comp-margin-s); }
+.mb-3 { margin-bottom: var(--td-comp-margin-m); }
+.mb-4 { margin-bottom: var(--td-comp-margin-l); }
+.mb-5 { margin-bottom: var(--td-comp-margin-xl); }
+.mt-3 { margin-top: var(--td-comp-margin-m); }
+.mt-4 { margin-top: var(--td-comp-margin-l); }
+.ml-2 { margin-left: var(--td-comp-margin-s); }
+.mr-2 { margin-right: var(--td-comp-margin-s); }
+
+/* Size helpers relied on by the iframe page and legacy wrappers. */
+.h-full { height: 100%; }
+.w-full { width: 100%; }
+.size-full { width: 100%; height: 100%; }
+
+/* Shell/app aliases live in the always-imported global CSS so their
+   definitions ship in the built bundle (the old SCSS injection was never
+   compiled because no SCSS entry existed). */
+:root {
+  --shell-sidebar-bg: var(--td-bg-color-container);
+  --shell-header-bg: var(--td-bg-color-container);
+  --shell-content-bg: var(--td-bg-color-page);
+  --shell-footer-bg: var(--td-bg-color-container);
+  --shell-text: var(--td-text-color-primary);
+  --shell-muted: var(--td-text-color-placeholder);
+  --shell-border: var(--td-border-level-1-color);
+  --app-page-background: var(--td-bg-color-page);
+  --app-surface: var(--td-bg-color-container);
+  --app-text: var(--td-text-color-primary);
+  --app-muted: var(--td-text-color-placeholder);
+  --app-border: var(--td-border-level-1-color);
+  /* Visual primitives: colors stay delegated to TDesign; spacing, radius
+     and typography are centralized here for consistent overrides. */
+  --app-font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --app-space-xs: 4px;
+  --app-space-sm: 8px;
+  --app-space-md: 16px;
+  --app-space-lg: 24px;
+  --app-radius-sm: var(--td-radius-small, 2px);
+  --app-radius-md: var(--td-radius-default, var(--td-radius-medium, 6px));
+  --app-radius-lg: var(--td-radius-large, 9px);
+  --app-gutter: 16px;
+  --app-overlay-height: 100dvh;
+  color-scheme: light;
+  font-family: var(--app-font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+:root.dark {
+  --shell-sidebar-bg: var(--td-bg-color-container);
+  --shell-header-bg: var(--td-bg-color-container);
+  --shell-content-bg: var(--td-bg-color-page);
+  --shell-footer-bg: var(--td-bg-color-container);
+  --shell-text: var(--td-text-color-primary);
+  --shell-muted: var(--td-text-color-placeholder);
+  --shell-border: var(--td-border-level-1-color);
+  --app-page-background: var(--td-bg-color-page);
+  --app-surface: var(--td-bg-color-container);
+  --app-text: var(--td-text-color-primary);
+  --app-muted: var(--td-text-color-placeholder);
+  --app-border: var(--td-border-level-1-color);
+  color-scheme: dark;
+}
+
 html,
 body,
 #app {
@@ -12,4 +79,477 @@ body,
 html {
   overflow-x: hidden;
   color: rgb(var(--base-text-color));
+}
+
+/* Long configuration dialogs must stay inside the viewport. TDesign renders
+   header/body/footer as one stacked dialog: cap the shell, let only the body
+   scroll, and pin the action footer so Save/Cancel are always reachable.
+   The vh declarations are fallbacks for browsers without dvh support. */
+.t-dialog {
+  max-width: min(960px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+}
+.t-dialog__body {
+  max-width: 100%;
+  min-width: 0;
+  max-height: calc(100vh - 180px);
+  max-height: calc(var(--app-overlay-height, 100dvh) - 180px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.t-dialog__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--td-bg-color-container, var(--app-surface));
+  box-shadow: 0 -1px 0 var(--td-component-stroke, var(--app-border));
+}
+
+.t-drawer {
+  max-width: min(720px, calc(100vw - 32px));
+  max-height: 100vh;
+  max-height: calc(var(--app-overlay-height, 100dvh));
+}
+
+/* Responsive caps. TDesign fixed-width controls, spaces, page headers and
+   wide tables must never force horizontal page scrolling. Caps are global so
+   migrated views do not each need their own breakpoint rules. */
+.t-input,
+.t-input-number,
+.t-select,
+.t-date-picker,
+.t-time-picker,
+.t-cascader,
+.t-textarea,
+.t-space,
+.td-page-header {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Visible keyboard focus (WCAG 2.4.7).
+   TDesign conveys focus on inputs through a brand border + halo, but its
+   text/outline buttons only change background, which is invisible on
+   keyboard-only navigation. Add a token-coloured focus ring for the controls
+   that lack one, and keep the browser default for anything else. */
+html body .t-button:focus-visible,
+html body .t-switch:focus-visible,
+html body .t-radio:focus-visible,
+html body .t-checkbox:focus-visible,
+html body .t-link:focus-visible,
+html body .menu-key-target:focus-visible,
+html body .td-tab:focus-visible,
+html body .td-tab__close:focus-visible,
+html body .td-logo:focus-visible,
+html body .t-table:focus-visible {
+  outline: 2px solid var(--td-brand-color) !important;
+  outline-offset: 2px;
+}
+/* Inputs and selects already show a focus halo; avoid doubling it. */
+html body .t-input__inner:focus-visible,
+html body .t-select__input:focus-visible,
+html body .t-textarea__inner:focus-visible {
+  outline: none !important;
+}
+
+/* Dialog/drawer semantics (WCAG 4.1.2 + 2.4.3).
+   tdesign-vue-next 1.20 renders the modal container without role/aria-modal,
+   so screen readers announce the dialog content as ordinary page content and
+   do not treat it as a modal region. Add the semantics in CSS-adjacent markup
+   via a small attribute patch applied at runtime (see dialogs.ts), and keep a
+   visible focus target for the dialog body. */
+.t-dialog__body:focus-visible {
+  outline: none;
+}
+
+/* Shell header height. The rule previously lived in the layout's scoped CSS,
+   where it could not reach the StarterHeader child root, so the header collapsed
+   to its content height (~33px) instead of the intended 56px. */
+.td-header {
+  height: 56px;
+  min-height: 56px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: var(--shell-header-bg);
+  color: var(--shell-text);
+  border-bottom: 1px solid var(--shell-border);
+}
+@media (max-width: 640px) {
+  .td-header {
+    height: 48px;
+    min-height: 48px;
+  }
+}
+
+/* Header internals. These live in StarterHeader, so the layout's scoped CSS
+   could never reach them: gap/margin computed to their initial values and the
+   right-hand cluster collapsed against the search box. */
+.td-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.td-header .td-quick-search {
+  width: 240px;
+  max-width: 32vw;
+}
+.td-user {
+  margin-left: 6px;
+}
+@media (max-width: 640px) {
+  .td-header-right {
+    gap: 4px;
+  }
+  .td-header .td-quick-search {
+    display: none;
+  }
+  .td-header .td-user {
+    display: none;
+  }
+}
+
+/* Horizontal layout: the top menu must lay out as a single row inside the
+   header instead of inheriting TDesign's default 232px vertical menu box. */
+.td-header-horizontal .td-top-menu,
+.td-top-menu {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+  background: transparent;
+}
+.td-top-menu :deep(.t-default-menu__inner),
+.td-top-menu .t-default-menu__inner {
+  height: 100%;
+}
+.td-top-menu .t-menu {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: 100%;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.td-top-menu .t-menu__item {
+  height: 100%;
+  line-height: normal;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  border-radius: 0;
+}
+.td-top-menu .t-submenu {
+  height: 100%;
+}
+.td-top-menu .t-submenu > .t-menu__item {
+  height: 100%;
+}
+
+/* Quick-search result panel (starter behaviour: results while typing). */
+.td-quick-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.td-search-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1200;
+  width: 100%;
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-border-level-1-color);
+  border-radius: var(--td-radius-default);
+  box-shadow: var(--td-shadow-2);
+}
+.td-search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--td-radius-default);
+  background: transparent;
+  color: var(--td-text-color-primary);
+  font: var(--td-font-body-medium);
+  text-align: left;
+  cursor: pointer;
+}
+.td-search-item:hover,
+.td-search-item:focus-visible {
+  background: var(--td-bg-color-container-hover);
+}
+.td-search-empty {
+  margin: 0;
+  padding: 16px 8px;
+  text-align: center;
+  color: var(--td-text-color-placeholder);
+  font: var(--td-font-body-small);
+}
+
+/* Route tab bar (starter "useTagTabs" element). */
+.td-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 16px;
+  overflow-x: auto;
+  background: var(--td-bg-color-container);
+  border-bottom: 1px solid var(--td-border-level-1-color);
+}
+.td-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--td-border-level-1-color);
+  border-radius: var(--td-radius-default);
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  font: var(--td-font-body-small);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.td-tab:hover {
+  color: var(--td-brand-color);
+  border-color: var(--td-brand-color);
+}
+.td-tab--active {
+  background: var(--td-brand-color-light);
+  border-color: var(--td-brand-color);
+  color: var(--td-brand-color);
+}
+.td-tab__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 12px;
+}
+.td-tab__close:hover {
+  background: var(--td-bg-color-container-hover);
+}
+@media (max-width: 640px) {
+  .td-tab-bar {
+    padding: 0 12px;
+  }
+}
+
+/* Mobile shell: the sider becomes an overlay drawer only. Keeping a 64px
+   rail on small screens pushed the header toggle under the sider and made the
+   menu impossible to open. */
+@media (max-width: 768px) {
+  /* Sider must sit ABOVE the scrim so the scrim (z-index 1000) stays
+     clickable everywhere outside the 232px panel. */
+  .td-shell--mobile .td-aside {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1002;
+    width: 232px !important;
+    max-width: 80vw;
+    box-shadow: var(--td-shadow-2);
+  }
+  .td-shell--mobile:not(.td-shell--drawer-open) .td-aside {
+    display: none;
+  }
+  .td-shell--mobile .td-main {
+    width: 100%;
+  }
+  .td-shell--mobile .td-header {
+    padding-left: 12px;
+  }
+}
+
+/* TDesign renders TLink with the 500-level semantic colour, which is too
+   light for text on white (danger 3.84:1, warning 2.81:1). Use the darker
+   text-safe tone; disabled links are exempt from the contrast requirement. */
+.t-link--theme-danger:not(.t-is-disabled) {
+  color: var(--td-error-color-text, var(--td-error-color));
+}
+.t-link--theme-warning:not(.t-is-disabled) {
+  color: var(--td-warning-color-text, var(--td-warning-color));
+}
+
+/* Mobile dialogs: the default TDesign modal can exceed the viewport, which
+   pushes the footer (submit/cancel) off-screen and makes the form unusable.
+   Cap the height and let the body scroll while header/footer stay pinned. */
+@media (max-width: 768px) {
+  /* TDesign wraps the modal in .t-dialog__position, which owns the vertical
+     scroll context; constrain both the wrapper and the dialog itself. */
+  .t-dialog__position {
+    padding: 12px !important;
+    align-items: flex-start;
+  }
+  .t-dialog__position .t-dialog__ctx,
+  .t-dialog__position .t-dialog__wrap {
+    max-height: calc(100dvh - 24px) !important;
+    height: auto !important;
+  }
+  .t-dialog {
+    width: 100% !important;
+    max-width: 100%;
+    max-height: calc(100dvh - 24px) !important;
+    display: flex;
+    flex-direction: column;
+    margin: 0 auto !important;
+  }
+  .t-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .t-dialog__header,
+  .t-dialog__footer {
+    flex: 0 0 auto;
+  }
+  .t-dialog__footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  /* Comfortable touch targets (WCAG 2.5.5 target size). */
+  .t-dialog .t-button,
+  .t-drawer .t-button {
+    min-height: 40px;
+  }
+  .t-dialog .t-input,
+  .t-drawer .t-input,
+  .t-dialog .t-select,
+  .t-drawer .t-select {
+    min-height: 40px;
+  }
+}
+
+/* Mobile tables: horizontal scrolling is inherent for 6+ columns, and
+   TDesign's own scroll container makes CSS sticky unreliable, so the previous
+   attempt is removed. The scroll affordance added in task 12 already signals
+   that more columns exist; operation links remain reachable by scrolling. */
+
+/* Dialogs must never exceed the viewport, on any screen size. TDesign's
+   wrapper (.t-dialog__position) owns the scroll context and can let the modal
+   grow past the fold, pushing the confirm button off-screen (observed at
+   1440x900: dialog bottom 1038 vs viewport 900). Cap the height and scroll the
+   body so header and footer stay reachable. */
+.t-dialog__position {
+  padding: 24px !important;
+  align-items: center;
+}
+.t-dialog__position .t-dialog__ctx,
+.t-dialog__position .t-dialog__wrap {
+  max-height: calc(100dvh - 48px) !important;
+}
+.t-dialog {
+  max-height: calc(100dvh - 48px) !important;
+  display: flex;
+  flex-direction: column;
+}
+.t-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.t-dialog__header,
+.t-dialog__footer {
+  flex: 0 0 auto;
+}
+
+/* Page title block shared by every business page. Previously each of the ~30
+   views re-declared the same rule in scoped CSS; centralising it keeps the
+   typography on the TDesign title token and prevents drift. */
+.td-page-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.td-page-title h2,
+.td-page-header h2 {
+  margin: 0;
+  font: var(--td-font-title-large);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.t-space {
+  flex-wrap: wrap;
+}
+
+.td-page-header {
+  flex-wrap: wrap;
+}
+
+.t-dialog,
+.t-drawer {
+  box-sizing: border-box;
+}
+
+.t-table,
+.t-table__content,
+.t-table__body,
+.t-table__header {
+  max-width: 100%;
+}
+
+/* On narrow viewports a data table scrolls horizontally inside its card.
+   Show a subtle shadow affordance so the clipped last column reads as
+   "scrollable" rather than "broken". */
+.t-table__content {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+@media (max-width: 768px) {
+  .t-table__content {
+    -webkit-overflow-scrolling: touch;
+    box-shadow: inset -8px 0 8px -8px var(--td-gray-color-5);
+  }
+}
+
+/* Tokenized layout primitives — opt-in utilities use the same vars as the
+   theme bridge, so spacing/radius/font changes propagate globally. */
+.app-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-md, 16px);
+}
+.app-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-sm, 8px);
+}
+.app-rounded {
+  border-radius: var(--app-radius-md, 6px);
+}
+
+@media (max-width: 640px) {
+  :root {
+    --app-gutter: 12px;
+  }
+  .t-dialog,
+  .t-drawer {
+    max-width: calc(100vw - (var(--app-gutter, 16px) * 2));
+  }
+  .t-dialog {
+    max-height: calc(var(--app-overlay-height, 100dvh) - (var(--app-gutter, 16px) * 2));
+  }
+  .td-page-header .t-card__body {
+    flex-wrap: wrap;
+    gap: var(--app-space-sm, 8px);
+  }
 }

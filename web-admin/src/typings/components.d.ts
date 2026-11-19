@@ -13,10 +13,15 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AddressDetailDrawer: typeof import('./../components/ipam/AddressDetailDrawer.vue')['default']
+    ConfigReplicationAlert: typeof import('./../components/ConfigReplicationAlert.vue')['default']
     DashboardChart: typeof import('./../components/DashboardChart.vue')['default']
+    DashboardSparkline: typeof import('./../components/DashboardSparkline.vue')['default']
+    DashboardTrend: typeof import('./../components/DashboardTrend.vue')['default']
     ExceptionBase: typeof import('./../components/common/exception-base.vue')['default']
+    Header: typeof import('./../components/starter/Header.vue')['default']
     ImportAddressesDialog: typeof import('./../components/ipam/ImportAddressesDialog.vue')['default']
     ImportReportSummary: typeof import('./../components/ipam/ImportReportSummary.vue')['default']
+    LanguageSwitcher: typeof import('./../components/starter/LanguageSwitcher.vue')['default']
     NodeModeBadge: typeof import('./../components/NodeModeBadge.vue')['default']
     PoolWizardDialog: typeof import('./../components/ipam/PoolWizardDialog.vue')['default']
     RemoteTable: typeof import('./../components/RemoteTable.vue')['default']
@@ -24,18 +29,26 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SectionTitle: typeof import('./../components/ipam/SectionTitle.vue')['default']
+    SettingDrawer: typeof import('./../components/starter/SettingDrawer.vue')['default']
+    SideNav: typeof import('./../components/starter/SideNav.vue')['default']
     StatsTrendChart: typeof import('./../components/StatsTrendChart.vue')['default']
     SvgIcon: typeof import('./../components/custom/svg-icon.vue')['default']
+    TabBar: typeof import('./../components/starter/TabBar.vue')['default']
   }
 }
 
 // For TSX support
 declare global {
   const AddressDetailDrawer: typeof import('./../components/ipam/AddressDetailDrawer.vue')['default']
+  const ConfigReplicationAlert: typeof import('./../components/ConfigReplicationAlert.vue')['default']
   const DashboardChart: typeof import('./../components/DashboardChart.vue')['default']
+  const DashboardSparkline: typeof import('./../components/DashboardSparkline.vue')['default']
+  const DashboardTrend: typeof import('./../components/DashboardTrend.vue')['default']
   const ExceptionBase: typeof import('./../components/common/exception-base.vue')['default']
+  const Header: typeof import('./../components/starter/Header.vue')['default']
   const ImportAddressesDialog: typeof import('./../components/ipam/ImportAddressesDialog.vue')['default']
   const ImportReportSummary: typeof import('./../components/ipam/ImportReportSummary.vue')['default']
+  const LanguageSwitcher: typeof import('./../components/starter/LanguageSwitcher.vue')['default']
   const NodeModeBadge: typeof import('./../components/NodeModeBadge.vue')['default']
   const PoolWizardDialog: typeof import('./../components/ipam/PoolWizardDialog.vue')['default']
   const RemoteTable: typeof import('./../components/RemoteTable.vue')['default']
@@ -43,6 +56,9 @@ declare global {
   const RouterLink: typeof import('vue-router')['RouterLink']
   const RouterView: typeof import('vue-router')['RouterView']
   const SectionTitle: typeof import('./../components/ipam/SectionTitle.vue')['default']
+  const SettingDrawer: typeof import('./../components/starter/SettingDrawer.vue')['default']
+  const SideNav: typeof import('./../components/starter/SideNav.vue')['default']
   const StatsTrendChart: typeof import('./../components/StatsTrendChart.vue')['default']
   const SvgIcon: typeof import('./../components/custom/svg-icon.vue')['default']
+  const TabBar: typeof import('./../components/starter/TabBar.vue')['default']
 }

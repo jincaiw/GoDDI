@@ -325,7 +325,7 @@ func TestCheckDependencies_FindsEnclosingReverseZone(t *testing.T) {
 	}
 }
 
-func TestDeleteSubnet_SucceedsWhenClean(t *testing.T) {
+func TestRetireSubnet_PreservesLocalChildData(t *testing.T) {
 	db := newTestDB(t)
 	seedSpace(t, db, "sp1")
 	m := NewManager(db)
@@ -333,31 +333,36 @@ func TestDeleteSubnet_SucceedsWhenClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-
-	var before int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_addresses WHERE subnet_id = ?`, s.ID).Scan(&before); err != nil {
-		t.Fatalf("count: %v", err)
+	if _, err := db.Exec(`UPDATE ipam_addresses SET status='dhcp' WHERE subnet_id = ? AND ip_address='192.0.2.1'`, s.ID); err != nil {
+		t.Fatalf("allocate: %v", err)
 	}
-	if before == 0 {
-		t.Fatal("the subnet was created without materialising its addresses")
+	if err := m.RetireSubnet(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("retire: %v", err)
 	}
-
-	if err := m.DeleteSubnet(s.ID); err != nil {
-		t.Fatalf("delete: %v", err)
+	got, err := m.GetSubnet(s.ID)
+	if err != nil {
+		t.Fatalf("retired subnet tombstone is missing: %v", err)
 	}
-	if _, err := m.GetSubnet(s.ID); err == nil {
-		t.Fatal("the subnet still exists after deletion")
+	if got.LifecycleState != "retired" || got.RetiredBy != "tester" || got.RetireReason != "no longer used" {
+		t.Fatalf("retire metadata was lost: %+v", got)
 	}
-	var after int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_addresses WHERE subnet_id = ?`, s.ID).Scan(&after); err != nil {
-		t.Fatalf("count: %v", err)
+	var addresses int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_addresses WHERE subnet_id = ?`, s.ID).Scan(&addresses); err != nil {
+		t.Fatalf("count addresses: %v", err)
 	}
-	if after != 0 {
-		t.Fatalf("%d address rows survived the subnet", after)
+	if addresses == 0 {
+		t.Fatal("retire deleted local-only address rows")
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM ipam_addresses WHERE subnet_id = ? AND ip_address='192.0.2.1'`, s.ID).Scan(&status); err != nil {
+		t.Fatalf("read allocated address: %v", err)
+	}
+	if status != "dhcp" {
+		t.Fatalf("allocated address status = %q after retire, want dhcp", status)
 	}
 }
 
-func TestDeleteSubnet_RefusesWhileAnAddressIsAllocated(t *testing.T) {
+func TestRetireSubnet_StillRefusesLiveDHCPScope(t *testing.T) {
 	db := newTestDB(t)
 	seedSpace(t, db, "sp1")
 	m := NewManager(db)
@@ -365,21 +370,166 @@ func TestDeleteSubnet_RefusesWhileAnAddressIsAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := db.Exec(`
-		UPDATE ipam_addresses SET status = 'dhcp' WHERE subnet_id = ? AND ip_address = '192.0.2.1'`,
-		s.ID); err != nil {
-		t.Fatalf("allocate: %v", err)
-	}
-
-	err = m.DeleteSubnet(s.ID)
+	seedScope(t, db, "scope-1", "office", s.CIDR, "192.0.2.1", "192.0.2.2")
+	err = m.RetireSubnet(s.ID, "tester", "no longer used")
 	if !errors.Is(err, ErrSubnetHasDependencies) {
-		t.Fatalf("delete err = %v, want ErrSubnetHasDependencies", err)
+		t.Fatalf("retire err = %v, want ErrSubnetHasDependencies", err)
 	}
-	if !strings.Contains(err.Error(), "192.0.2.1") {
-		t.Errorf("refusal does not name the address at stake: %v", err)
+	if !strings.Contains(err.Error(), "scope-1") {
+		t.Errorf("refusal does not name the live scope: %v", err)
+	}
+	got, err := m.GetSubnet(s.ID)
+	if err != nil || got.LifecycleState != "active" {
+		t.Fatalf("subnet changed state despite refusal: %+v %v", got, err)
+	}
+}
+
+func TestRetiredSubnetCannotGenerateDHCPScope(t *testing.T) {
+	db := newTestDB(t)
+	seedSpace(t, db, "sp1")
+	m := NewManager(db)
+	s, err := m.CreateSubnet("sp1", "office", "192.0.2.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.RetireSubnet(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if _, err := m.GenerateDHCPScope(s.ID); !errors.Is(err, ErrSubnetRetired) {
+		t.Fatalf("GenerateDHCPScope on retired subnet = %v, want ErrSubnetRetired", err)
+	}
+}
+
+func TestRawDeleteCannotCascadeRetiredChildData(t *testing.T) {
+	db := newTestDB(t)
+	seedSpace(t, db, "sp1")
+	m := NewManager(db)
+	s, err := m.CreateSubnet("sp1", "office", "192.0.2.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.RetireSubnet(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM ipam_subnets WHERE id = ?`, s.ID); err == nil {
+		t.Fatal("raw parent delete succeeded while local children still exist")
 	}
 	if _, err := m.GetSubnet(s.ID); err != nil {
-		t.Fatal("the subnet was deleted despite the refusal")
+		t.Fatalf("raw delete removed the retired parent: %v", err)
+	}
+}
+
+func TestRestoreSubnetReactivatesArchivedChildren(t *testing.T) {
+	db := newTestDB(t)
+	seedSpace(t, db, "sp1")
+	m := NewManager(db)
+	s, err := m.CreateSubnet("sp1", "office", "192.0.2.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE ipam_addresses SET status='dhcp' WHERE subnet_id = ? AND ip_address='192.0.2.1'`, s.ID); err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if err := m.RetireSubnet(s.ID, "tester", "no longer used"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if _, err := m.CreateSubnet("sp1", "new-office", "192.0.2.8/29", SubnetOptions{}); err != nil {
+		t.Fatalf("create sibling: %v", err)
+	}
+	if _, err := m.CreateSubnet("sp1", "overlap", "192.0.2.0/28", SubnetOptions{}); err == nil {
+		t.Fatal("an active sibling was allowed to overlap the archived CIDR")
+	}
+
+	restored, err := m.RestoreSubnet(s.ID)
+	if err != nil {
+		t.Fatalf("RestoreSubnet: %v", err)
+	}
+	if restored.LifecycleState != "active" || restored.RetiredAt != "" || restored.RetiredBy != "" || restored.RetireReason != "" {
+		t.Fatalf("restore metadata = %+v", restored)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM ipam_addresses WHERE subnet_id = ? AND ip_address='192.0.2.1'`, restored.ID).Scan(&status); err != nil {
+		t.Fatalf("read preserved address: %v", err)
+	}
+	if status != "dhcp" {
+		t.Fatalf("address status after restore = %q, want dhcp", status)
+	}
+	if _, err := m.GenerateDHCPScope(restored.ID); err != nil {
+		t.Errorf("restored subnet cannot generate a DHCP scope: %v", err)
+	}
+}
+
+func TestRestoreSubnetRefusesRetiredParentAndLiveScope(t *testing.T) {
+	db := newTestDB(t)
+	seedSpace(t, db, "sp1")
+	m := NewManager(db)
+	s, err := m.CreateSubnet("sp1", "office", "198.51.100.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.RetireSubnet(s.ID, "tester", "archived"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE ipam_spaces SET lifecycle_state='retired' WHERE id='sp1'`); err != nil {
+		t.Fatalf("retire parent: %v", err)
+	}
+	if _, err := m.RestoreSubnet(s.ID); !errors.Is(err, ErrSpaceNotActive) {
+		t.Fatalf("restore under retired parent: %v, want ErrSpaceNotActive", err)
+	}
+	if _, err := db.Exec(`UPDATE ipam_spaces SET lifecycle_state='active' WHERE id='sp1'`); err != nil {
+		t.Fatalf("activate parent: %v", err)
+	}
+	seedScope(t, db, "new-scope", "late", s.CIDR, "198.51.100.1", "198.51.100.2")
+	if _, err := m.RestoreSubnet(s.ID); !errors.Is(err, ErrSubnetHasDependencies) {
+		t.Fatalf("restore with a live scope: %v, want ErrSubnetHasDependencies", err)
+	}
+	got, err := m.GetSubnet(s.ID)
+	if err != nil || got.LifecycleState != "retired" {
+		t.Fatalf("subnet changed state despite refusal: %+v %v", got, err)
+	}
+}
+
+func TestPurgeSubnetRequiresRetiredEmptyTombstone(t *testing.T) {
+	db := newTestDB(t)
+	seedSpace(t, db, "sp1")
+	m := NewManager(db)
+	active, err := m.CreateSubnet("sp1", "active", "192.0.2.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	if err := m.PurgeSubnet(active.ID, active.ID); !errors.Is(err, ErrSubnetNotRetired) {
+		t.Fatalf("purge active subnet: %v, want ErrSubnetNotRetired", err)
+	}
+
+	empty, err := m.CreateSubnet("sp1", "empty", "198.51.100.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create empty: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM ipam_addresses WHERE subnet_id = ?`, empty.ID); err != nil {
+		t.Fatalf("remove materialised rows: %v", err)
+	}
+	if err := m.RetireSubnet(empty.ID, "tester", "empty"); err != nil {
+		t.Fatalf("retire empty: %v", err)
+	}
+	if err := m.PurgeSubnet(empty.ID, empty.ID); err != nil {
+		t.Fatalf("purge empty tombstone: %v", err)
+	}
+	if _, err := m.GetSubnet(empty.ID); err == nil {
+		t.Fatal("purged subnet is still readable")
+	}
+
+	withData, err := m.CreateSubnet("sp1", "with-data", "203.0.113.0/29", SubnetOptions{})
+	if err != nil {
+		t.Fatalf("create with data: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE ipam_addresses SET status='dhcp' WHERE subnet_id = ? AND ip_address='203.0.113.1'`, withData.ID); err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if err := m.RetireSubnet(withData.ID, "tester", "archived"); err != nil {
+		t.Fatalf("retire with data: %v", err)
+	}
+	if err := m.PurgeSubnet(withData.ID, withData.ID); !errors.Is(err, ErrSubnetHasPreservedChildren) {
+		t.Fatalf("purge tombstone with children: %v, want ErrSubnetHasPreservedChildren", err)
 	}
 }
 

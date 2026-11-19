@@ -16,7 +16,7 @@ const paths=['/dashboard','/dns/zones','/dns/forwarders','/dhcp/scopes','/dhcp/l
    await p.waitForTimeout(700);
    const txt=(await p.locator('body').innerText()).replace(/\s+/g,' ').slice(0,90);
    const shell=await p.locator('.t-layout__sider').count();
-   const hasContent=(await p.locator('body').innerText()).length>200;
+    const hasContent=((await p.locator('.td-page').first().innerText().catch(()=>''))||'').trim().length>20;
    const ok = errs.length===before && shell>0 && hasContent;
    console.log(`${ok?'PASS':'FAIL'} | ${path.padEnd(20)} | shell=${shell} | ${txt}`);
  }

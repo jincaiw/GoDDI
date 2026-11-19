@@ -83,3 +83,9 @@ bin/
 
 # DNS drill build staging (Dockerfile.dnsdrill)
 /.dnsdrill-bin
+# Frontend build output. Produced by the web-build make target (and the
+# Dockerfile web-builder stage) from web-admin sources, then embedded into the
+# Go binary via the go:embed directive in assets.go. Committing it made every
+# UI change look like dozens of unrelated binary diffs, so the artifact is no
+# longer tracked. Run: make web-build
+/web/dist/

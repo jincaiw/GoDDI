@@ -13,6 +13,7 @@ import (
 type Option struct {
 	ID            string `json:"id"`
 	ScopeID       string `json:"scope_id"`
+	ScopeName     string `json:"scope_name,omitempty"`
 	ReservationID string `json:"reservation_id,omitempty"`
 	Code          int    `json:"code"`
 	Value         string `json:"value"`
@@ -141,14 +142,16 @@ func (m *Manager) GetOption(id string) (*Option, error) {
 // ListOptions lists DHCP options, optionally filtered by scope_id.
 func (m *Manager) ListOptions(scopeID string) ([]Option, error) {
 	var args []interface{}
-	query := `SELECT id, scope_id, reservation_id, code, value, priority, created_at, updated_at
-		FROM dhcp_options`
+	query := `SELECT o.id, o.scope_id, COALESCE(s.name, ''), o.reservation_id,
+			o.code, o.value, o.priority, o.created_at, o.updated_at
+		FROM dhcp_options o
+		LEFT JOIN dhcp_scopes s ON s.id = o.scope_id`
 
 	if scopeID != "" {
-		query += " WHERE scope_id = ?"
+		query += " WHERE o.scope_id = ?"
 		args = append(args, scopeID)
 	}
-	query += " ORDER BY priority DESC, code ASC"
+	query += " ORDER BY o.priority DESC, o.code ASC"
 
 	rows, err := m.db.Query(query, args...)
 	if err != nil {
@@ -160,7 +163,7 @@ func (m *Manager) ListOptions(scopeID string) ([]Option, error) {
 	for rows.Next() {
 		var o Option
 		var reservationID sql.NullString
-		if err := rows.Scan(&o.ID, &o.ScopeID, &reservationID, &o.Code, &o.Value, &o.Priority, &o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.ScopeID, &o.ScopeName, &reservationID, &o.Code, &o.Value, &o.Priority, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			return nil, err
 		}
 		o.ReservationID = reservationID.String

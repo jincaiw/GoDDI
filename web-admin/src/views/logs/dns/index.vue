@@ -3,10 +3,13 @@ import { h } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
+import { formatAPITime } from '@/utils/datetime';
 import RemoteTable from '@/components/RemoteTable.vue';
 import { listDNSQueryLogs, type DNSQueryLog } from '@/service/api/goddi/dns';
 
 defineOptions({ name: 'DNSQueryLogsPage' });
+
+/** Starter list page: TCard page header + shared remote TTable. */
 
 const { t } = useI18n();
 
@@ -32,14 +35,16 @@ const columns: PrimaryTableCol[] = [
   { colKey: 'cached', title: t('logs.dns.cached'), width: 100, cell: (_h, { row }) => yesNo(Boolean((row as DNSQueryLog).cached)) },
   { colKey: 'blocked', title: t('logs.dns.blocked'), width: 100, cell: (_h, { row }) => yesNo(Boolean((row as DNSQueryLog).blocked)) },
   { colKey: 'upstream', title: t('logs.dns.upstream'), width: 160, ellipsis: true },
-  { colKey: 'created_at', title: t('common.createdAt'), width: 180 }
+  { colKey: 'created_at', title: t('common.createdAt'), width: 180, cell: (_h, { row }) => formatAPITime((row as any).created_at) }
 ];
 </script>
 
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('logs.dns.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('logs.dns.title') }}</h2>
+      </div>
     </TCard>
     <RemoteTable :columns="columns" :fetcher="listDNSQueryLogs" />
   </div>
@@ -53,10 +58,5 @@ const columns: PrimaryTableCol[] = [
 }
 .td-page-header :deep(.t-card__body) {
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

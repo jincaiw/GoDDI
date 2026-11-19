@@ -2,9 +2,10 @@
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
+import { Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
 import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
+import { usePersistedRef } from '@/composables/usePersistedRef';
 import { usePermission } from '@/composables/usePermission';
 import {
   batchDeleteDNSZones,
@@ -34,7 +35,7 @@ const batchDeleting = ref(false);
 const editing = ref<DNSZone | null>(null);
 const checkedKeys = ref<Array<string | number>>([]);
 
-const searchQuery = ref('');
+const searchQuery = usePersistedRef('dns_zones:search', '');
 const filterType = ref<string | undefined>(undefined);
 const activeTab = ref<'authoritative' | 'allowed' | 'blocked'>('authoritative');
 
@@ -72,8 +73,20 @@ const formData = reactive<CreateDNSZoneRequest & { enabled: boolean }>({
 });
 const isSpecialType = computed(() => formData.type === 'allowed' || formData.type === 'blocked');
 
+// A DNS zone name must be a syntactically valid domain (optionally ending in
+// a dot). Checking this on the client stops obviously invalid input from
+// reaching the API, where the error surfaces as a generic 400.
+const ZONE_NAME_PATTERN = /^([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z]{2,63}\.?$/i;
+
 const formRules = {
-  name: [{ required: true, message: t('dns.zones.zoneName') + ' required', type: 'error' }]
+  name: [
+    { required: true, message: t('dns.zones.zoneName') + ' required', type: 'error' },
+    {
+      validator: (value: string) => ZONE_NAME_PATTERN.test(String(value || '').trim()),
+      message: t('dns.zones.zoneNameInvalid'),
+      type: 'error'
+    }
+  ]
 };
 
 const params = computed<Record<string, unknown>>(() => {
@@ -93,6 +106,15 @@ function msgError(err: unknown) {
   void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
+// Zone type values are raw backend enums (primary/secondary/...). Resolve them
+// through the locale table so the table never renders untranslated enums;
+// fall back to the raw value when a new type appears before its translation.
+function typeLabel(value: string): string {
+  const key = `dns.zones.typeValues.${String(value).toLowerCase()}`;
+  const out = t(key);
+  return out === key ? value : out;
+}
+
 const columns: PrimaryTableCol[] = [
   { colKey: 'name', title: t('dns.zones.zoneName'), minWidth: 180 },
   {
@@ -102,7 +124,7 @@ const columns: PrimaryTableCol[] = [
     cell: (h, { row }) => {
       const r = row as DNSZone;
       const theme = r.type === 'blocked' ? 'danger' : r.type === 'allowed' || r.type === 'primary' ? 'success' : 'primary';
-      return h(TTag, { size: 'small', theme, variant: 'light' }, () => String(r.type));
+      return h(TTag, { size: 'small', theme, variant: 'light' }, () => typeLabel(r.type));
     }
   },
   { colKey: 'records_count', title: t('dns.zones.records'), width: 90 },
@@ -255,46 +277,56 @@ async function handleConvert() {
   }
 }
 
+// The delete confirmation is a component-level dialog rather than
+// DialogPlugin.confirm: the plugin is mounted outside the app context, so its
+// body text resolved to an empty string and the confirm button fell back to
+// the primary theme instead of danger.
+const pendingDeleteId = ref<string | null>(null);
+const deleteDialogVisible = computed({
+  get: () => pendingDeleteId.value !== null,
+  set: (value: boolean) => {
+    if (!value) pendingDeleteId.value = null;
+  }
+});
+
 function confirmDelete(id: string) {
   if (!perm.canDelete('dns')) return;
-  const dlg = DialogPlugin.confirm({
-    header: t('common.delete'),
-    body: t('common.deleteConfirm'),
-    theme: 'danger',
-    onConfirm: async () => {
-      try {
-        await deleteDNSZone(id);
-        void MessagePlugin.success(t('common.deleteSuccess'));
-        await tableRef.value?.reload();
-      } catch (err) {
-        msgError(err);
-      }
-      dlg.hide();
-    }
-  });
+  pendingDeleteId.value = id;
 }
+
+async function handleDeleteConfirm() {
+  const id = pendingDeleteId.value;
+  if (!id) return;
+  try {
+    await deleteDNSZone(id);
+    void MessagePlugin.success(t('common.deleteSuccess'));
+    pendingDeleteId.value = null;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  }
+}
+
+const batchDeleteVisible = ref(false);
 
 function confirmBatchDelete() {
   if (!perm.canDelete('dns') || checkedKeys.value.length === 0) return;
-  const dlg = DialogPlugin.confirm({
-    header: t('dns.zones.batchDelete'),
-    body: t('dns.zones.batchDeleteConfirm', { n: checkedKeys.value.length }),
-    theme: 'danger',
-    onConfirm: async () => {
-      batchDeleting.value = true;
-      try {
-        const result = await batchDeleteDNSZones(checkedKeys.value.map(k => String(k)));
-        void MessagePlugin.success(t('dns.zones.batchDeleteDone', { n: result.deleted }));
-        checkedKeys.value = [];
-        await tableRef.value?.reload();
-      } catch (err) {
-        msgError(err);
-      } finally {
-        batchDeleting.value = false;
-        dlg.hide();
-      }
-    }
-  });
+  batchDeleteVisible.value = true;
+}
+
+async function handleBatchDeleteConfirm() {
+  batchDeleting.value = true;
+  try {
+    const result = await batchDeleteDNSZones(checkedKeys.value.map(k => String(k)));
+    void MessagePlugin.success(t('dns.zones.batchDeleteDone', { n: result.deleted }));
+    checkedKeys.value = [];
+    batchDeleteVisible.value = false;
+    await tableRef.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    batchDeleting.value = false;
+  }
 }
 </script>
 
@@ -443,6 +475,24 @@ function confirmBatchDelete() {
         <TAlert theme="info" :message="t('dns.zones.convertHint')" />
       </TForm>
     </TDialog>
+
+    <TDialog
+      v-model:visible="deleteDialogVisible"
+      :header="t('common.delete')"
+      theme="danger"
+      :confirm-btn="{ content: t('common.confirm'), theme: 'danger' }"
+      :body="t('common.deleteConfirm')"
+      @confirm="handleDeleteConfirm"
+    />
+
+    <TDialog
+      v-model:visible="batchDeleteVisible"
+      :header="t('dns.zones.batchDelete')"
+      theme="danger"
+      :confirm-btn="{ content: t('common.confirm'), theme: 'danger', loading: batchDeleting }"
+      :body="t('dns.zones.batchDeleteConfirm', { n: checkedKeys.length })"
+      @confirm="handleBatchDeleteConfirm"
+    />
   </div>
 </template>
 

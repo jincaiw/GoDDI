@@ -1,13 +1,18 @@
 package handler
 
 import (
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jasonwa/goddi/internal/config"
 	"github.com/jasonwa/goddi/internal/dns/client"
+	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
+	"github.com/jasonwa/goddi/internal/dns/zone"
 	"github.com/miekg/dns"
 )
 
@@ -89,6 +94,56 @@ func TestValidateUpstreamAddressRejectsPrivateLiteralsWhenGuardIsOn(t *testing.T
 	}
 	if err := validateUpstreamAddress("8.8.8.8:53"); err != nil {
 		t.Fatalf("public upstream refused: %v", err)
+	}
+}
+
+func TestDNSClientEmptyUpstreamUsesLocalAuthoritativeSnapshot(t *testing.T) {
+	db := newRecordOwnershipTestDB(t)
+	zoneStore := zone.NewStore(db)
+	zoneStore.Load()
+	dnsServer := dnsserver.New(&config.Config{}, nil, nil, nil, nil, nil, zoneStore)
+	previous := DNSServices
+	DNSServices = &DNSServiceContainer{DB: db, ZoneStore: zoneStore, DNSServer: dnsServer, Config: &config.Config{}}
+	t.Cleanup(func() {
+		zoneStore.ReloadNow()
+		DNSServices = previous
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/client", strings.NewReader(`{"name":"dhcp-1.example.com","type":"A"}`))
+	rec := httptest.NewRecorder()
+	ExecuteDNSQuery(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local debug query = %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data client.QueryResult `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Data.Source != "local-authoritative" {
+		t.Fatalf("source = %q, want local-authoritative", env.Data.Source)
+	}
+	if len(env.Data.Answers) != 1 || env.Data.Answers[0].Data != "10.0.0.10" {
+		t.Fatalf("answers = %+v, want local 10.0.0.10", env.Data.Answers)
+	}
+	if strings.Contains(strings.ToLower(rec.Body.String()), "8.8.8.8") {
+		t.Fatalf("response still references the old external default: %s", rec.Body.String())
+	}
+}
+
+func TestDNSClientEmptyUpstreamFailsClosedWithoutLocalServer(t *testing.T) {
+	previous := DNSServices
+	DNSServices = &DNSServiceContainer{Config: &config.Config{}}
+	t.Cleanup(func() { DNSServices = previous })
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/client", strings.NewReader(`{"name":"www.demo.test","type":"A"}`))
+	rec := httptest.NewRecorder()
+	ExecuteDNSQuery(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing local server = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(strings.ToLower(rec.Body.String()), "8.8.8.8") {
+		t.Fatalf("response still references the old external default: %s", rec.Body.String())
 	}
 }
 

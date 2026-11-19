@@ -66,12 +66,24 @@ func respondIPAMError(w http.ResponseWriter, r *http.Request, err error, fallbac
 		return
 	case errors.Is(err, address.ErrAddressTaken),
 		errors.Is(err, address.ErrIllegalTransition),
-		errors.Is(err, subnet.ErrSubnetHasDependencies):
+		errors.Is(err, subnet.ErrSubnetHasDependencies),
+		errors.Is(err, subnet.ErrSubnetRetired),
+		errors.Is(err, space.ErrSpaceRetired),
+		errors.Is(err, space.ErrSpaceNotRetired),
+		errors.Is(err, space.ErrSpaceNameInUse),
+		errors.Is(err, space.ErrSpaceHasChildren),
+		errors.Is(err, space.ErrSpaceInUse),
+		errors.Is(err, subnet.ErrSubnetNotRetired),
+		errors.Is(err, subnet.ErrSubnetActiveConflict),
+		errors.Is(err, subnet.ErrSpaceNotActive),
+		errors.Is(err, subnet.ErrSubnetHasPreservedChildren):
 		response.Conflict(w, err.Error())
 	case errors.Is(err, address.ErrInvalidIP),
 		errors.Is(err, address.ErrInvalidStatus),
 		errors.Is(err, address.ErrOutOfSubnet),
-		errors.Is(err, subnet.ErrDHCPv6Unsupported):
+		errors.Is(err, subnet.ErrDHCPv6Unsupported),
+		errors.Is(err, space.ErrPurgeConfirmation),
+		errors.Is(err, subnet.ErrPurgeConfirmation):
 		response.BadRequest(w, err.Error())
 	case errors.Is(err, address.ErrAddressNotFound),
 		errors.Is(err, address.ErrSubnetNotFound):
@@ -207,16 +219,61 @@ func DeleteIPAMSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := IPAMServices.SpaceMgr.DeleteSpace(id); err != nil {
-		if errors.Is(err, space.ErrSpaceInUse) {
-			response.Conflict(w, "删除失败: "+err.Error())
-			return
-		}
-		response.InternalErrorWithLog(w, "删除失败", err)
+	if err := IPAMServices.SpaceMgr.RetireSpace(id, ipamActor(r), r.URL.Query().Get("reason")); err != nil {
+		respondIPAMError(w, r, err, "删除失败")
 		return
 	}
+	response.OK(w, map[string]string{"id": id, "lifecycle_state": "retired"})
+}
 
-	response.OK(w, map[string]string{"id": id})
+// RestoreIPAMSpace reactivates a retired space tombstone.
+func RestoreIPAMSpace(w http.ResponseWriter, r *http.Request) {
+	if IPAMServices == nil || IPAMServices.SpaceMgr == nil {
+		response.InternalError(w, "IPAM服务未初始化")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.BadRequest(w, "缺少空间ID")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	s, err := IPAMServices.SpaceMgr.RestoreSpace(id, req.Name)
+	if err != nil {
+		respondIPAMError(w, r, err, "恢复地址空间失败")
+		return
+	}
+	response.OK(w, s)
+}
+
+// PurgeIPAMSpace permanently removes a retired, empty space tombstone.
+func PurgeIPAMSpace(w http.ResponseWriter, r *http.Request) {
+	if IPAMServices == nil || IPAMServices.SpaceMgr == nil {
+		response.InternalError(w, "IPAM服务未初始化")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.BadRequest(w, "缺少空间ID")
+		return
+	}
+	var req struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if err := IPAMServices.SpaceMgr.PurgeSpace(id, req.Confirmation); err != nil {
+		respondIPAMError(w, r, err, "清除地址空间失败")
+		return
+	}
+	response.OK(w, map[string]string{"id": id, "purged": "true"})
 }
 
 // --- Subnet Handlers ---
@@ -374,9 +431,7 @@ func DeleteIPAMSubnet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := IPAMServices.SubnetMgr.DeleteSubnet(id); err != nil {
-		// A refusal carries the dependency list, so the caller can act on it
-		// instead of only learning that something is in the way.
+	if err := IPAMServices.SubnetMgr.RetireSubnet(id, ipamActor(r), r.URL.Query().Get("reason")); err != nil {
 		var depErr *subnet.DependencyError
 		if errors.As(err, &depErr) {
 			response.Conflict(w, depErr.Error())
@@ -385,8 +440,56 @@ func DeleteIPAMSubnet(w http.ResponseWriter, r *http.Request) {
 		respondIPAMError(w, r, err, "删除子网失败")
 		return
 	}
+	response.OK(w, map[string]string{"id": id, "lifecycle_state": "retired"})
+}
 
-	response.OK(w, map[string]string{"id": id})
+// RestoreIPAMSubnet reactivates a retired subnet.
+func RestoreIPAMSubnet(w http.ResponseWriter, r *http.Request) {
+	if IPAMServices == nil || IPAMServices.SubnetMgr == nil {
+		response.InternalError(w, "IPAM服务未初始化")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.BadRequest(w, "缺少子网ID")
+		return
+	}
+	s, err := IPAMServices.SubnetMgr.RestoreSubnet(id)
+	if err != nil {
+		var depErr *subnet.DependencyError
+		if errors.As(err, &depErr) {
+			response.Conflict(w, depErr.Error())
+			return
+		}
+		respondIPAMError(w, r, err, "恢复子网失败")
+		return
+	}
+	response.OK(w, s)
+}
+
+// PurgeIPAMSubnet permanently removes a retired subnet with no preserved children.
+func PurgeIPAMSubnet(w http.ResponseWriter, r *http.Request) {
+	if IPAMServices == nil || IPAMServices.SubnetMgr == nil {
+		response.InternalError(w, "IPAM服务未初始化")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		response.BadRequest(w, "缺少子网ID")
+		return
+	}
+	var req struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "无效的请求数据")
+		return
+	}
+	if err := IPAMServices.SubnetMgr.PurgeSubnet(id, req.Confirmation); err != nil {
+		respondIPAMError(w, r, err, "清除子网失败")
+		return
+	}
+	response.OK(w, map[string]string{"id": id, "purged": "true"})
 }
 
 // GetIPAMSubnetStats returns usage statistics for a subnet.
@@ -1099,6 +1202,63 @@ func respondSubnetImportResult(w http.ResponseWriter, r *http.Request, report *i
 	default:
 		respondIPAMError(w, r, err, "导入子网失败")
 	}
+}
+
+// RetirementAudit is the read-only record of an IPAM parent tombstone.
+// It deliberately reports counts instead of child rows: the audit is meant to
+// prove that local provenance survived, not to turn it into replicated config.
+type RetirementAudit struct {
+	Kind         string `json:"kind"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	RetiredAt    string `json:"retired_at"`
+	RetiredBy    string `json:"retired_by"`
+	RetireReason string `json:"retire_reason"`
+	Allocated    int64  `json:"allocated_children"`
+	History      int64  `json:"history_children"`
+}
+
+// ListIPAMRetirementAudit lists retired parents and their preserved child counts.
+func ListIPAMRetirementAudit(w http.ResponseWriter, r *http.Request) {
+	if IPAMServices == nil || IPAMServices.DB == nil {
+		response.InternalError(w, "IPAM服务未初始化")
+		return
+	}
+
+	rows, err := IPAMServices.DB.Query(`
+		SELECT * FROM (
+		SELECT 'space' AS kind, id, name, COALESCE(retired_at, '') AS retired_at,
+			COALESCE(retired_by, '') AS retired_by,
+			COALESCE(retire_reason, '') AS retire_reason, 0 AS allocated_children, 0 AS history_children
+		FROM ipam_spaces WHERE lifecycle_state = 'retired'
+		UNION ALL
+		SELECT 'subnet' AS kind, sn.id, sn.name, COALESCE(sn.retired_at, '') AS retired_at,
+			COALESCE(sn.retired_by, '') AS retired_by, COALESCE(sn.retire_reason, '') AS retire_reason,
+			(SELECT COUNT(*) FROM ipam_addresses a WHERE a.subnet_id = sn.id AND a.status <> 'active') AS allocated_children,
+			(SELECT COUNT(*) FROM ipam_history h WHERE h.subnet_id = sn.id) AS history_children
+		FROM ipam_subnets sn WHERE sn.lifecycle_state = 'retired'
+		) ORDER BY retired_at DESC, id`)
+	if err != nil {
+		response.InternalErrorWithLog(w, "查询退役审计失败", err)
+		return
+	}
+	defer rows.Close()
+
+	audit := make([]RetirementAudit, 0)
+	for rows.Next() {
+		var item RetirementAudit
+		if err := rows.Scan(&item.Kind, &item.ID, &item.Name, &item.RetiredAt, &item.RetiredBy,
+			&item.RetireReason, &item.Allocated, &item.History); err != nil {
+			response.InternalErrorWithLog(w, "读取退役审计失败", err)
+			return
+		}
+		audit = append(audit, item)
+	}
+	if err := rows.Err(); err != nil {
+		response.InternalErrorWithLog(w, "遍历退役审计失败", err)
+		return
+	}
+	response.OK(w, audit)
 }
 
 // ExportIPAMData exports IPAM data (CSV/JSON).

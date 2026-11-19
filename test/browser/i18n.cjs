@@ -49,6 +49,39 @@ for (const f of langs) {
   }
 }
 
+// --- Part 1b: App.I18n.Schema must cover every locale leaf ---
+const ts = require(path.join(root, 'web-admin/node_modules/typescript'));
+const schemaText = fs.readFileSync(path.join(root, 'web-admin/src/typings/app.d.ts'), 'utf8');
+function localeLeaves(source) {
+  const sf = ts.createSourceFile('locale.ts', source, ts.ScriptTarget.Latest, true);
+  let obj;
+  const visit = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(sf) === 'local' && node.initializer && ts.isObjectLiteralExpression(node.initializer)) obj = node.initializer;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  const leaves = [];
+  const walk = (o, prefix) => {
+    for (const prop of o.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue;
+      const key = prop.name.getText(sf).replace(/^['"]|['"]$/g, '');
+      const full = prefix ? prefix + '.' + key : key;
+      if (prop.initializer && ts.isObjectLiteralExpression(prop.initializer)) walk(prop.initializer, full);
+      else leaves.push(full);
+    }
+  };
+  if (obj) walk(obj, '');
+  return leaves;
+}
+const localeLeavesList = localeLeaves(localeText['zh-cn.ts']);
+if (!localeLeavesList.length) fail('could not parse locale leaves for schema check');
+for (const key of localeLeavesList) {
+  const leaf = key.split('.').pop();
+  const escaped = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declared = new RegExp(`(?:^|[\\s{])['"]?${escaped}['"]?:\\s*string;`, 'm').test(schemaText);
+  if (!declared) fail(`i18n schema is missing leaf key ${key}`);
+}
+
 // --- Part 2: literal t() keys must exist in both languages ---
 const collectSources = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
   const full = path.join(dir, e.name);

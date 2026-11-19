@@ -22,6 +22,7 @@ var (
 type Reservation struct {
 	ID          string `json:"id"`
 	ScopeID     string `json:"scope_id"`
+	ScopeName   string `json:"scope_name,omitempty"`
 	IPAddress   string `json:"ip_address"`
 	MACAddress  string `json:"mac_address"`
 	Hostname    string `json:"hostname,omitempty"`
@@ -269,8 +270,11 @@ func (m *Manager) ListReservations(filter ReservationFilter) ([]Reservation, int
 	}
 	offset := (page - 1) * pageSize
 
-	querySQL := `SELECT id, scope_id, ip_address, mac_address, hostname, description, enabled, created_at, updated_at
-		FROM dhcp_reservations ` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	querySQL := `SELECT r.id, r.scope_id, COALESCE(s.name, ''), r.ip_address, r.mac_address,
+			r.hostname, r.description, r.enabled, r.created_at, r.updated_at
+		FROM dhcp_reservations r
+		LEFT JOIN dhcp_scopes s ON s.id = r.scope_id ` + whereClause +
+		` ORDER BY r.created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, offset)
 
 	rows, err := m.db.Query(querySQL, args...)
@@ -283,7 +287,7 @@ func (m *Manager) ListReservations(filter ReservationFilter) ([]Reservation, int
 	for rows.Next() {
 		var r Reservation
 		var hostname, description sql.NullString
-		if err := rows.Scan(&r.ID, &r.ScopeID, &r.IPAddress, &r.MACAddress,
+		if err := rows.Scan(&r.ID, &r.ScopeID, &r.ScopeName, &r.IPAddress, &r.MACAddress,
 			&hostname, &description, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, 0, err
 		}

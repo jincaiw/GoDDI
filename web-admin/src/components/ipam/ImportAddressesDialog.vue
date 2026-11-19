@@ -5,27 +5,28 @@ import { MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import { usePermission } from '@/composables/usePermission';
 import SectionTitle from '@/components/ipam/SectionTitle.vue';
-import ReportSummary from '@/components/ipam/ImportReportSummary.vue';
+import ImportReportSummary from '@/components/ipam/ImportReportSummary.vue';
+import { ipamStatusLabel } from '@/composables/useIpamLifecycle';
 import { ApiError } from '@/service/api/goddi/client';
 import { importIPAMData, previewIPAMImport, type ImportPlan, type ImportReport } from '@/service/api/goddi/ipam';
 
+defineOptions({ name: 'IPAMImportAddressesDialog' });
+
 const props = defineProps<{
-  show: boolean;
   subnetId: string;
   subnetLabel: string;
 }>();
 
 const emit = defineEmits<{
-  (event: 'update:show', value: boolean): void;
   (event: 'imported'): void;
 }>();
 
+// v-model:show is a model ref, the same idiom RemoteTable uses, instead of a
+// hand-written props/emit getter-setter pair.
+const show = defineModel<boolean>('show', { required: true });
+
 const { t } = useI18n();
 const perm = usePermission();
-const visible = computed({
-  get: () => props.show,
-  set: (value: boolean) => emit('update:show', value)
-});
 
 const step = ref<'pick' | 'preview' | 'done'>('pick');
 const csvText = ref('');
@@ -42,7 +43,7 @@ const canPreview = computed(() => csvText.value.trim().length > 0 && perm.canRea
 const hasBlockingErrors = computed(() => (report.value?.errors.length ?? 0) > 0);
 
 function close() {
-  visible.value = false;
+  show.value = false;
 }
 
 function reset() {
@@ -162,7 +163,9 @@ const changeColumns: PrimaryTableCol[] = [
     width: 180,
     cell: (_h, { row }) => {
       const r = row as ImportPlan;
-      return r.previous_status ? `${r.previous_status} → ${r.status}` : r.status;
+      return r.previous_status
+        ? `${ipamStatusLabel(t, r.previous_status)} → ${ipamStatusLabel(t, r.status)}`
+        : ipamStatusLabel(t, r.status);
     }
   },
   {
@@ -175,17 +178,14 @@ const changeColumns: PrimaryTableCol[] = [
   }
 ];
 
-watch(
-  () => props.show,
-  show => {
-    if (show) reset();
-  }
-);
+watch(show, visible => {
+  if (visible) reset();
+});
 </script>
 
 <template>
   <TDialog
-    v-model:visible="visible"
+    v-model:visible="show"
     :header="t('ipam.import.title')"
     width="760px"
     :footer="false"
@@ -214,7 +214,7 @@ watch(
       />
       <TAlert v-if="rejected" theme="error" :title="t('ipam.import.rejected')" :message="t('ipam.import.rejectedHint')" class="mb-4" />
 
-      <ReportSummary v-if="report" :report="report" />
+      <ImportReportSummary v-if="report" :report="report" />
 
       <template v-if="report && report.errors.length > 0">
         <SectionTitle :text="t('ipam.import.errors')" :count="report.errors.length" />
@@ -275,7 +275,7 @@ watch(
 }
 .hint {
   margin: 8px 0 0;
-  color: #999;
+  color: var(--td-text-color-placeholder);
   font-size: 12px;
 }
 .error-list {

@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
 import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
 import { usePermission } from '@/composables/usePermission';
+import { dnsMatchLabel } from '@/composables/useDnsPolicyLabels';
 import {
   addAllowRule,
   deleteAllowRule,
@@ -27,15 +29,11 @@ const submitting = ref(false);
 const importInput = ref<HTMLInputElement | null>(null);
 const form = reactive({ pattern: '', match_type: 'exact', enabled: true });
 
-const matchOptions = [
-  { label: 'Exact', value: 'exact' },
-  { label: 'Suffix', value: 'suffix' },
-  { label: 'Wildcard', value: 'wildcard' },
-  { label: 'Regex', value: 'regex' }
-];
+const matchValues = ['exact', 'suffix', 'wildcard', 'regex'];
+const matchOptions = matchValues.map(value => ({ label: dnsMatchLabel(t, value), value }));
 
 const formRules = {
-  pattern: [{ required: true, message: t('dns.security.pattern') + ' required', type: 'error' }]
+  pattern: [{ required: true, message: t('dns.security.pattern') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -44,7 +42,7 @@ const columns: PrimaryTableCol[] = [
     colKey: 'match_type',
     title: t('dns.security.matchType'),
     width: 130,
-    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as AllowRule).match_type))
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => dnsMatchLabel(t, String((row as AllowRule).match_type)))
   },
   {
     colKey: 'enabled',
@@ -59,7 +57,7 @@ const columns: PrimaryTableCol[] = [
     cell: (h, { row }) =>
       h(
         TLink,
-        { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDelete((row as AllowRule).id) },
+        { theme: 'danger', disabled: !perm.canDelete('dns'), onClick: () => confirmDelete((row as AllowRule).id, (row as AllowRule).pattern) },
         () => t('common.delete')
       )
   }
@@ -93,11 +91,11 @@ async function handleAdd() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('dns')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
     onConfirm: async () => {
       try {
@@ -175,7 +173,9 @@ async function handleExport() {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dns.security.allowedTitle') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dns.security.allowedTitle') }}</h2>
+      </div>
       <TSpace size="small">
         <TButton v-if="perm.canRead('dns')" variant="outline" @click="handleExport">
           {{ t('dns.security.exportRules') }}
@@ -232,12 +232,6 @@ async function handleExport() {
   justify-content: space-between;
   gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 .hidden-file {
   display: none;

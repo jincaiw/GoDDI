@@ -4,9 +4,9 @@
 #   ACK -> node-b (auto_failover=true) promotes durably and, under its restart
 #   policy, comes back as primary -> node-a is restarted and rejoins as standby.
 #
-# It deliberately does NOT claim node-b serves leases after promotion: DHCP
-# scope definitions are not replicated across nodes (ADR-0005), so the promoted
-# standby has no local scope. That is reported NOT_VERIFIED, not faked.
+# This drill deliberately keeps ADR-0013 config replication off. Serving leases
+# after promotion is proven by the separate config-replication suite; if that
+# evidence is unavailable or stale, the drill reports NOT_VERIFIED, never PASS.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=reports; mkdir -p "$OUT"
@@ -104,7 +104,7 @@ code_b=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18182/a
 [ "$code_a" = "201" ] && ok "node-a (config author) still authors config after demotion (HTTP 201)" || bad "node-a config author write returned $code_a"
 [ "$code_b" = "409" ] && ok "node-b (new DHCP primary, not config author) refuses config writes (HTTP 409)" || bad "node-b write returned $code_b"
 
-nv "promoted standby serving leases is proven separately by make h2-config-replication (ADR-0013 A); this drill does not enable config replication"
+if [ "$(bash scripts/config-replication-status.sh 2>/dev/null | tr -d '\r')" = "covered" ]; then ok "promoted standby serving leases is proven by fresh config-replication suite (ADR-0013 A); this drill intentionally keeps config replication off"; else nv "promoted standby serving leases requires fresh config-replication evidence (ADR-0013 A); this drill intentionally keeps it off"; fi
 
 echo "### restore the standard (non-auto-failover) pair for later suites"
 # The drill leaves node-b as the recorded primary. Recreating from the base

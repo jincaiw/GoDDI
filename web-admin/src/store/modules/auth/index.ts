@@ -9,7 +9,7 @@ import { $t } from '@/locales';
 import { SetupStoreId } from '@/enum';
 import { useRouteStore } from '../route';
 import { useTabStore } from '../tab';
-import { clearAuthStorage, getToken, setAuthStorage } from './shared';
+import { clearAuthStorage, getSessionIdFromToken, getToken, setAuthStorage } from './shared';
 
 type GoddiPermission = { resource: string; action: string };
 
@@ -64,6 +64,9 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
   }
 
   const isLogin = computed(() => Boolean(token.value) && !isTokenExpired(token.value));
+
+  /** Current server-side session ID carried by the access token. */
+  const currentSessionId = computed(() => getSessionIdFromToken(token.value));
 
   /** Goddi RBAC: resource + action permission check */
   function hasPermission(resource: string, action: string): boolean {
@@ -211,6 +214,7 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     userInfo,
     isStaticSuper,
     isLogin,
+    currentSessionId,
     loginLoading,
     hasPermission,
     hasAnyPermission,

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
+import { formatAPITime } from '@/utils/datetime';
 import { usePermission } from '@/composables/usePermission';
 import {
   flushDNSCache,
@@ -41,8 +42,7 @@ function formatTTL(seconds: number): string {
 }
 
 function formatTime(value: string): string {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+  return formatAPITime(value);
 }
 
 function msgError(err: unknown) {
@@ -133,7 +133,9 @@ onMounted(loadStats);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dns.cache.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dns.cache.title') }}</h2>
+      </div>
       <TButton v-if="perm.canDelete('dns')" theme="danger" variant="outline" @click="confirmFlushCache">
         {{ t('dns.cache.flushCache') }}
       </TButton>
@@ -179,11 +181,6 @@ onMounted(loadStats);
   justify-content: space-between;
   padding: 16px 20px;
 }
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -194,7 +191,7 @@ onMounted(loadStats);
 }
 .stat-label {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--td-text-color-secondary);
 }
 .stat-value {
   margin-top: 8px;

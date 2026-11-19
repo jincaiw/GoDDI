@@ -45,7 +45,8 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
     header: await page.locator('.t-layout__header, .t-header').count()
   };
   step('TDesign shell renders', shell.layout > 0 && shell.menu > 0, JSON.stringify(shell));
-  step('Single-Node badge visible', (await page.locator('body').innerText()).includes('Single-Node'), '');
+  const badgeBody = await page.locator('body').innerText();
+  step('HA node-mode badge visible', /HA\s*·\s*(主机|备机|状态未知|Primary|Standby|Unknown)/.test(badgeBody), badgeBody.slice(0, 80).replace(/\n/g, ' | '));
 
   // 4. Sample page: IPAM Spaces
   await page.goto(`${BASE}/ipam/spaces`, { waitUntil: 'networkidle', timeout: 30000 });

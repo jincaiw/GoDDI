@@ -6,6 +6,10 @@ export interface IPAMSpace {
   id: string
   name: string
   description: string
+  lifecycle_state: string
+  retired_at?: string
+  retired_by?: string
+  retire_reason?: string
   created_at: string
   updated_at: string
 }
@@ -35,6 +39,14 @@ export function deleteIPAMSpace(id: string) {
   return del(`/ipam/spaces/${id}`)
 }
 
+export function restoreIPAMSpace(id: string, name?: string) {
+  return post<IPAMSpace>(`/ipam/spaces/${id}/restore`, name ? { name } : {})
+}
+
+export function purgeIPAMSpace(id: string) {
+  return post<{ id: string; purged: string }>(`/ipam/spaces/${id}/purge`, { confirmation: id })
+}
+
 // --- IPAM Subnets ---
 
 export interface IPAMSubnet {
@@ -45,6 +57,10 @@ export interface IPAMSubnet {
   description: string
   vlan_id: number
   location: string
+  lifecycle_state: string
+  retired_at?: string
+  retired_by?: string
+  retire_reason?: string
   created_at: string
   updated_at: string
 }
@@ -89,6 +105,14 @@ export function updateIPAMSubnet(id: string, data: Partial<CreateIPAMSubnetReque
 
 export function deleteIPAMSubnet(id: string) {
   return del(`/ipam/subnets/${id}`)
+}
+
+export function restoreIPAMSubnet(id: string) {
+  return post<IPAMSubnet>(`/ipam/subnets/${id}/restore`, {})
+}
+
+export function purgeIPAMSubnet(id: string) {
+  return post<{ id: string; purged: string }>(`/ipam/subnets/${id}/purge`, { confirmation: id })
 }
 
 export function getIPAMSubnetStats(id: string) {
@@ -409,4 +433,19 @@ export function importIPAMData(req: ImportRequest) {
 
 export function exportIPAMData(params?: Record<string, unknown>) {
   return getRaw('/ipam/export', { params, responseType: 'blob' })
+}
+
+export interface RetirementAuditEntry {
+  kind: string
+  id: string
+  name: string
+  retired_at: string
+  retired_by: string
+  retire_reason: string
+  allocated_children: number
+  history_children: number
+}
+
+export function listIPAMRetirementAudit() {
+  return get<RetirementAuditEntry[]>('/ipam/retirement-audit')
 }

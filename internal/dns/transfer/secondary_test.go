@@ -146,3 +146,36 @@ func newSecondaryDB(t *testing.T) *sql.DB {
 	}
 	return db
 }
+
+func axfrFrameTOKs() (*dns.SOA, *dns.SOA) {
+	opening := &dns.SOA{
+		Hdr: dns.RR_Header{Name: "example.test.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 3600},
+		Ns:  "ns.example.test.", Mbox: "hostmaster.example.test.", Serial: 7,
+		Refresh: 3600, Retry: 600, Expire: 86400, Minttl: 300,
+	}
+	closing := dns.Copy(opening).(*dns.SOA)
+	return opening, closing
+}
+
+func TestValidateTransferredAXFRRejectsBadFrameTail(t *testing.T) {
+	opening, closing := axfrFrameTOKs()
+	record := &dns.A{Hdr: dns.RR_Header{Name: "www.example.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("192.0.2.1")}
+	closing.Serial++
+	if err := validateTransferredAXFR("example.test.", []dns.RR{opening, record, closing}); err == nil ||
+		!strings.Contains(err.Error(), "do not match") {
+		t.Fatalf("mismatched closing SOA = %v, want rejection", err)
+	}
+
+	opening, closing = axfrFrameTOKs()
+	if err := validateTransferredAXFR("example.test.", []dns.RR{opening, record}); err == nil ||
+		!strings.Contains(err.Error(), "begin and end with SOA") {
+		t.Fatalf("truncated tail = %v, want rejection", err)
+	}
+
+	opening, closing = axfrFrameTOKs()
+	outside := &dns.A{Hdr: dns.RR_Header{Name: "outside.invalid.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("192.0.2.2")}
+	if err := validateTransferredAXFR("example.test.", []dns.RR{opening, outside, closing}); err == nil ||
+		!strings.Contains(err.Error(), "outside zone") {
+		t.Fatalf("out-of-zone record = %v, want rejection", err)
+	}
+}

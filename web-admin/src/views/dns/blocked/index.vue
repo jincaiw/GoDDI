@@ -78,6 +78,27 @@ function msgError(err: unknown) {
   void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
 }
 
+function dnsMatchLabel(i18n: typeof t, value: string) {
+  const labels: Record<string, string> = {
+    exact: i18n('dns.security.matchValues.exact'),
+    suffix: i18n('dns.security.matchValues.suffix'),
+    wildcard: i18n('dns.security.matchValues.wildcard'),
+    regex: i18n('dns.security.matchValues.regex')
+  };
+  return labels[value] || value;
+}
+
+function dnsResponseLabel(i18n: typeof t, value: string) {
+  const labels: Record<string, string> = {
+    NXDOMAIN: 'NXDOMAIN',
+    NODATA: 'NODATA',
+    REFUSED: 'REFUSED',
+    DROP: 'DROP',
+    CUSTOM_IP: i18n('dns.security.responseValues.custom_ip')
+  };
+  return labels[value] || value;
+}
+
 const listColumns: PrimaryTableCol[] = [
   { colKey: 'name', title: t('common.name') },
   {
@@ -86,7 +107,7 @@ const listColumns: PrimaryTableCol[] = [
     width: 110,
     cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as BlockList).type))
   },
-  { colKey: 'entry_count', title: 'Rules', width: 90 },
+  { colKey: 'entry_count', title: t('dns.security.rules'), width: 90 },
   {
     colKey: 'last_fetch',
     title: t('dns.security.lastFetch'),
@@ -109,7 +130,7 @@ const listColumns: PrimaryTableCol[] = [
     colKey: 'enabled',
     title: t('common.enabled'),
     width: 90,
-    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as BlockList).enabled) })
+    cell: (h, { row }) => h(TTag, { size: 'small', theme: (row as BlockList).enabled ? 'success' : 'default', variant: 'light' }, () => (row as BlockList).enabled ? t('common.enabled') : t('common.disabled'))
   },
   {
     colKey: 'op',
@@ -118,7 +139,7 @@ const listColumns: PrimaryTableCol[] = [
     cell: (h, { row }) => {
       const r = row as BlockList;
       return h(TSpace, { size: 'small' }, () => [
-        h(TLink, { theme: 'primary', onClick: () => void selectList(r) }, () => 'Rules'),
+        h(TLink, { theme: 'primary', onClick: () => void selectList(r) }, () => t('dns.security.rules')),
         ...(r.type === 'external'
           ? [
               h(
@@ -149,7 +170,7 @@ const ruleColumns: PrimaryTableCol[] = [
     colKey: 'match_type',
     title: t('dns.security.matchType'),
     width: 120,
-    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => String((row as BlockRule).match_type))
+    cell: (h, { row }) => h(TTag, { size: 'small', variant: 'light' }, () => dnsMatchLabel(t, String((row as BlockRule).match_type)))
   },
   {
     colKey: 'response_type',
@@ -159,14 +180,14 @@ const ruleColumns: PrimaryTableCol[] = [
       h(
         TTag,
         { size: 'small', theme: (row as BlockRule).response_type === 'DROP' ? 'danger' : 'warning', variant: 'light' },
-        () => String((row as BlockRule).response_type)
+        () => dnsResponseLabel(t, String((row as BlockRule).response_type))
       )
   },
   {
     colKey: 'enabled',
     title: t('common.enabled'),
     width: 90,
-    cell: (h, { row }) => h(TSwitch, { size: 'small', disabled: true, value: Boolean((row as BlockRule).enabled) })
+    cell: (h, { row }) => h(TTag, { size: 'small', theme: (row as BlockRule).enabled ? 'success' : 'default', variant: 'light' }, () => (row as BlockRule).enabled ? t('common.enabled') : t('common.disabled'))
   },
   {
     colKey: 'op',
@@ -417,10 +438,10 @@ onUnmounted(() => {
         <TFormItem :label="t('common.type')" name="type">
           <TSelect
             v-model="listForm.type"
-            :options="[{ label: 'Custom', value: 'custom' }, { label: 'External', value: 'external' }]"
+            :options="[{ label: t('dns.security.listTypes.custom'), value: 'custom' }, { label: t('dns.security.listTypes.external'), value: 'external' }]"
           />
         </TFormItem>
-        <TFormItem v-if="listForm.type === 'external'" label="URL">
+        <TFormItem v-if="listForm.type === 'external'" :label="t('common.url')">
           <TInput v-model="listForm.url" placeholder="https://example.com/blocklist.txt" />
         </TFormItem>
         <TFormItem :label="t('common.enabled')">
@@ -447,7 +468,7 @@ onUnmounted(() => {
         <TFormItem :label="t('dns.security.responseType')">
           <TSelect v-model="ruleForm.response_type" :options="responseOptions" />
         </TFormItem>
-        <TFormItem v-if="ruleForm.response_type === 'CUSTOM_IP'" label="IP">
+        <TFormItem v-if="ruleForm.response_type === 'CUSTOM_IP'" :label="t('sessions.ip')">
           <TInput v-model="ruleForm.response_data" placeholder="0.0.0.0" />
         </TFormItem>
         <TFormItem :label="t('common.enabled')">
@@ -470,16 +491,11 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 16px 20px;
 }
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
 .disable-bar :deep(.t-card__body) {
   padding: 12px 16px;
 }
 :deep(.fetch-time) {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--td-text-color-placeholder);
 }
 </style>

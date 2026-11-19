@@ -1,29 +1,38 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { useNodeMode, type NodeMode } from '@/composables/useNodeMode';
 
 /**
- * Deployment-mode badge.
- *
- * SINGLE-NODE-FIRST: the console currently always renders `single`. The props
- * already model the HA modes so that stage 3 (dual-node / HA) can bind this to
- * a real /api/v1/cluster/status without changing any page or the layout API.
- * No store field, request or HA state is introduced in the single-node phase.
- * See docs/tdesign-migration.md §3.
+ * Deployment-mode badge. The mode comes from the live read-only HA status,
+ * not from a build-time constant. A 'mode' prop is kept only for stories and
+ * tests that need to force a state; production callers pass nothing.
  */
-type NodeMode = 'single' | 'ha-primary' | 'ha-standby' | 'ha-degraded';
+const props = defineProps<{ mode?: NodeMode }>();
+const { t } = useI18n();
+const { mode: liveMode } = useNodeMode();
 
-const props = withDefaults(defineProps<{ mode?: NodeMode }>(), { mode: 'single' });
+const current = computed<NodeMode>(() => props.mode ?? liveMode.value);
 
-const MAP: Record<NodeMode, { label: string; theme: 'success' | 'primary' | 'warning' | 'danger' }> = {
-  single: { label: 'Single-Node', theme: 'success' },
-  'ha-primary': { label: 'HA · Primary', theme: 'primary' },
-  'ha-standby': { label: 'HA · Standby', theme: 'warning' },
-  'ha-degraded': { label: 'HA · Degraded', theme: 'danger' }
-};
+const theme = computed(() => {
+  switch (current.value) {
+    case 'single': return 'success';
+    case 'ha-primary': return 'primary';
+    case 'ha-standby': return 'warning';
+    default: return 'danger';
+  }
+});
 
-const view = computed(() => MAP[props.mode]);
+const label = computed(() => {
+  switch (current.value) {
+    case 'single': return t('nodeMode.single');
+    case 'ha-primary': return t('nodeMode.primary');
+    case 'ha-standby': return t('nodeMode.standby');
+    default: return t('nodeMode.degraded');
+  }
+});
 </script>
 
 <template>
-  <TTag :theme="view.theme" variant="light-outline">{{ view.label }}</TTag>
+  <TTag :theme="theme" variant="light-outline">{{ label }}</TTag>
 </template>

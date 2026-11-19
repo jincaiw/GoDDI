@@ -2,6 +2,8 @@
 import { useI18n } from 'vue-i18n';
 import type { ImportReport } from '@/service/api/goddi/ipam';
 
+defineOptions({ name: 'IPAMImportReportSummary' });
+
 defineProps<{
   report: ImportReport;
 }>();

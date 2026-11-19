@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { useRouteStore } from '@/store/modules/route';
 import { getRouteName } from '@/router/elegant/transform';
 import { getToken } from '@/store/modules/auth/shared';
+import { useTabStore } from '@/store/modules/tab';
 
 /**
  * create route guard
@@ -49,6 +50,13 @@ export function createRouteGuard(router: Router) {
     // if the user is logged in but does not have authorization, then switch to the 403 page
     if (!hasAuth) {
       return { name: noAuthorizationRoute };
+    }
+
+    // Keep the route tab bar in sync with real navigation. Constant pages
+    // (login/errors) are excluded so they never appear as tabs.
+    if (!to.meta.constant) {
+      const tabStore = useTabStore();
+      tabStore.addTab(to as unknown as App.Global.TabRoute);
     }
 
     // switch route normally

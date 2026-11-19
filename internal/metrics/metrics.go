@@ -831,6 +831,14 @@ var (
 		Help: "Last-known-good data-plane revision durably applied, by domain.",
 	}, []string{"domain"})
 
+	// DataPlaneLKGApplied distinguishes "no revision has been durably applied
+	// yet" (0) from "revision 0 was applied" (1). Without it, an absent gauge
+	// and a legitimate zero revision look identical to an operator.
+	DataPlaneLKGApplied = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goddi_dataplane_lkg_applied",
+		Help: "Whether this data plane has durably applied any last-known-good revision, by domain (1=yes, 0=no).",
+	}, []string{"domain"})
+
 	// DHCPIPAMProjectionGaps is the number of enabled DHCP scopes whose subnet
 	// has no local IPAM projection (D-09).
 	DHCPIPAMProjectionGaps = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -838,6 +846,18 @@ var (
 		Help: "Number of enabled DHCP scopes missing a local IPAM subnet projection.",
 	})
 )
+
+// SetDataPlaneLKG publishes both the revision and whether a revision has ever
+// been applied. Callers must use this helper rather than setting only the
+// revision gauge: an absent revision is a distinct state from revision zero.
+func SetDataPlaneLKG(domain string, revision int64, applied bool) {
+	DataPlaneLKGRevision.WithLabelValues(domain).Set(float64(revision))
+	if applied {
+		DataPlaneLKGApplied.WithLabelValues(domain).Set(1)
+	} else {
+		DataPlaneLKGApplied.WithLabelValues(domain).Set(0)
+	}
+}
 
 // InitMetrics registers all Prometheus metrics and starts the uptime gauge updater.
 func InitMetrics() {
@@ -933,6 +953,7 @@ func InitMetrics() {
 			DHCPSQLBusyTotal,
 			DHCPRequestDurationSeconds,
 			DataPlaneLKGRevision,
+			DataPlaneLKGApplied,
 			DHCPIPAMProjectionGaps,
 		)
 

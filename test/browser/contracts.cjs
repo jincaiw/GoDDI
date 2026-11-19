@@ -9,6 +9,8 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..', '..');
+const navPath = path.join(root, 'web-admin/src/components/starter/nav.ts');
+const headerPath = path.join(root, 'web-admin/src/components/starter/Header.vue');
 const layoutPath = path.join(root, 'web-admin/src/layouts/tdesign-layout/index.vue');
 const routerMetaPath = path.join(root, 'web-admin/build/plugins/router.ts');
 const generatedRoutesPath = path.join(root, 'web-admin/src/router/elegant/routes.ts');
@@ -22,20 +24,20 @@ let failures = 0;
 const fail = msg => { console.log('FAIL | ' + msg); failures++; };
 
 const layout = read(layoutPath);
+const nav = read(navPath);
+const header = read(headerPath);
 const meta = read(routerMetaPath);
 const generated = read(generatedRoutesPath);
 
-const navKeys = new Set([...layout.matchAll(/labelKey: 'route\.([^']+)'/g)].map(m => m[1]));
+const navKeys = new Set([...nav.matchAll(/labelKey: 'route\.([^']+)'/g)].map(m => m[1]));
 const metaKeys = new Set([...meta.matchAll(/^      "([a-z0-9_-]+)": \{/gm)].map(m => m[1]));
 const generatedKeys = new Set([...generated.matchAll(/name: '([a-z0-9_-]+)'/g)].map(m => m[1]));
-const pathKeys = new Set([...layout.matchAll(/^  '?([a-zA-Z0-9_-]+)'?: '[^']+',?$/gm)].map(m => m[1]));
+const pathsBlock = (nav.match(/export const PATHS[^=]*=\s*\{([\s\S]*?)\n\};/) || [])[1] || '';
+const pathKeys = new Set([...pathsBlock.matchAll(/^\s+'?([a-zA-Z0-9_-]+)'?:\s*'[^']+'/gm)].map(m => m[1]));
 
 // Group parents are expandable menu sections, not navigable leaves. They are
 // listed in `expanded` rather than PATHS.
-const groupParents = new Set(
-  [...layout.matchAll(/const expanded = ref<string\[\]>\(\[([^\]]+)\]/g)]
-    .flatMap(m => [...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]))
-);
+const groupParents = new Set(['dns', 'dhcp', 'ipam', 'tools', 'admin', 'logs', 'settings']);
 
 // 1. Every nav key and route-meta key needs a translation in both languages.
 for (const lang of langs) {
@@ -142,7 +144,7 @@ const walkViews = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e 
   return e.name.endsWith('.vue') ? [full] : [];
 });
 const suiteFiles = fs.readdirSync(__dirname)
-  .filter(f => f === 'smoke.cjs' || /^batch\d+\.cjs$/.test(f) || f === 'legacy.cjs')
+  .filter(f => f === 'smoke.cjs' || /^batch\d+\.cjs$/.test(f) || f === 'legacy.cjs' || f === 'route-audit.cjs')
   .map(f => path.join(__dirname, f));
 const suiteText = suiteFiles.map(read).join('\n');
 for (const view of walkViews(viewsDir)) {
@@ -160,17 +162,33 @@ for (const view of walkViews(viewsDir)) {
 }
 if (!suiteText.includes('/login')) fail('the login view has no browser suite');
 
+// Visible navigation permissions must match generated route meta. A mismatch
+// either hides a reachable page or shows one the guard rejects.
+const navSource = read(path.join(root, 'web-admin/src/components/starter/nav.ts'));
+const routeSource = read(path.join(root, 'web-admin/src/router/elegant/routes.ts'));
+const toolsNavBlock = navSource.slice(navSource.indexOf("key: 'tools_client'"), navSource.indexOf("key: 'tools_client'") + 220);
+const toolsRouteBlock = routeSource.slice(routeSource.indexOf("name: 'tools_client'"), routeSource.indexOf("name: 'tools_client'") + 700);
+const navPermission = toolsNavBlock.match(/resource: '(\w+)', action: '(\w+)'/);
+const routePermission = toolsRouteBlock.match(/resource: '(\w+)'[\s\S]{0,80}?action: '(\w+)'/);
+if (!navPermission || !routePermission || navPermission[1] !== routePermission[1] || navPermission[2] !== routePermission[2]) {
+  fail('nav/route permission consistency: tools_client NAV and route meta differ');
+}
+if (!routeSource.includes("activeMenu: 'dns_zones'")) fail('dns_zone-detail must declare activeMenu for shell highlight');
+
 // 7. SINGLE-NODE-FIRST reservation. Until the dual-node architecture is
 // implemented (with independently validated role/epoch/fencing and B8.5
 // dual-host evidence), the console must not acquire HA state, cluster
 // requests, or a cluster nav entry. This is an explicit product decision, not
 // an accidental omission, so a future change has to be deliberate.
 const badge = read(path.join(root, 'web-admin/src/components/NodeModeBadge.vue'));
-if (!/withDefaults\([\s\S]*?mode:\s*'single'/.test(badge)) {
-  fail('NodeModeBadge no longer defaults to single-node mode');
+if (/withDefaults\([\s\S]*?mode:\s*'single'/.test(badge)) {
+  fail('NodeModeBadge hard-codes single-node mode; it must use live HA state');
 }
-if (!/single:\s*\{[^}]*label:\s*'Single-Node'/.test(badge)) {
-  fail('NodeModeBadge no longer renders the Single-Node label');
+if (!/useNodeMode/.test(badge)) {
+  fail('NodeModeBadge no longer uses useNodeMode');
+}
+if (!/nodeMode\.degraded/.test(badge) || !/case 'single'/.test(badge)) {
+  fail('NodeModeBadge lost its fail-closed degraded label');
 }
 const clusterApi = read(path.join(root, 'web-admin/src/service/api/goddi/cluster.ts'));
 if (!/CLUSTER_API_RESERVED\s*=\s*true/.test(clusterApi)) {
@@ -182,7 +200,7 @@ if (/\b(get|post|put|del|getList|postRaw|fetch)\s*\(/.test(clusterApi)) {
 if (/key: 'cluster'/.test(layout)) {
   fail('a cluster nav group was registered during the single-node phase');
 }
-const badgeUses = [...layout.matchAll(/<NodeModeBadge([^>]*)\/>/g)].map(m => m[1]);
+const badgeUses = [...header.matchAll(/<NodeModeBadge([^>]*)\/>/g)].map(m => m[1]);
 if (badgeUses.length === 0) {
   fail('the layout no longer renders NodeModeBadge');
 } else if (badgeUses.some(u => /:mode\s*=/.test(u))) {

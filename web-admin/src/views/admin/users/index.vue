@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
@@ -19,6 +20,8 @@ import {
 
 defineOptions({ name: 'AdminUsersPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
+
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -31,6 +34,7 @@ const editing = ref<User | null>(null);
 const allRoles = ref<Role[]>([]);
 const selectedRoles = ref<string[]>([]);
 const assigningUserId = ref('');
+const togglingId = ref<string | null>(null);
 
 const formData = reactive<CreateUserRequest & { enabled: boolean }>({
   username: '',
@@ -41,7 +45,7 @@ const formData = reactive<CreateUserRequest & { enabled: boolean }>({
 });
 
 const formRules = {
-  username: [{ required: true, message: t('admin.users.username') + ' required', type: 'error' }]
+  username: [{ required: true, message: t('admin.users.username') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -71,6 +75,7 @@ const columns: PrimaryTableCol[] = [
         size: 'small',
         value: Boolean(r.enabled),
         disabled: !perm.canWrite('user'),
+        loading: togglingId.value === r.id,
         onChange: (value: unknown) => void toggleEnabled(r, Boolean(value))
       });
     }
@@ -81,7 +86,7 @@ const columns: PrimaryTableCol[] = [
     width: 90,
     cell: (h, { row }) =>
       h(TTag, { size: 'small', theme: (row as User).totp_enabled ? 'success' : 'default', variant: 'light' }, () =>
-        (row as User).totp_enabled ? 'ON' : 'OFF'
+        (row as User).totp_enabled ? t('common.yes') : t('common.no')
       )
   },
   {
@@ -101,7 +106,7 @@ const columns: PrimaryTableCol[] = [
           },
           () => t('admin.users.assignRoles')
         ),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('user'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('user'), onClick: () => confirmDelete(r.id, r.username) }, () => t('common.delete'))
       ]);
     }
   }
@@ -140,11 +145,15 @@ function openRoles(row: User) {
 
 async function toggleEnabled(row: User, value: boolean) {
   if (!perm.canWrite('user')) return;
+  togglingId.value = row.id;
   try {
     await updateUser(row.id, { enabled: value });
+    void MessagePlugin.success(t('common.updateSuccess'));
     await tableRef.value?.reload();
   } catch (err) {
     msgError(err);
+  } finally {
+    togglingId.value = null;
   }
 }
 
@@ -176,12 +185,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('user')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteUser(id);
@@ -221,7 +231,9 @@ onMounted(loadRoles);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('admin.users.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('admin.users.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('user')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('admin.users.createUser') }}
@@ -288,12 +300,8 @@ onMounted(loadRoles);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .role-list {
   display: flex;

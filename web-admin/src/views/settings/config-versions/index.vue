@@ -102,6 +102,16 @@ function handleFilterChange() {
 
 // A failed revision never reached the data plane, so rolling back to it would
 // restore a configuration that was never in service.
+// Backend notes are action tokens (created/rollback/...), not user text.
+// Map the known values and fall back to the raw string so operator-authored
+// notes still display unchanged.
+function noteLabel(note?: string): string {
+  if (!note) return '-';
+  const key = `settings.configVersions.noteValues.${note}`;
+  const out = t(key);
+  return out === key ? note : out;
+}
+
 const revisionColumns: PrimaryTableCol[] = [
   { colKey: 'revision', title: t('settings.configVersions.revision'), width: 90 },
   {
@@ -130,7 +140,7 @@ const revisionColumns: PrimaryTableCol[] = [
     colKey: 'note',
     title: t('settings.configVersions.note'),
     ellipsis: true,
-    cell: (_h, { row }) => (row as ConfigRevision).note || '-'
+    cell: (_h, { row }) => noteLabel((row as ConfigRevision).note)
   },
   { colKey: 'created_at', title: t('settings.configVersions.createdAt'), width: 170 },
   {

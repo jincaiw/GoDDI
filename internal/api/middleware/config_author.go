@@ -62,6 +62,31 @@ func isDNSSecondaryCreate(r *http.Request) bool {
 // shared configuration.
 var configPaths = []string{"/dns/", "/dhcp/", "/ipam/", "/ddi/"}
 
+// readOnlyDiagnosticPaths are POST endpoints under configuration prefixes that
+// do NOT mutate shared configuration: they perform a query and return the
+// answer. ADR-0005 stops a second *writer* from publishing divergent
+// revisions; refusing a read-only DNS diagnostic on a standby protects no
+// invariant and breaks the operator's ability to verify the data plane.
+//
+// Matching is exact method + exact path (after removing the /api/v1 prefix),
+// never a prefix: any future /dns/client/* write stays refused by default.
+// Authentication, CSRF and the route's rbac dns:read check all run before this
+// middleware, so this exemption never opens an unauthenticated write path.
+var readOnlyDiagnosticPaths = map[string]bool{
+	http.MethodPost + " /dns/client": true,
+}
+
+func isReadOnlyDiagnostic(r *http.Request) bool {
+	path := strings.TrimRight(r.URL.Path, "/")
+	if strings.HasPrefix(path, "/api/v1") {
+		path = strings.TrimPrefix(path, "/api/v1")
+		if path == "" {
+			path = "/"
+		}
+	}
+	return readOnlyDiagnosticPaths[r.Method+" "+path]
+}
+
 // isConfigWrite reports whether this request mutates configuration. Reads
 // (GET/HEAD/OPTIONS) always pass, so a non-author node keeps serving the
 // console, metrics and the data planes.
@@ -85,7 +110,7 @@ func ConfigAuthor(author bool, nodeName string) func(http.Handler) http.Handler 
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !isConfigWrite(r) {
+			if !isConfigWrite(r) || isReadOnlyDiagnostic(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

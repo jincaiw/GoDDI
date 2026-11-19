@@ -379,14 +379,18 @@ var routeDocs = []apiRouteDoc{
 	{"/ipam/spaces", "POST", "IPAM", "创建地址空间", true, nil},
 	{"/ipam/spaces/{id}", "GET", "IPAM", "地址空间详情", true, []string{"id"}},
 	{"/ipam/spaces/{id}", "PUT", "IPAM", "更新地址空间", true, []string{"id"}},
-	{"/ipam/spaces/{id}", "DELETE", "IPAM", "删除地址空间", true, []string{"id"}},
+	{"/ipam/spaces/{id}", "DELETE", "IPAM", "退役地址空间（保留墓碑与本地子数据）", true, []string{"id"}},
+	{"/ipam/spaces/{id}/restore", "POST", "IPAM", "恢复退役地址空间", true, []string{"id"}},
+	{"/ipam/spaces/{id}/purge", "POST", "IPAM", "清除已退役且无子记录的地址空间墓碑", true, []string{"id"}},
 
 	// IPAM Subnets.
 	{"/ipam/subnets", "GET", "IPAM", "子网列表", true, nil},
 	{"/ipam/subnets", "POST", "IPAM", "创建子网", true, nil},
 	{"/ipam/subnets/{id}", "GET", "IPAM", "子网详情", true, []string{"id"}},
 	{"/ipam/subnets/{id}", "PUT", "IPAM", "更新子网", true, []string{"id"}},
-	{"/ipam/subnets/{id}", "DELETE", "IPAM", "删除子网（有已分配地址或依赖时拒绝）", true, []string{"id"}},
+	{"/ipam/subnets/{id}", "DELETE", "IPAM", "退役子网（保留本地地址/历史；活跃 DHCP 依赖仍拒绝）", true, []string{"id"}},
+	{"/ipam/subnets/{id}/restore", "POST", "IPAM", "恢复退役子网（重查父空间/CIDR/活跃依赖）", true, []string{"id"}},
+	{"/ipam/subnets/{id}/purge", "POST", "IPAM", "清除已退役且无本地子数据的子网墓碑", true, []string{"id"}},
 	{"/ipam/subnets/{id}/stats", "GET", "IPAM", "子网用量统计", true, []string{"id"}},
 	{"/ipam/subnets/{id}/dependencies", "GET", "IPAM", "子网依赖（阻塞删除的原因）", true, []string{"id"}},
 	// A preview of a write, so it is guarded by write permission: the
@@ -409,6 +413,7 @@ var routeDocs = []apiRouteDoc{
 	{"/ipam/import", "POST", "IPAM", "批量导入地址或子网", true, nil},
 	{"/ipam/import/preview", "POST", "IPAM", "导入预演（只读，不写任何东西）", true, nil},
 	{"/ipam/export", "GET", "IPAM", "导出地址或子网", true, nil},
+	{"/ipam/retirement-audit", "GET", "IPAM", "退役父资源与保留子数据审计", true, nil},
 	{"/ipam/integrity", "GET", "IPAM", "IPAM 一致性检查", true, nil},
 
 	{"/settings", "GET", "Settings", "系统设置列表", true, nil},
@@ -422,6 +427,7 @@ var routeDocs = []apiRouteDoc{
 	{"/sso", "PUT", "Extensions", "SSO 配置（当前版本未实现）", true, nil},
 	{"/cluster", "GET", "Extensions", "多节点集群（当前版本未实现）", true, nil},
 	{"/cluster", "POST", "Extensions", "多节点集群（当前版本未实现）", true, nil},
+	{"/cluster/config-replication", "GET", "Extensions", "集群配置复制状态（只读观察）", true, nil},
 	{"/apps", "GET", "Extensions", "应用市场（当前版本未实现）", true, nil},
 	{"/apps/{id}/install", "POST", "Extensions", "安装应用（当前版本未实现）", true, []string{"id"}},
 	{"/dhcp/ha", "GET", "Extensions", "DHCP HA 状态（只读）", true, nil},

@@ -157,7 +157,8 @@ func (ie *ImportExport) ExportSubnetsCSV(spaceID string) ([]byte, error) {
 
 	rows, err := ie.db.Query(`
 		SELECT name, cidr, COALESCE(CAST(vlan_id AS TEXT),''), COALESCE(location,''), COALESCE(description,'')
-		FROM ipam_subnets WHERE space_id = ? ORDER BY created_at ASC`, spaceID)
+		FROM ipam_subnets WHERE space_id = ? AND lifecycle_state = 'active' ORDER BY created_at ASC`,
+		spaceID)
 	if err != nil {
 		return nil, err
 	}

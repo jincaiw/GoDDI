@@ -70,13 +70,13 @@
 ```bash
 make verify          # Go build/test/vet + gofmt + pnpm lint/typecheck/build + git diff --check
 make verify-race     # 上述 + go test -race ./...
-make verify-browser  # 运行中的隔离服务 + GODDI_ADMIN_PASS；20 项检查
+make verify-browser  # 运行中的隔离服务 + GODDI_ADMIN_PASS；24 项检查
 make build           # 清空 dist 后从源码构建 ./dist/goddi 与 web/dist
 make verify-tidy     # go mod tidy -diff：零副作用校验模块文件未漂移
 make verify-e2e      # 一键跑完 CI 的两个 Playwright 套件（自建 plain + 种子实例）
 ```
 
-浏览器回归共 **20 项检查**（`test/browser/run.sh` 或 `make verify-browser`）：17 个真实 Chromium 套件 + 3 个静态守卫（`docs` 交接/配置文档/部署产物、`contracts` 前后端契约、`i18n` 文案键）。需 `GODDI_ADMIN_PASS` 与运行中的隔离服务；流程与治理见 `test/browser/README.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md` §1f/§1z/§1ag。分离角色与 DHCP HA 隔离双进程证据见 `docs/audit/IMPLEMENTATION-STATUS.md` §1b / §1c；B8.5 仓内准备进度见 `docs/B8.5-外部验收Runbook.md` §11，现场原始证据模板见同文件 §10。
+浏览器回归共 **24 项检查**（`test/browser/run.sh` 或 `make verify-browser`）：19 个真实 Chromium 套件（含 `route-audit`）+ 5 个静态守卫（`docs` 交接/配置文档/部署产物、`contracts` 前后端契约、`i18n` 文案键、`theme` devflow 主题基线、`h2-report-ref` 报告引用一致性）。需 `GODDI_ADMIN_PASS` 与运行中的隔离服务；流程与治理见 `test/browser/README.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md` §1f/§1z/§1ag。分离角色与 DHCP HA 隔离双进程证据见 `docs/audit/IMPLEMENTATION-STATUS.md` §1b / §1c；B8.5 仓内准备进度见 `docs/B8.5-外部验收Runbook.md` §11，现场原始证据模板见同文件 §10。
 
 ## 6. 独立评审必须回答的问题（完成前不得关闭门禁）
 

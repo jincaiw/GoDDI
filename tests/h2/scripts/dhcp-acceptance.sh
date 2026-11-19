@@ -51,8 +51,9 @@ fi
 PART=$(bash scripts/network-partition.sh 2>&1); printf '%s\n' "$PART"
 PISO=0; printf '%s' "$PART" | grep -q '^PASS | replication isolated' && PISO=1
 sleep 7
-# Live state is the running process's, not the CLI's store view: read the log.
-if docker logs --since 90s node-a 2>&1 | grep -q '"state":"paused"'; then ok "node-a observed paused in live log (ADR-0010 default)"; else nv "paused not observed in live log"; fi
+# Live state is the running process's, not the CLI's store view: read the HA API first.
+st=$(curl -s http://127.0.0.1:18181/api/v1/dhcp/ha -H "Authorization: Bearer $TOK_A" | jget "d['data']['state']")
+if [ "$st" = "paused" ]; then ok "node-a reports paused via HA API (ADR-0010 default)"; elif docker logs --since 90s node-a 2>&1 | grep -q '"state":"paused"'; then ok "node-a observed paused in live log (log evidence)"; else nv "paused not observed in API or log"; fi
 setmac 02:00:00:00:00:02
 U3=$(udhcpc); IP3=$(ipof "$U3")
 if [ "$PISO" -eq 1 ]; then
@@ -76,7 +77,9 @@ docker exec node-b goddi ha status -c /etc/goddi/config.yaml 2>/dev/null | grep 
 # Watermarks present (sequence handed out > 0)
 docker exec node-a goddi ha status -c /etc/goddi/config.yaml 2>/dev/null > "$OUT/ha-node-a-final-$TS.txt"
 grep -qE "sequence: *[1-9]" "$OUT/ha-node-a-final-$TS.txt" && ok "node-a lease sequence advanced (>0)" || nv "lease sequence not yet >0"
-nv "Facts/Lease hash-chain verification (facts_hash_chain_enabled default off) — unit-tested, not enabled in this run"
+# The D-03 hash chain is verified in ipam-acceptance: that suite creates the
+# IPAM mapping needed for DHCP facts to be produced. There are no fact events
+# to inspect in this scope-only DHCP drill, so no verdict is emitted here.
 printf '{"suite":"dhcp","timestamp":"%s","pass":%d,"fail":%d,"not_verified":%d,"ip1":"%s","ip4":"%s"}\n' "$TS" "$PASS" "$FAIL" "$NV" "${IP1:-}" "${IP4:-}" > "$OUT/dhcp-summary-$TS.json"
 echo "----"; echo "DHCP PASS=$PASS FAIL=$FAIL NOT_VERIFIED=$NV"
 [ "$FAIL" -eq 0 ]

@@ -43,7 +43,7 @@ func newOptionDB(t *testing.T) *sql.DB {
 	db.SetMaxIdleConns(1)
 
 	schema := `
-	CREATE TABLE dhcp_scopes (id TEXT PRIMARY KEY);
+	CREATE TABLE dhcp_scopes (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 	CREATE TABLE dhcp_reservations (id TEXT PRIMARY KEY);
 	CREATE TABLE dhcp_options (
 		id TEXT PRIMARY KEY,
@@ -55,13 +55,25 @@ func newOptionDB(t *testing.T) *sql.DB {
 		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
-	INSERT INTO dhcp_scopes (id) VALUES ('scope-lan');
+	INSERT INTO dhcp_scopes (id,name) VALUES ('scope-lan','lan');
 	INSERT INTO dhcp_reservations (id) VALUES ('res-printer');
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 	return db
+}
+
+func TestListOptionsIncludesScopeName(t *testing.T) {
+	m := NewManager(newOptionDB(t))
+	mustCreate(t, m, scopeID, OptionOptions{Code: OptionRouter, Value: "192.0.2.1", Priority: "scope"})
+	rows, err := m.ListOptions("")
+	if err != nil {
+		t.Fatalf("ListOptions: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ScopeName != "lan" {
+		t.Fatalf("scope name = %q in %+v, want lan", rows[0].ScopeName, rows)
+	}
 }
 
 func mustCreate(t *testing.T, m *Manager, scope string, opts OptionOptions) *Option {

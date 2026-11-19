@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch } from 'tdesign-vue-next';
@@ -17,6 +18,7 @@ import {
 
 defineOptions({ name: 'DHCPReservationsPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -37,8 +39,8 @@ const formData = reactive<CreateDHCPReservationRequest & { description: string }
 });
 
 const formRules = {
-  ip_address: [{ required: true, message: t('dhcp.leases.ip') + ' required', type: 'error' }],
-  mac_address: [{ required: true, message: t('dhcp.leases.mac') + ' required', type: 'error' }],
+  ip_address: [{ required: true, message: t('dhcp.leases.ip') + t('common.required'), type: 'error' }],
+  mac_address: [{ required: true, message: t('dhcp.leases.mac') + t('common.required'), type: 'error' }],
   scope_id: [{ required: true, message: t('dhcp.options.scopeRequired'), type: 'error' }]
 };
 
@@ -61,7 +63,7 @@ const columns: PrimaryTableCol[] = [
       const r = row as DHCPReservation;
       return h(TSpace, { size: 'small' }, () => [
         h(TLink, { theme: 'primary', disabled: !perm.canWrite('dhcp'), onClick: () => openEdit(r) }, () => t('common.edit')),
-        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id) }, () => t('common.delete'))
+        h(TLink, { theme: 'danger', disabled: !perm.canDelete('dhcp'), onClick: () => confirmDelete(r.id, r.ip_address || r.hostname) }, () => t('common.delete'))
       ]);
     }
   }
@@ -134,12 +136,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('dhcp')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteDHCPReservation(id);
@@ -159,7 +162,9 @@ onMounted(loadScopes);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dhcp.reservations.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dhcp.reservations.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('dhcp')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('dhcp.reservations.createReservation') }}
@@ -178,19 +183,19 @@ onMounted(loadScopes);
     >
       <TForm ref="formRef" :data="formData" :rules="formRules" label-align="top">
         <TFormItem :label="t('dhcp.leases.ip')" name="ip_address">
-          <TInput v-model="formData.ip_address" />
+          <TInput v-model="formData.ip_address" :placeholder="t('dhcp.leases.ip')" />
         </TFormItem>
         <TFormItem :label="t('dhcp.leases.mac')" name="mac_address">
-          <TInput v-model="formData.mac_address" />
+          <TInput v-model="formData.mac_address" :placeholder="t('dhcp.leases.mac')" />
         </TFormItem>
         <TFormItem :label="t('dhcp.leases.hostname')" name="hostname">
-          <TInput v-model="formData.hostname" />
+          <TInput v-model="formData.hostname" :placeholder="t('dhcp.leases.hostname')" />
         </TFormItem>
         <TFormItem :label="t('dhcp.leases.scope')" name="scope_id">
-          <TSelect v-model="formData.scope_id" :options="scopeOptions" filterable />
+          <TSelect v-model="formData.scope_id" :options="scopeOptions" filterable :placeholder="t('dhcp.leases.scope')" />
         </TFormItem>
         <TFormItem :label="t('common.descriptions')" name="description">
-          <TTextarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+          <TTextarea v-model="formData.description" :placeholder="t('common.descriptions')" :autosize="{ minRows: 2, maxRows: 4 }" />
         </TFormItem>
         <TFormItem :label="t('common.enabled')" name="enabled">
           <TSwitch v-model="formData.enabled" />
@@ -210,11 +215,7 @@ onMounted(loadScopes);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

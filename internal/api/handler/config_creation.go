@@ -65,3 +65,26 @@ func recordRecordSetCreation(r *http.Request, db *sql.DB, zoneID string) {
 	}
 	recordResourceCreation(r, configver.ResourceDNSRecords, zoneID, content)
 }
+
+// recordRecordSetState records the state of a zone's record set after an
+// operator-facing mutation has already applied it. Revision history is part
+// of the ADR contract; a direct record write without it left no rollback
+// point for the change.
+func recordRecordSetState(r *http.Request, db *sql.DB, zoneID, note string) {
+	if ConfigVersionService == nil || db == nil || zoneID == "" {
+		return
+	}
+	actor := ""
+	if r != nil {
+		actor = rbac.GetUsername(r.Context())
+	}
+	if _, err := ConfigVersionService.RecordState(configver.RecordStateRequest{
+		ResourceType: configver.ResourceDNSRecords,
+		ResourceID:   zoneID,
+		Actor:        actor,
+		Note:         note,
+	}); err != nil {
+		slog.Warn("config publishing: an applied record change was not recorded in the version log",
+			"zone_id", zoneID, "note", note, "error", err)
+	}
+}

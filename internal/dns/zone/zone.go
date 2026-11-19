@@ -572,6 +572,7 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		return nil, err
 	}
 	oldZoneName := existing.Name
+	wasEnabled := existing.Enabled
 
 	// Build update query dynamically.
 	var setClauses []string
@@ -798,9 +799,13 @@ func (m *ZoneManager) UpdateZone(id string, opts ZoneOptions) (*Zone, error) {
 		}
 	}
 
-	// Reload in-memory zone store.
+	// A disable is a revocation: stop answering before API success.
 	if m.zoneStore != nil {
-		m.zoneStore.Reload()
+		if wasEnabled && opts.Enabled != nil && !*opts.Enabled {
+			m.zoneStore.ReloadNow()
+		} else {
+			m.zoneStore.Reload()
+		}
 	}
 
 	return m.GetZone(id)
@@ -929,9 +934,9 @@ func (m *ZoneManager) DeleteZone(id string) error {
 		}
 	}
 
-	// Reload in-memory zone store.
+	// Deleting a zone revokes every answer it served.
 	if m.zoneStore != nil {
-		m.zoneStore.Reload()
+		m.zoneStore.ReloadNow()
 	}
 
 	return nil

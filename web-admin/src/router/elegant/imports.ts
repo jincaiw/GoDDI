@@ -41,6 +41,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   "dns_zone-detail": () => import("@/views/dns/zone-detail/[id].vue"),
   dns_zones: () => import("@/views/dns/zones/index.vue"),
   ipam_addresses: () => import("@/views/ipam/addresses/index.vue"),
+  "ipam_retirement-archive": () => import("@/views/ipam/retirement-archive/index.vue"),
   ipam_spaces: () => import("@/views/ipam/spaces/index.vue"),
   ipam_subnets: () => import("@/views/ipam/subnets/index.vue"),
   logs_audit: () => import("@/views/logs/audit/index.vue"),

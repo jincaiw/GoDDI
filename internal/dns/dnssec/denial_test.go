@@ -208,3 +208,38 @@ func TestSignNegativeIsFailClosed(t *testing.T) {
 		}
 	})
 }
+
+// A qtype miss under a wildcard is NODATA for a synthesized name: the NSEC
+// proof must come from the wildcard owner that produced the answer and must
+// be signed, not silently omitted.
+func TestSignNegativeWildcardNODATAUsesWildcardOwner(t *testing.T) {
+	r, zoneName, soa := denialFixture(t)
+	wildcard := "*." + zoneName
+	if _, err := r.db.Exec(`
+		INSERT INTO dns_records (id, zone_id, name, type, value, ttl, enabled)
+		SELECT 'r4', id, ?, 'A', '192.0.2.9', 300, 1 FROM dns_zones WHERE name = ?`, wildcard, zoneName); err != nil {
+		t.Fatal(err)
+	}
+	qname := "foo." + zoneName // no exact owner; matched by the wildcard
+	ns := r.SignNegative(zoneName, qname, dns.TypeAAAA, true, []dns.RR{soa})
+	var nsec *dns.NSEC
+	for _, rr := range ns {
+		if v, ok := rr.(*dns.NSEC); ok {
+			nsec = v
+		}
+	}
+	if nsec == nil {
+		t.Fatal("no NSEC in wildcard NODATA answer")
+	}
+	if nsec.Hdr.Name != dns.CanonicalName(wildcard) {
+		t.Fatalf("NSEC owner = %q, want wildcard %q", nsec.Hdr.Name, dns.CanonicalName(wildcard))
+	}
+	for _, rt := range nsec.TypeBitMap {
+		if rt == dns.TypeAAAA {
+			t.Fatal("wildcard NODATA NSEC advertises queried AAAA")
+		}
+	}
+	if err := findRRSIG(ns, dns.TypeNSEC).Verify(responderZSK(t, r, zoneName), []dns.RR{nsec}); err != nil {
+		t.Fatalf("RRSIG over wildcard NODATA NSEC does not verify: %v", err)
+	}
+}

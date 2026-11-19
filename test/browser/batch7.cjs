@@ -53,8 +53,8 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
 
  // dns client query end-to-end (real DNS query against local zone)
  await p.goto(BASE+'/tools/client',{waitUntil:'networkidle'}); await p.waitForTimeout(600);
- const qinput=p.locator('input').first();
- await qinput.fill('www.example.com');
+ const qinput=p.locator('.td-page input').first();
+ await qinput.fill('www.demo.test');
  await p.getByRole('button',{name:/执行查询|查询/}).first().click();
  await p.waitForTimeout(2000);
  const qbody=await p.locator('body').innerText();

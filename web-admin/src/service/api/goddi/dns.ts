@@ -151,8 +151,11 @@ export function setZonePermissions(id: string, permissions: ZonePermission[]) {
 // --- DNSSEC ---
 
 export interface DNSSECStatus {
-  enabled: boolean
+  dnssec_enabled: boolean
+  signed: boolean
+  experimental: boolean
   keys: DNSSECKey[]
+  key_count: number
 }
 
 export interface DNSSECKey {
@@ -415,6 +418,7 @@ export interface DNSQueryRequest {
 }
 
 export interface DNSQueryResponse {
+  source?: string
   answers: DNSQueryAnswer[]
   additional?: DNSQueryAnswer[]
   authority?: DNSQueryAnswer[]

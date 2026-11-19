@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jasonwa/goddi/internal/api/response"
 	"github.com/jasonwa/goddi/internal/configver"
+	"github.com/jasonwa/goddi/internal/enterprise/httpcontract"
 	"github.com/jasonwa/goddi/internal/rbac"
 )
 
@@ -68,11 +69,14 @@ type rollbackConfigRequest struct {
 // inside "the server is broken".
 func writeConfigError(w http.ResponseWriter, err error) {
 	var conflict *configver.ConflictError
+	var idempotencyConflict *configver.IdempotencyConflictError
 	var validation *configver.ValidationError
 
 	switch {
 	case errors.As(err, &conflict):
 		response.Conflict(w, conflict.Error())
+	case errors.As(err, &idempotencyConflict):
+		response.Conflict(w, idempotencyConflict.Error())
 	case errors.As(err, &validation):
 		response.BadRequest(w, validation.Error())
 	case errors.Is(err, configver.ErrResourceNotFound):
@@ -208,6 +212,25 @@ func PublishConfigRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If-Match is an optional HTTP form of the optimistic-concurrency
+	// baseline already expressed by expected_revision. Body-only clients keep
+	// their existing 409 conflict contract; a header-driven stale baseline
+	// follows the HTTP precondition contract with 412.
+	ifMatch := r.Header.Values("If-Match")
+	hasIfMatch := len(ifMatch) > 0
+	if hasIfMatch {
+		parsed, err := httpcontract.ParseIfMatch(ifMatch)
+		if err != nil {
+			response.BadRequest(w, "无效的 If-Match 前置条件")
+			return
+		}
+		if req.ExpectedRevision != 0 && req.ExpectedRevision != parsed {
+			response.BadRequest(w, "If-Match 与 expected_revision 不一致")
+			return
+		}
+		req.ExpectedRevision = parsed
+	}
+
 	result, err := svc.Publish(configver.PublishRequest{
 		ResourceType:     configver.ResourceType(req.ResourceType),
 		ResourceID:       req.ResourceID,
@@ -219,6 +242,13 @@ func PublishConfigRevision(w http.ResponseWriter, r *http.Request) {
 		DryRun:           req.DryRun,
 	})
 	if err != nil {
+		if hasIfMatch {
+			var conflict *configver.ConflictError
+			if errors.As(err, &conflict) {
+				response.PreconditionFailed(w, "If-Match 前置条件失败")
+				return
+			}
+		}
 		writeConfigError(w, err)
 		return
 	}

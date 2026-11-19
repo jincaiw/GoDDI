@@ -46,7 +46,8 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
  // 2. dhcp/leases
  await p.goto(BASE+'/dhcp/leases',{waitUntil:'networkidle'}); await p.waitForTimeout(900);
  body=await p.locator('body').innerText();
- step('leases renders', body.includes('租约管理') && (await p.locator('.t-table').count())>0 && (await p.locator('.n-data-table').count())===0);
+  const leaseText=await p.locator('.td-page').first().innerText().catch(()=>'');
+  step('leases renders', (leaseText.includes('租约')||body.includes('租约')) && (await p.locator('.t-table').count())>0 && (await p.locator('.n-data-table').count())===0);
  const filters=await p.locator('.filter-bar input, .filter-bar .t-select').count();
  step('leases filters (TDesign)', filters>=1, `controls=${filters}`);
  await p.screenshot({path: shot('ui-batch3-leases.png'),fullPage:true});

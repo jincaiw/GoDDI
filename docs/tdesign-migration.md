@@ -53,6 +53,7 @@
 样板页 `src/views/ipam/spaces/index.vue` 即为表单/弹窗类模板；`RemoteTable.vue` 为列表类模板。每页迁移清单：
 1. 组件替换：`NDataTable→t-table`、`NModal→t-dialog`、`NForm/NFormItem→t-form/t-form-item`、`NInput→t-input`、`NButton→t-button`、`useMessage→MessagePlugin`、`ConfirmDialog→DialogPlugin.confirm`、`PageHeader→t-card` 页头。
 2. 保留：`usePermission()`、`$t` / `useI18n()`、`service/api/goddi/*` 全部调用、信封与分页处理。
+   RBAC 呈现规则：导航按读权限过滤；页面内写/删操作在用户无权限时禁用并保留可见性，避免隐藏造成功能位置不可发现；危险批量操作按确认对话框二次确认。
 3. 表格 `cell` 用 `h(...)` 渲染函数（TS 类型友好），不要引入 JSX（当前 `lang="ts"`）。
 4. 删除该文件的 `naive-ui` import；完成后该文件不再计入 `grep -rl naive-ui src/views`。
 

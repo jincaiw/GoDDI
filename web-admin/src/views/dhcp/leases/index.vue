@@ -1,14 +1,18 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, MessagePlugin, Tag as TTag, Link as TLink } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import RemoteTable from '@/components/RemoteTable.vue';
 import { usePermission } from '@/composables/usePermission';
+import { dhcpLeaseStatusLabel } from '@/composables/useDhcpStatusLabels';
+import { formatAPITime } from '@/utils/datetime';
 import { deleteDHCPLease, listDHCPLeases, type DHCPLease } from '@/service/api/goddi/dhcp';
 
 defineOptions({ name: 'DHCPLeasesPage' });
 
+/** Starter list page: TCard header + TCard filter bar + shared remote TTable. */
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -16,13 +20,8 @@ const tableRef = ref<{ reload: () => Promise<void> } | null>(null);
 const searchQuery = ref('');
 const statusFilter = ref<string | undefined>(undefined);
 
-const statusOptions = [
-  { label: 'Active', value: 'active' },
-  { label: 'Offered', value: 'offered' },
-  { label: 'Expired', value: 'expired' },
-  { label: 'Released', value: 'released' },
-  { label: 'Conflict', value: 'conflict' }
-];
+const statusValues = ['active', 'offered', 'expired', 'released', 'conflict'];
+const statusOptions = statusValues.map(value => ({ label: dhcpLeaseStatusLabel(t, value), value }));
 
 // An offer is pending and a conflict is an address held out of the pool after
 // a DECLINE; neither should look like a confirmed binding.
@@ -52,11 +51,11 @@ const columns: PrimaryTableCol[] = [
     width: 110,
     cell: (h, { row }) =>
       h(TTag, { size: 'small', theme: statusTheme[(row as DHCPLease).status] ?? 'default', variant: 'light' }, () =>
-        String((row as DHCPLease).status)
+        dhcpLeaseStatusLabel(t, String((row as DHCPLease).status))
       )
   },
-  { colKey: 'start_time', title: t('dhcp.leases.startTime'), width: 170 },
-  { colKey: 'end_time', title: t('dhcp.leases.endTime'), width: 170 },
+  { colKey: 'lease_start', title: t('dhcp.leases.startTime'), width: 170, cell: (_h, { row }) => formatAPITime((row as DHCPLease).lease_start) },
+  { colKey: 'lease_end', title: t('dhcp.leases.endTime'), width: 170, cell: (_h, { row }) => formatAPITime((row as DHCPLease).lease_end) },
   {
     colKey: 'op',
     title: t('common.actions'),
@@ -74,19 +73,24 @@ const columns: PrimaryTableCol[] = [
   }
 ];
 
+function msgError(err: unknown) {
+  void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+}
+
 function confirmRelease(id: string) {
   if (!perm.canDelete('dhcp')) return;
   const dlg = DialogPlugin.confirm({
     header: t('dhcp.leases.release'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteDHCPLease(id);
         void MessagePlugin.success(t('common.success'));
         await tableRef.value?.reload();
       } catch (err) {
-        void MessagePlugin.error(err instanceof Error ? err.message : t('common.failed'));
+        msgError(err);
       }
       dlg.hide();
     }
@@ -97,7 +101,9 @@ function confirmRelease(id: string) {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dhcp.leases.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dhcp.leases.title') }}</h2>
+      </div>
       <TButton variant="outline" @click="tableRef?.reload()">
         <template #icon><TIcon name="refresh" /></template>
         {{ t('common.refresh') }}
@@ -137,12 +143,8 @@ function confirmRelease(id: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .filter-bar :deep(.t-card__body) {
   padding: 12px 20px;

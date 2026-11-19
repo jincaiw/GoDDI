@@ -12,6 +12,10 @@ import (
 	"github.com/miekg/dns"
 )
 
+// zoneLoadAfterDBForTest allows a test to interleave two reloads. No-op in
+// production; see store_reload_order_test.go.
+var zoneLoadAfterDBForTest = func() {}
+
 // ZoneRecord represents a DNS record stored in the zone.
 type ZoneRecord struct {
 	ID       string `json:"id"`
@@ -50,6 +54,9 @@ type Store struct {
 	nextExpiry  time.Time
 	closed      bool
 	loadWG      sync.WaitGroup
+	// loadSeq identifies a reload attempt. A load that read the DB before a
+	// newer one started must not publish its older view when it finishes last.
+	loadSeq uint64
 	// expired holds secondary zones whose SOA EXPIRE elapsed without a
 	// successful refresh. RFC 1035 §6.3 requires such a zone to stop
 	// answering authoritatively: continuing to serve the local copy would
@@ -144,15 +151,25 @@ func (s *Store) Load() {
 		return
 	}
 	s.loadWG.Add(1)
+	s.loadSeq++
+	seq := s.loadSeq
 	s.mu.Unlock()
 	defer s.loadWG.Done()
 
 	// Load data outside the lock to avoid blocking readers.
 	newZones, nextExpiry := s.loadFromDB()
+	zoneLoadAfterDBForTest()
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		return
+	}
+	if seq != s.loadSeq {
+		// A newer reload started while this one was reading. Its view is
+		// newer than ours; publishing ours would roll the data plane back.
+		s.mu.Unlock()
+		slog.Info("zone_store: discarding out-of-order reload", "seq", seq, "current", s.loadSeq)
 		return
 	}
 	if newZones == nil {
@@ -658,8 +675,19 @@ func (s *Store) NameExists(zoneName, qname string) bool {
 	if !ok {
 		return false
 	}
-	_, exists := zd.records[dns.Fqdn(strings.ToLower(qname))]
-	return exists
+	fqdn := dns.Fqdn(strings.ToLower(qname))
+	if _, exists := zd.records[fqdn]; exists {
+		return true
+	}
+	// A name matched by a wildcard exists even when the queried qtype is
+	// absent. Reporting NXDOMAIN there would let a resolver cache a negative
+	// answer for a name the zone actually publishes.
+	for _, wild := range wildcardCandidates(dns.Fqdn(strings.ToLower(zoneName)), fqdn) {
+		if _, exists := zd.records[wild]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 // lookupInZone searches for matching records in a specific zone.

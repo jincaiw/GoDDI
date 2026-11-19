@@ -123,7 +123,7 @@ func field(record []string, index int) string {
 
 func (ie *ImportExport) planSubnets(q importQuerier, spaceID string, data []byte) (*subnetImport, error) {
 	var exists int
-	if err := q.QueryRow("SELECT COUNT(*) FROM ipam_spaces WHERE id = ?", spaceID).Scan(&exists); err != nil {
+	if err := q.QueryRow("SELECT COUNT(*) FROM ipam_spaces WHERE id = ? AND lifecycle_state = 'active'", spaceID).Scan(&exists); err != nil {
 		return nil, fmt.Errorf("verify space: %w", err)
 	}
 	if exists == 0 {
@@ -181,7 +181,8 @@ func (ie *ImportExport) planSubnets(q importQuerier, spaceID string, data []byte
 }
 
 func readExistingSubnets(q importQuerier, spaceID string) (map[string]existingSubnet, error) {
-	rows, err := q.Query(`SELECT id, name, cidr, vlan_id, COALESCE(location,''), COALESCE(description,'') FROM ipam_subnets WHERE space_id = ?`, spaceID)
+	rows, err := q.Query(`SELECT id, name, cidr, vlan_id, COALESCE(location,''), COALESCE(description,'') FROM ipam_subnets WHERE space_id = ? AND lifecycle_state = 'active'`,
+		spaceID)
 	if err != nil {
 		return nil, fmt.Errorf("read existing subnets: %w", err)
 	}

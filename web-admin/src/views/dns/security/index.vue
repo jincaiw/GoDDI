@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, MessagePlugin, Switch as TSwitch, Tag as TTag, Link as TLink } from 'tdesign-vue-next';
@@ -32,15 +33,17 @@ const policyForm = reactive({
   priority: 0
 });
 
-const actionOptions = [
-  { label: 'Allow', value: 'allow' },
-  { label: 'Block', value: 'block' },
-  { label: 'Apply Lists', value: 'apply_lists' }
-];
+const actionValues = ['allow', 'block', 'apply_lists'];
+const actionOptions = actionValues.map(value => ({ label: actionLabel(value), value }));
+function actionLabel(value: string): string {
+  const key = `dns.security.actionValues.${String(value).toLowerCase()}`;
+  const out = t(key);
+  return out === key ? value : out;
+}
 
 const formRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }],
-  source_cidr: [{ required: true, message: t('dns.security.sourceCidr') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }],
+  source_cidr: [{ required: true, message: t('dns.security.sourceCidr') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -51,7 +54,7 @@ const columns: PrimaryTableCol[] = [
     title: t('dns.security.action'),
     cell: (h, { row }) =>
       h(TTag, { size: 'small', theme: (row as ClientPolicy).action === 'allow' ? 'success' : 'danger', variant: 'light' }, () =>
-        String((row as ClientPolicy).action)
+        actionLabel(String((row as ClientPolicy).action))
       )
   },
   { colKey: 'priority', title: t('common.priority'), width: 90 },
@@ -71,7 +74,7 @@ const columns: PrimaryTableCol[] = [
         {
           theme: 'danger',
           disabled: !perm.canDelete('dns'),
-          onClick: () => confirmDelete((row as ClientPolicy).id)
+          onClick: () => confirmDelete((row as ClientPolicy).id, (row as ClientPolicy).name)
         },
         () => t('common.delete')
       )
@@ -114,11 +117,11 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('dns')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
     onConfirm: async () => {
       try {
@@ -137,7 +140,9 @@ function confirmDelete(id: string) {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dns.security.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dns.security.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('dns.security.createPolicy') }}
@@ -186,10 +191,5 @@ function confirmDelete(id: string) {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 </style>

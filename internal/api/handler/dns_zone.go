@@ -424,10 +424,8 @@ func EnableDNSSEC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Algorithm string `json:"algorithm"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeDNSSECEnableRequest(r.Body)
+	if err != nil {
 		response.BadRequest(w, "无效的请求数据")
 		return
 	}

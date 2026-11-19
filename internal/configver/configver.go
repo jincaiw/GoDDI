@@ -214,6 +214,21 @@ func (e *ConflictError) Error() string {
 		e.ResourceType, e.ResourceID, e.ExpectedRevision, e.ActualRevision)
 }
 
+// IdempotencyConflictError reports reuse of a key for different content.
+// It is a client conflict, not an optimistic-concurrency race: retrying the
+// second payload with a new key is the recovery path.
+type IdempotencyConflictError struct {
+	ResourceType   ResourceType
+	ResourceID     string
+	IdempotencyKey string
+}
+
+func (e *IdempotencyConflictError) Error() string {
+	return fmt.Sprintf(
+		"configver: idempotency key %q was already used for different content on %s %s",
+		e.IdempotencyKey, e.ResourceType, e.ResourceID)
+}
+
 // nowFunc is overridable in tests. Production always uses UTC wall clock so
 // stored timestamps are comparable with SQLite's datetime('now').
 var nowFunc = func() time.Time { return time.Now().UTC() }

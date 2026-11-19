@@ -158,6 +158,28 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
     settings.value.layout.mode = mode;
   }
 
+  /** Set theme radius (starter "border radius" control) */
+  function setThemeRadius(radius: number) {
+    settings.value.themeRadius = radius;
+  }
+
+  /** Element switches mirrored from the official starter drawer */
+  function setBreadcrumbVisible(visible: boolean) {
+    settings.value.header.breadcrumb.visible = visible;
+  }
+
+  function setTabVisible(visible: boolean) {
+    settings.value.tab.visible = visible;
+  }
+
+  function setFooterVisible(visible: boolean) {
+    settings.value.footer.visible = visible;
+  }
+
+  function setFixedHeaderAndTab(fixed: boolean) {
+    settings.value.fixedHeaderAndTab = fixed;
+  }
+
   /** Setup theme vars to global */
   function setupThemeVarsToGlobal() {
     const { themeTokens, darkThemeTokens } = createThemeToken(
@@ -165,7 +187,12 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
       settings.value.tokens,
       settings.value.recommendColor
     );
-    addThemeVarsToGlobal(themeTokens, darkThemeTokens);
+    addThemeVarsToGlobal(themeTokens, darkThemeTokens, Number(settings.value.themeRadius) || 6);
+  }
+
+  /** Show or hide the global watermark */
+  function setWatermarkVisible(visible: boolean) {
+    settings.value.watermark.visible = visible;
   }
 
   /**
@@ -250,6 +277,12 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
       { immediate: true }
     );
 
+    // The drawer's radius control must re-emit the bridged --td-radius-* vars.
+    watch(
+      () => settings.value.themeRadius,
+      () => setupThemeVarsToGlobal()
+    );
+
     // watch watermark settings to control timer
     watch(
       () => [settings.value.watermark.visible, settings.value.watermark.enableTime],
@@ -278,6 +311,12 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
     toggleThemeScheme,
     updateThemeColors,
     setThemeLayout,
+    setThemeRadius,
+    setBreadcrumbVisible,
+    setTabVisible,
+    setFooterVisible,
+    setFixedHeaderAndTab,
+    setWatermarkVisible,
     setWatermarkEnableUserName,
     setWatermarkEnableTime
   };

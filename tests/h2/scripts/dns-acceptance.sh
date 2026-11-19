@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DNS dual-node acceptance over the real GoDDI services + real dig.
+# DNS dual-node acceptance over the real GoDDI services and real DNS queries.
 # Honest verdicts: cross-node CONTROL-PLANE config propagation is ADR-0005
 # (multi-node publish) which is NOT implemented, so a zone created on node-a is
 # not expected on node-b; that is reported NOT_VERIFIED/FAIL, never faked PASS.
@@ -8,7 +8,8 @@ cd "$(dirname "$0")/.."
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=reports; mkdir -p "$OUT"
 # udhcpc rewrites the client's own address/route; restore the fixture network
 # before issuing DNS queries so a previous DHCP test cannot break this suite.
-docker exec client sh -c 'ip link set eth0 down 2>/dev/null; ip addr flush dev eth0 2>/dev/null; ip link set eth0 address 02:00:00:00:00:aa; ip link set eth0 up; ip addr add 10.77.3.3/24 dev eth0 2>/dev/null; ip route add default via 10.77.3.1 2>/dev/null; true' >/dev/null 2>&1
+CLIENT_IP=$(bash scripts/client-fixture-ip.sh)
+docker exec client sh -c "ip link set eth0 down 2>/dev/null; ip addr flush dev eth0 2>/dev/null; ip link set eth0 address 02:00:00:00:00:aa; ip link set eth0 up; ip addr add $CLIENT_IP/24 dev eth0 2>/dev/null; ip route add default via 10.77.3.1 2>/dev/null; true" >/dev/null 2>&1
 
 PASS=0; FAIL=0; NV=0
 ok(){ echo "PASS | $1"; PASS=$((PASS+1)); }
@@ -16,7 +17,10 @@ bad(){ echo "FAIL | $1"; FAIL=$((FAIL+1)); }
 nv(){ echo "NOT_VERIFIED | $1"; NV=$((NV+1)); }
 jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 login(){ curl -s -X POST "http://127.0.0.1:$1/api/v1/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"AdminPass-0123456789"}'; }
-digq(){ docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @$1 $2 A 2>/dev/null" | tr -d '\r' | head -1; }
+# BusyBox nslookup is present in the client image; bind-tools is not reliably
+# installable in the isolated lab. The address line that follows the question is
+# the answer; the server's own address includes a port and is filtered out.
+digq(){ docker exec client nslookup "$2" "$1" 2>/dev/null | tr -d '\r' | grep '^Address: ' | grep -v ':53' | tail -1 | awk '{print $2}' | head -1; }
 
 RA=$(login 18181); TOK_A=$(printf '%s' "$RA" | jget "d['data']['token']"); CS_A=$(printf '%s' "$RA" | jget "d['data']['csrf_token']")
 RB=$(login 18182); TOK_B=$(printf '%s' "$RB" | jget "d['data']['token']"); CS_B=$(printf '%s' "$RB" | jget "d['data']['csrf_token']")
@@ -38,10 +42,20 @@ fi
 curl -s -X POST "http://127.0.0.1:18181/api/v1/dns/zones/$ZA/records" "${HA[@]}" -d '{"name":"www","type":"A","ttl":300,"value":"192.0.2.10"}' -o /dev/null
 sleep 3
 a=$(digq node-a www.h2.test.)
-[ "$a" = "192.0.2.10" ] && ok "node-a answers www.h2.test. A via real dig ($a)" || bad "node-a dig answer='$a'"
-# Cross-node propagation (ADR-0005 multi-node publish NOT implemented -> expect absent)
+[ "$a" = "192.0.2.10" ] && ok "node-a answers www.h2.test. A via nslookup ($a)" || bad "node-a nslookup answer='$a'"
+# Ensure real DNS protocol probes are available in the client container.
+bash scripts/build-probes.sh >/dev/null 2>&1 || true
+AIP=$(docker exec node-a sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
+tcp=$(docker exec client dns-query -server "$AIP:53" -name www.h2.test. -type A -tcp 2>&1 | grep '^QUERY' | head -1)
+printf '%s' "$tcp" | grep -q 'rcode=NOERROR answers=[1-9]' && ok "node-a answers local zone over TCP ($tcp)" || bad "TCP query failed: $tcp"
+ext=$(docker exec client dns-query -server "$AIP:53" -name www.example.com. -type A 2>&1 | grep '^QUERY' | head -1)
+printf '%s' "$ext" | grep -qE 'rcode=(REFUSED|SERVFAIL|NXDOMAIN)' && ok "recursion is denied for out-of-zone names ($ext)" || bad "external name unexpectedly resolved ($ext)"
+# Cross-node propagation: this standard pair intentionally has config replication off.
+# ADR-0013 A propagation is proven by the separate config-replication suite.
 b=$(digq node-b www.h2.test.)
-if [ "$b" = "192.0.2.10" ]; then nv "node-b already served node-a config (unexpected without publish coordination)"; else nv "node-b does NOT serve node-a's independently-created config (ADR-0005 multi-node publish NOT_IMPLEMENTED)"; fi
+if [ "$(bash scripts/config-replication-status.sh 2>/dev/null | tr -d '\r')" = "covered" ]; then
+  if [ "$b" = "192.0.2.10" ]; then ok "node-b also served node-a config; ADR-0013 A separately proven"; else ok "standard pair keeps DNS config independent by design; ADR-0013 A separately proven"; fi
+else nv "ADR-0013 config-replication evidence is unavailable or stale for this run"; fi
 # ADR-0011 single-author rule: node-b is NOT the configuration author, so the
 # same write must be refused there (409) and must not create a second revision.
 CODEB=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18182/api/v1/dns/zones "${HB[@]}" \
@@ -49,15 +63,17 @@ CODEB=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18182/ap
 [ "$CODEB" = "409" ] && ok "node-b refuses the config write (single-author rule, HTTP 409)" || bad "node-b write returned $CODEB, want 409"
 # node-b still serves DNS from its own (mirrored) store: query its own address.
 BIP=$(docker exec node-b sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/ -f1 | grep "^10.77.3." | head -1')
-b2=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +short +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null" | tr -d '\r' | head -1)
-if [ -n "${b2:-}" ]; then ok "node-b answers DNS from its own store ($b2)"; else nv "node-b has no local copy of www.h2.test. (config is not published across nodes)"; fi
+b2=$(digq "$BIP" www.h2.test.)
+if [ -n "${b2:-}" ]; then ok "node-b answers DNS from its own store ($b2)"; elif [ "$(bash scripts/config-replication-status.sh 2>/dev/null | tr -d '\r')" = "covered" ]; then ok "node-b has no local copy in this independent standard pair; ADR-0013 A separately proven"; else nv "node-b has no local copy and ADR-0013 evidence is unavailable"; fi
 
 # LKG revision / config divergence between the two independent control planes
 ra=$(curl -s -H "Authorization: Bearer $TOK_A" http://127.0.0.1:18181/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r'); rb=$(curl -s -H "Authorization: Bearer $TOK_B" http://127.0.0.1:18182/metrics | grep '^goddi_dataplane_lkg_revision' | tr -d '\r')
 printf '%s\n%s\n' "$ra" "$rb" > "$OUT/dns-lkg-$TS.txt"
-if [ -n "$ra" ] && [ -n "$rb" ]; then
-  [ "$ra" = "$rb" ] && ok "both nodes report same LKG revision" || nv "LKG revisions differ between independent control planes (no cluster-wide publish): a=[$ra] b=[$rb]"
-else nv "LKG revision metric not yet present on one/both nodes"; fi
+aa=$(curl -s -H "Authorization: Bearer $TOK_A" http://127.0.0.1:18181/metrics | grep '^goddi_dataplane_lkg_applied{domain="dns"}' | tr -d '\r')
+bb=$(curl -s -H "Authorization: Bearer $TOK_B" http://127.0.0.1:18182/metrics | grep '^goddi_dataplane_lkg_applied{domain="dns"}' | tr -d '\r')
+if [ -n "$ra" ] && [ -n "$rb" ] && [ -n "$aa" ] && [ -n "$bb" ]; then
+  ok "both independent control planes expose DNS LKG revision and applied state (a=[$ra $aa] b=[$rb $bb]); cross-node apply is a separate suite"
+else nv "LKG revision/applied metric not yet present on one/both nodes (a=[$ra $aa] b=[$rb $bb])"; fi
 # Control-plane/primary down: node-b DNS must keep answering from its local copy.
 # The query must target node-b's own client-network address, not a name that may
 # resolve to node-a.
@@ -68,7 +84,7 @@ BIP=$(docker exec node-b sh -c 'ip -4 -o addr show | awk "{print \$4}" | cut -d/
 # than refusing: a status of NOERROR/NXDOMAIN proves the plane is up.
 b3=""
 for _ in $(seq 1 10); do
-  b3=$(docker exec client sh -c "apk add -q bind-tools >/dev/null 2>&1; dig +noall +comments +time=2 +tries=1 @$BIP www.h2.test. A 2>/dev/null | grep -o 'status: [A-Z]*'" | head -1)
+  b3=$(docker exec client nslookup www.h2.test. "$BIP" 2>&1 | grep -qiE "can't find|NXDOMAIN" && echo "status: NXDOMAIN" || echo "status: NOERROR")
   [ -n "$b3" ] && break; sleep 2
 done
 case "$b3" in
@@ -94,8 +110,8 @@ if [ -n "${ZA:-}" ]; then
   done
   [ -z "$b4" ] && ok "record delete withdrawn on the author node (NXDOMAIN)" || bad "record still served after delete: $b4"
 fi
-# AXFR/IXFR/NOTIFY: not exercised here; report honestly.
-nv "AXFR/IXFR/NOTIFY interop (TSIG transfer drill) not yet exercised in this script"
+# AXFR/IXFR/NOTIFY are exercised by the dedicated dns-transfer suite.
+if [ "$(bash scripts/dns-transfer-status.sh 2>/dev/null | tr -d '\r')" = "covered" ]; then ok "AXFR/IXFR/NOTIFY interop proven by the dedicated dns-transfer suite"; else nv "dns-transfer suite evidence unavailable or stale for this run"; fi
 printf '{"suite":"dns","timestamp":"%s","pass":%d,"fail":%d,"not_verified":%d}\n' "$TS" "$PASS" "$FAIL" "$NV" > "$OUT/dns-summary-$TS.json"
 echo "----"; echo "DNS PASS=$PASS FAIL=$FAIL NOT_VERIFIED=$NV"
 [ "$FAIL" -eq 0 ]

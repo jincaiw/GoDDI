@@ -1,6 +1,6 @@
 # Browser regression harness
 
-15 Playwright suites that exercise the TDesign management UI against an
+19 Playwright suites that exercise the TDesign management UI against an
 **isolated** GoDDI server (real Chromium headless, real HTTP API, real SQLite).
 This is the reproducible form of the browser evidence in
 `docs/audit/IMPLEMENTATION-STATUS.md` §1. **Never point it at production** —
@@ -50,7 +50,7 @@ Environment variables:
 | `GODDI_SHOT_DIR` | `$TMPDIR/goddi-browser-shots` | screenshot destination |
 | `GODDI_TEST_DB` | `/tmp/goddi-run/node1/goddi.db` | isolated DB for the reset helper |
 | `GODDI_SKIP_RESET` | `0` | set to 1 to skip the pre-run reset |
-| `GODDI_SUITES` | all 15 | subset, space-separated |
+| `GODDI_SUITES` | all 24 | subset, space-separated |
 
 ## Suites
 
@@ -79,6 +79,13 @@ review dossier's headline counts, unique numbered headings / unchanged
 pointing at real sections; no browser needed),
 `i18n` (static guard: DNSSEC hints stay current in both languages, and every literal
 `t('...')` key resolves in both locales; no browser needed),
+`theme` (static guard: devflow TDesign Blue default and production override, light
+side menu, TDesign-token shell, TDesign status colors, global responsive caps and
+tokenized spacing/radius/font rules, localized dashboard rcode labels, GoDDI
+package identity, and raw-code coverage in `route-audit`; no browser needed),
+`h2-report-ref` (static guard: G5 and both H2 acceptance docs cite the newest
+`H2-REPORT-<ts>.json`; no browser needed),
+`route-audit` (walks every static route plus a real zone detail page; fails on raw i18n keys, ISO timestamps, known raw enums, navigation errors, or page errors),
 `contracts` (static guard: nav/ROUTE_META keys have translations in both languages,
 navigable nav items have PATHS entries, ROUTE_META keys match generated routes,
 ROUTE_META permissions exist in RBAC, frontend service API literals match a documented
@@ -102,5 +109,5 @@ non-zero if any suite failed or returned a non-zero exit code.
 `reset_testdata.py` refuses a missing/unopenable DB with a clear message and a
 non-zero exit instead of a Python traceback; `run.sh` only passes a DB path
 when `GODDI_TEST_DB` is set, so the helper's default still applies. Chromium
-auto-detection was verified by running the full 15 suites with `GODDI_CHROMIUM`
+auto-detection was verified by running the full 19 browser suites with `GODDI_CHROMIUM`
 unset (round 130, `TOTAL_FAILS=0`).

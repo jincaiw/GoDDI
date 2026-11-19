@@ -11,7 +11,7 @@ import (
 const schemaReplState = `CREATE TABLE config_repl_state (
 	source_node TEXT PRIMARY KEY, applied_version INTEGER NOT NULL DEFAULT 0,
 	applied_rows INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
-	synced_at DATETIME)`
+	synced_at DATETIME, expected_version INTEGER NOT NULL DEFAULT 0)`
 
 // authorServer stands in for the author node's snapshot endpoint.
 func authorServer(t *testing.T, src *sql.DB, token string) *httptest.Server {

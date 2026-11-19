@@ -1,1 +1,0 @@
-import{P as e,Y as t,j as n,z as r}from"./index-Drc8x4s-.js";var i={class:`h-full`},a=[`src`],o=r({name:`iframe-page`,__name:`[url]`,props:{url:{}},setup(r){return(o,s)=>(t(),e(`div`,i,[n(`iframe`,{id:`iframePage`,class:`size-full`,src:r.url},null,8,a)]))}});export{o as default};

@@ -1,0 +1,44 @@
+name: goddi-h2-splitplane
+x-env: &env
+  GODDI_ADMIN_USERNAME: "admin"
+  GODDI_ADMIN_PASSWORD: "AdminPass-0123456789"
+  GODDI_LOG_LEVEL: info
+services:
+  control:
+    container_name: split-control
+    image: goddi:h2
+    networks: [split-net]
+    volumes:
+      - split-data:/var/lib/goddi
+      - ./config/split-control.yaml:/etc/goddi/config.yaml:ro
+    environment:
+      <<: *env
+    ports:
+      - "18191:6080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:6080/health || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+  dns:
+    container_name: split-dns
+    image: goddi:h2
+    depends_on:
+      control:
+        condition: service_healthy
+    networks: [split-net]
+    volumes:
+      - split-data:/var/lib/goddi
+      - ./config/split-dns.yaml:/etc/goddi/config.yaml:ro
+    environment:
+      <<: *env
+  client:
+    container_name: split-client
+    image: alpine:3.24
+    networks: [split-net]
+    command: ["sh","-c","sleep infinity"]
+networks:
+  split-net:
+    ipam: {config: [{subnet: 10.78.0.0/24}]}
+volumes:
+  split-data:

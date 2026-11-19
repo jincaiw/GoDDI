@@ -3,8 +3,17 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { getHAStatus, type DHCPHAStatus } from '@/service/api/goddi/ha';
+import ConfigReplicationAlert from '@/components/ConfigReplicationAlert.vue';
+import { formatAPITime } from '@/utils/datetime';
+import { haRoleLabel, haStateLabel } from '@/composables/useDhcpStatusLabels';
 
 defineOptions({ name: 'DHCPHAPage' });
+
+/**
+ * Starter-style detail page: TCard page header + TAlert banners +
+ * TDescriptions detail grid + TEmpty states. The read-only HA status
+ * contract, auto-refresh timer and ConfigReplicationAlert are unchanged.
+ */
 
 const { t } = useI18n();
 
@@ -46,13 +55,13 @@ const rows = computed(() => {
   if (!s || !s.ha_enabled) return [];
   return [
     { label: t('haStatus.nodeId'), value: s.node_id ?? '-' },
-    { label: t('haStatus.configuredRole'), value: s.configured_role ?? '-' },
-    { label: t('haStatus.roleInForce'), value: s.role_in_force ?? s.role ?? '-' },
+    { label: t('haStatus.configuredRole'), value: s.configured_role ? haRoleLabel(t, s.configured_role) : '-' },
+    { label: t('haStatus.roleInForce'), value: s.role_in_force || s.role ? haRoleLabel(t, s.role_in_force || s.role || '') : '-' },
     { label: t('haStatus.sequence'), value: s.sequence ?? '-' },
     { label: t('haStatus.acknowledged'), value: s.acknowledged_sequence ?? '-' },
     { label: t('haStatus.peerApplied'), value: s.peer_applied_sequence ?? s.applied_sequence ?? '-' },
     { label: t('haStatus.peerFacts'), value: s.peer_applied_facts_sequence ?? '-' },
-    { label: t('haStatus.peerLastSeen'), value: s.peer_last_seen ?? '-' }
+    { label: t('haStatus.peerLastSeen'), value: formatAPITime(s.peer_last_seen) }
   ];
 });
 
@@ -71,68 +80,79 @@ onUnmounted(() => {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <div class="ha-header">
+      <div class="td-page-title">
         <div>
           <h2>{{ t('route.dhcp_ha') }}</h2>
           <p class="ha-subtitle">{{ t('haStatus.subtitle') }}</p>
         </div>
-        <div class="ha-actions">
-          <TSwitch v-model="autoRefresh" :label="[t('haStatus.autoOn'), t('haStatus.autoOff')]" />
-          <TButton theme="primary" variant="outline" :loading="loading" @click="refresh">
-            {{ t('common.refresh') }}
-          </TButton>
-        </div>
       </div>
+      <TSpace>
+        <TSwitch v-model="autoRefresh" :label="[t('haStatus.autoOn'), t('haStatus.autoOff')]" />
+        <TButton theme="primary" variant="outline" :loading="loading" @click="refresh">
+          {{ t('common.refresh') }}
+        </TButton>
+      </TSpace>
     </TCard>
 
-    <TAlert v-if="error" theme="error" :message="error" class="ha-alert" />
+    <ConfigReplicationAlert />
+
+    <TAlert v-if="error && status" theme="error" role="alert" :message="error" close class="ha-alert" @close="error = ''">
+      <template #operation>
+        <TButton size="small" theme="primary" variant="outline" @click="refresh">{{ t('common.retry') }}</TButton>
+      </template>
+    </TAlert>
 
     <TCard v-if="status && !status.ha_enabled" :bordered="false">
       <TEmpty :description="t('haStatus.standalone')">
         <template #image><TIcon name="server" size="48px" /></template>
         <template #action>
-          <TTag theme="default" variant="light-outline">standalone</TTag>
+          <TTag theme="default" variant="light-outline">{{ t('common.standalone') }}</TTag>
         </template>
       </TEmpty>
     </TCard>
 
     <TCard v-else-if="status" :bordered="false">
-      <div class="ha-state-row">
+      <TSpace class="ha-state-row" size="large">
         <div class="ha-state-item">
           <span class="ha-label">{{ t('haStatus.state') }}</span>
-          <TTag :theme="stateTheme" variant="light" size="large">{{ status.state ?? '-' }}</TTag>
+          <TTag :theme="stateTheme" variant="light" size="large">{{ status.state ? haStateLabel(t, status.state) : '-' }}</TTag>
         </div>
         <div class="ha-state-item">
           <span class="ha-label">{{ t('haStatus.redundant') }}</span>
           <TTag :theme="boolTheme(status.redundant)" variant="light" size="large">
-            {{ status.redundant === true ? 'true' : status.redundant === false ? 'false' : '-' }}
+            {{ status.redundant === true ? t('common.yes') : status.redundant === false ? t('common.no') : '-' }}
           </TTag>
         </div>
         <div class="ha-state-item">
           <span class="ha-label">{{ t('haStatus.promising') }}</span>
           <TTag :theme="boolTheme(status.promising)" variant="light" size="large">
-            {{ status.promising === true ? 'true' : status.promising === false ? 'false' : '-' }}
+            {{ status.promising === true ? t('common.yes') : status.promising === false ? t('common.no') : '-' }}
           </TTag>
         </div>
-      </div>
+      </TSpace>
 
-      <div class="ha-grid">
-        <div v-for="row in rows" :key="row.label" class="ha-cell">
-          <span class="ha-label">{{ row.label }}</span>
+      <TDescriptions :column="2" bordered size="small" class="ha-descriptions">
+        <TDescriptionsItem v-for="row in rows" :key="row.label" :label="row.label">
           <span class="ha-value">{{ row.value }}</span>
-        </div>
-      </div>
+        </TDescriptionsItem>
+      </TDescriptions>
     </TCard>
 
     <TCard v-else :bordered="false" :loading="loading">
-      <TEmpty :description="t('common.loading')" />
+      <TAlert v-if="error" theme="error" role="alert" :message="error">
+        <template #operation>
+          <TButton size="small" theme="primary" variant="outline" @click="refresh">{{ t('common.retry') }}</TButton>
+        </template>
+      </TAlert>
     </TCard>
 
     <TCard :bordered="false" class="ha-source">
-      <span>{{ t('haStatus.source') }}</span>
-      <code>GET /api/v1/dhcp/ha</code>
-      <span class="ha-source-sep">·</span>
-      <span>{{ t('haStatus.readOnly') }}</span>
+      <TSpace size="small">
+        <span>{{ t('haStatus.source') }}</span>
+        <TTag theme="default" variant="light-outline">GET /api/v1/dhcp/ha</TTag>
+        <span class="ha-source-sep">·</span>
+        <span>{{ t('haStatus.readOnly') }}</span>
+      </TSpace>
     </TCard>
   </div>
 </template>
@@ -144,36 +164,22 @@ onUnmounted(() => {
   gap: 16px;
 }
 .td-page-header :deep(.t-card__body) {
-  padding: 16px 20px;
-}
-.ha-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
-}
-.ha-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  padding: 16px 20px;
 }
 .ha-subtitle {
   margin: 6px 0 0;
   color: var(--td-text-color-secondary);
   font-size: 13px;
 }
-.ha-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
 .ha-alert {
   margin-bottom: 0;
 }
 .ha-state-row {
-  display: flex;
-  gap: 32px;
+  flex-wrap: wrap;
   flex-wrap: wrap;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--td-component-stroke);
@@ -183,18 +189,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.ha-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px 24px;
-}
-.ha-cell {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px dashed var(--td-component-stroke);
 }
 .ha-label {
   color: var(--td-text-color-secondary);
@@ -206,17 +200,8 @@ onUnmounted(() => {
   word-break: break-all;
 }
 .ha-source {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
   color: var(--td-text-color-secondary);
   font-size: 12px;
-}
-.ha-source code {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--td-bg-color-component);
 }
 .ha-source-sep {
   opacity: 0.6;

@@ -1113,6 +1113,15 @@ func (s *Server) zoneSOAFor(qname string) dns.RR {
 // Returns (response, denied, found); denied indicates a zone-level query ACL
 // rejected the client and the caller must answer REFUSED. dnssecOK is the
 // request's EDNS DO bit: without it no RRSIG is emitted (RFC 4035 §3.2.1).
+// DebugLocalAuthoritative answers a diagnostic query from the node's local
+// applied zone snapshot. It never performs recursion or an outbound network
+// query, so private names cannot leave the deployment through the debug API.
+// The returned flags mirror lookupAuthoritative: denied means an ACL refusal,
+// while found=false means no local authoritative answer exists.
+func (s *Server) DebugLocalAuthoritative(qname string, qtype uint16, clientIP string) (*dns.Msg, bool, bool) {
+	return s.lookupAuthoritative(qname, qtype, clientIP, false)
+}
+
 func (s *Server) lookupAuthoritative(qname string, qtype uint16, clientIP string, dnssecOK bool) (*dns.Msg, bool, bool) {
 	// If Zone Store is available, use it directly.
 	if s.zoneStore != nil {

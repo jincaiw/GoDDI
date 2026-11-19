@@ -146,7 +146,7 @@ func (l *Linkage) subnetForScope(scopeID, ip string) (*subnetLookup, error) {
 		if canonical, _, err := net.ParseCIDR(strings.TrimSpace(scopeCIDR.String)); err == nil {
 			var id, spaceID, cidr string
 			err := l.db.QueryRow(
-				"SELECT id, space_id, cidr FROM ipam_subnets WHERE cidr = ?", canonical.String()).
+				"SELECT id, space_id, cidr FROM ipam_subnets WHERE cidr = ? AND lifecycle_state = 'active'", canonical.String()).
 				Scan(&id, &spaceID, &cidr)
 			if err == nil {
 				return &subnetLookup{ID: id, SpaceID: spaceID, CIDR: cidr}, nil
@@ -173,7 +173,7 @@ func (l *Linkage) mostSpecificSubnetForIP(ip string) (*subnetLookup, error) {
 		return nil, fmt.Errorf("%w: %q", address.ErrInvalidIP, ip)
 	}
 
-	rows, err := l.db.Query("SELECT id, space_id, cidr FROM ipam_subnets")
+	rows, err := l.db.Query("SELECT id, space_id, cidr FROM ipam_subnets WHERE lifecycle_state = 'active'")
 	if err != nil {
 		return nil, fmt.Errorf("list IPAM subnets: %w", err)
 	}

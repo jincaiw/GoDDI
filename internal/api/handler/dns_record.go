@@ -90,6 +90,7 @@ func CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordRecordSetState(r, DNSServices.DB, zoneID, "record created")
 	response.Created(w, record)
 }
 
@@ -153,6 +154,11 @@ func UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	zoneID := ""
+	if existing, err := getRecordManager().GetRecord(id); err == nil {
+		zoneID = existing.ZoneID
+	}
+	recordRecordSetState(r, DNSServices.DB, zoneID, "record updated")
 	response.OK(w, record)
 }
 
@@ -179,6 +185,10 @@ func DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var zoneID string
+	if existing, err := getRecordManager().GetRecord(id); err == nil {
+		zoneID = existing.ZoneID
+	}
 	if err := getRecordManager().DeleteRecord(id); err != nil {
 		if errors.Is(err, zone.ErrOwnedByTheDataPlane) {
 			response.Conflict(w, recordOwnedByDataPlane)
@@ -188,6 +198,7 @@ func DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordRecordSetState(r, DNSServices.DB, zoneID, "record deleted")
 	response.OK(w, map[string]string{"id": id})
 }
 
@@ -233,6 +244,7 @@ func BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordRecordSetState(r, DNSServices.DB, req.ZoneID, "batch records created")
 	response.Created(w, records)
 }
 
@@ -277,6 +289,12 @@ func BatchDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	zoneIDs := map[string]bool{}
+	for _, id := range req.IDs {
+		if rec, err := getRecordManager().GetRecord(id); err == nil {
+			zoneIDs[rec.ZoneID] = true
+		}
+	}
 	if err := getRecordManager().BatchDeleteRecords(req.IDs); err != nil {
 		if errors.Is(err, zone.ErrOwnedByTheDataPlane) {
 			response.Conflict(w, recordOwnedByDataPlane)
@@ -286,5 +304,8 @@ func BatchDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for zoneID := range zoneIDs {
+		recordRecordSetState(r, DNSServices.DB, zoneID, "batch records deleted")
+	}
 	response.OK(w, map[string]interface{}{"deleted": len(req.IDs)})
 }

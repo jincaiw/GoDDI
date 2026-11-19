@@ -12,6 +12,9 @@ dataplane:
   sync_interval_seconds: 1
 dns:
   enabled: true
+  # Lab-only: exercise the experimental DNSSEC key lifecycle through the GUI.
+  dnssec:
+    enabled: true
   listeners:
     udp: {enabled: true, address: ":53"}
     tcp: {enabled: true, address: ":53"}

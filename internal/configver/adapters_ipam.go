@@ -55,7 +55,7 @@ func (*IPAMSubnetAdapter) Validate(content json.RawMessage) error {
 
 func (*IPAMSubnetAdapter) Exists(q Queryer, id string) (bool, error) {
 	var one int
-	err := q.QueryRow(`SELECT 1 FROM ipam_subnets WHERE id = ?`, id).Scan(&one)
+	err := q.QueryRow(`SELECT 1 FROM ipam_subnets WHERE id = ? AND lifecycle_state = 'active'`, id).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -73,7 +73,7 @@ func (*IPAMSubnetAdapter) Apply(tx *sql.Tx, id string, content json.RawMessage) 
 	res, err := tx.Exec(`UPDATE ipam_subnets SET
 			name = ?, cidr = ?, vlan_id = ?, location = ?, description = ?,
 			updated_at = datetime('now')
-		WHERE id = ?`,
+		WHERE id = ? AND lifecycle_state = 'active'`,
 		c.Name, c.CIDR, nullIfZero(c.VLANID), nullIfEmpty(c.Location),
 		nullIfEmpty(c.Description), id)
 	if err != nil {

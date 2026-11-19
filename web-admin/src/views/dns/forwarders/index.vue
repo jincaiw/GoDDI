@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { computed, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
@@ -31,6 +32,7 @@ const showCond = ref(false);
 const submitting = ref(false);
 const editing = ref<DNSForwarder | null>(null);
 const allForwarders = ref<DNSForwarder[]>([]);
+const togglingId = ref<string | null>(null);
 
 const protocolOptions = [
   { label: 'UDP', value: 'udp' },
@@ -61,12 +63,12 @@ const forwarderOptions = computed(() =>
 );
 
 const fwdRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }],
-  address: [{ required: true, message: t('dns.forwarders.address') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }],
+  address: [{ required: true, message: t('dns.forwarders.address') + t('common.required'), type: 'error' }]
 };
 const condRules = {
-  domain: [{ required: true, message: t('dns.forwarders.domain') + ' required', type: 'error' }],
-  forwarder_ids: [{ required: true, message: t('dns.forwarders.title') + ' required', type: 'error' }]
+  domain: [{ required: true, message: t('dns.forwarders.domain') + t('common.required'), type: 'error' }],
+  forwarder_ids: [{ required: true, message: t('dns.forwarders.title') + t('common.required'), type: 'error' }]
 };
 
 const fwdColumns: PrimaryTableCol[] = [
@@ -89,6 +91,7 @@ const fwdColumns: PrimaryTableCol[] = [
         size: 'small',
         value: Boolean(r.enabled),
         disabled: !perm.canWrite('dns'),
+        loading: togglingId.value === r.id,
         onChange: (value: unknown) => void toggleEnabled(r, Boolean(value))
       });
     }
@@ -161,6 +164,7 @@ function openEdit(row: DNSForwarder) {
 
 async function toggleEnabled(row: DNSForwarder, value: boolean) {
   if (!perm.canWrite('dns')) return;
+  togglingId.value = row.id;
   try {
     await updateDNSForwarder(row.id, {
       name: row.name,
@@ -169,9 +173,12 @@ async function toggleEnabled(row: DNSForwarder, value: boolean) {
       priority: row.priority,
       enabled: value
     });
+    void MessagePlugin.success(t('common.updateSuccess'));
     await fwdTable.value?.reload();
   } catch (err) {
     msgError(err);
+  } finally {
+    togglingId.value = null;
   }
 }
 
@@ -198,7 +205,7 @@ function confirmDeleteFwd(id: string) {
   if (!perm.canDelete('dns')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(id),
     theme: 'danger',
     onConfirm: async () => {
       try {
@@ -241,7 +248,7 @@ function confirmDeleteCond(id: string) {
   if (!perm.canDelete('dns')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(id),
     theme: 'danger',
     onConfirm: async () => {
       try {
@@ -260,7 +267,9 @@ function confirmDeleteCond(id: string) {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('dns.forwarders.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('dns.forwarders.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('dns')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('dns.forwarders.createForwarder') }}
@@ -318,7 +327,7 @@ function confirmDeleteCond(id: string) {
     >
       <TForm ref="condFormRef" :data="condForm" :rules="condRules" label-align="top">
         <TFormItem :label="t('dns.forwarders.domain')" name="domain">
-          <TInput v-model="condForm.domain" placeholder="example.com" />
+          <TInput v-model="condForm.domain" :placeholder="t('common.queryExample')" />
         </TFormItem>
         <TFormItem :label="t('dns.forwarders.title')" name="forwarder_ids">
           <TSelect v-model="condForm.forwarder_ids" :options="forwarderOptions" multiple filterable :min-collapsed-num="2" />
@@ -342,11 +351,6 @@ function confirmDeleteCond(id: string) {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .inner-actions :deep(.t-card__body) {
   padding: 12px 16px;

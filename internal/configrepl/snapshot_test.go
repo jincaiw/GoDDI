@@ -3,6 +3,7 @@ package configrepl
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/jasonwa/goddi/internal/dataplane"
@@ -58,6 +59,32 @@ func seedScope(t *testing.T, db *sql.DB, id, name, subnet string) {
 
 // A scope authored on node-a must appear on an empty node-b after a snapshot
 // round-trip -- the property that lets a promoted standby serve that scope.
+
+// The operator-facing version is an int64. A raw uint64 hash cast into it
+// makes half of all configurations appear as a negative version, which reads
+// like a corrupt state even though the equality semantics are intact.
+func TestFingerprintIsNonNegativeStableAndContentSensitive(t *testing.T) {
+	tables := []TableData{{Name: "dhcp_scopes", Rows: [][]any{{"scope-1", "10.0.0.0/24"}}}}
+	first := fingerprint(tables)
+	if first < 0 {
+		t.Fatalf("fingerprint = %d, want a non-negative operator-visible version", first)
+	}
+	if second := fingerprint(tables); second != first {
+		t.Fatalf("fingerprint is unstable: %d then %d", first, second)
+	}
+	changed := []TableData{{Name: "dhcp_scopes", Rows: [][]any{{"scope-1", "10.0.1.0/24"}}}}
+	if next := fingerprint(changed); next == first {
+		t.Fatalf("different content kept fingerprint %d", first)
+	}
+	for i := 0; i < 256; i++ {
+		name := fmt.Sprintf("scope-%d", i)
+		v := fingerprint([]TableData{{Name: "dhcp_scopes", Rows: [][]any{{name, "10.0.0.0/24"}}}})
+		if v < 0 {
+			t.Fatalf("fingerprint for %s = %d, want non-negative", name, v)
+		}
+	}
+}
+
 func TestSnapshotCarriesScopeToEmptyFollower(t *testing.T) {
 	src := newDB(t)
 	dst := newDB(t)

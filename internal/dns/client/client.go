@@ -13,6 +13,7 @@ import (
 type QueryResult struct {
 	QueryName    string        `json:"query_name"`
 	QueryType    string        `json:"query_type"`
+	Source       string        `json:"source"`
 	Upstream     string        `json:"upstream"`
 	ResponseCode string        `json:"response_code"`
 	Answers      []AnswerEntry `json:"answers"`
@@ -46,7 +47,12 @@ func NewDNSClient(timeout time.Duration) *DNSClient {
 // Query executes a DNS query and returns detailed results for debugging.
 func (c *DNSClient) Query(name string, qtype uint16, upstream string) (*QueryResult, time.Duration, error) {
 	if upstream == "" {
-		upstream = "8.8.8.8:53"
+		return &QueryResult{
+			QueryName: name,
+			QueryType: dns.TypeToString[qtype],
+			Source:    "unspecified",
+			Error:     "upstream is required; local authoritative queries must use the debug API local path",
+		}, 0, fmt.Errorf("dns client: upstream is required")
 	}
 
 	if err := validateUpstreamAddress(upstream); err != nil {
@@ -126,6 +132,7 @@ func (c *DNSClient) Query(name string, qtype uint16, upstream string) (*QueryRes
 	result := &QueryResult{
 		QueryName:    name,
 		QueryType:    dns.TypeToString[qtype],
+		Source:       "upstream",
 		Upstream:     upstream,
 		ResponseCode: dns.RcodeToString[resp.Rcode],
 		Duration:     duration,
@@ -177,6 +184,31 @@ func validateUpstreamAddress(addr string) error {
 }
 
 // rrToEntry converts a dns.RR to an AnswerEntry.
+// ResultFromMessage converts a locally produced DNS message into the same
+// wire shape as a network query result. Source distinguishes an authoritative
+// local answer from an upstream response so the console cannot imply that a
+// private name was sent externally.
+func ResultFromMessage(name string, qtype uint16, source string, msg *dns.Msg, duration time.Duration) *QueryResult {
+	result := &QueryResult{
+		QueryName:    name,
+		QueryType:    dns.TypeToString[qtype],
+		Source:       source,
+		Upstream:     source,
+		Duration:     duration,
+		ResponseCode: dns.RcodeToString[msg.Rcode],
+	}
+	for _, rr := range msg.Answer {
+		result.Answers = append(result.Answers, rrToEntry(rr))
+	}
+	for _, rr := range msg.Ns {
+		result.Authority = append(result.Authority, rrToEntry(rr))
+	}
+	for _, rr := range msg.Extra {
+		result.Additional = append(result.Additional, rrToEntry(rr))
+	}
+	return result
+}
+
 func rrToEntry(rr dns.RR) AnswerEntry {
 	hdr := rr.Header()
 	entry := AnswerEntry{

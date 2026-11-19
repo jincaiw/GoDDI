@@ -165,6 +165,18 @@ func (r *Responder) coveringNSEC(
 		owner = names[idx]
 	}
 
+	// A wildcard-synthesized name exists but has no exact owner row; its
+	// proof belongs to the wildcard that produced the answer. Without this,
+	// NODATA for a qtype miss under a wildcard fails closed to an unsigned
+	// SOA instead of producing a verifiable denial.
+	if nameExists {
+		if _, exact := types[owner]; !exact {
+			if wild := wildcardOwnerForNODATA(q, names); wild != "" {
+				owner = wild
+			}
+		}
+	}
+
 	ownerIdx := -1
 	for i, name := range names {
 		if name == owner {
@@ -220,6 +232,23 @@ func canonicalLess(a, b string) bool {
 		ib--
 	}
 	return len(la) < len(lb)
+}
+
+// wildcardOwnerForNODATA returns the closest wildcard owner present in the
+// zone name chain for a synthesized name, or "" when no wildcard applies.
+func wildcardOwnerForNODATA(qname string, names []string) string {
+	existing := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		existing[name] = struct{}{}
+	}
+	labels := canonicalLabels(qname)
+	for i := 0; i < len(labels); i++ {
+		candidate := "*." + strings.Join(labels[i+1:], ".") + "."
+		if _, ok := existing[candidate]; ok {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func canonicalLabels(name string) []string {

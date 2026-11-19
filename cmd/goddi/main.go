@@ -445,6 +445,11 @@ func runServer(configPath string) error {
 		return fmt.Errorf("creating data directory %s: %w", cfg.Server.DataDir, err)
 	}
 
+	// Refuse to run a newer SQLite control schema under an older binary.
+	if err := requireControlMigrationCompatibility(cfg); err != nil {
+		return err
+	}
+
 	// Initialize database.
 	db, err := database.New(cfg.Database)
 	if err != nil {
@@ -678,9 +683,11 @@ func runServer(configPath string) error {
 	slog.Info("DNS zone store initialized", "zones", len(zoneStore.ZoneNames()))
 	// D-14: the DNS plane's last-known-good revision, so an operator can see
 	// what this node will keep serving while the control plane is unreachable.
-	if rev, at, ok, lerr := dataplane.LKG(dnsDataDB, dataplane.DomainDNS); lerr == nil && ok {
-		metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDNS)).Set(float64(rev))
-		slog.Info("DNS data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
+	if rev, at, ok, lerr := dataplane.LKG(dnsDataDB, dataplane.DomainDNS); lerr == nil {
+		metrics.SetDataPlaneLKG(string(dataplane.DomainDNS), rev, ok)
+		if ok {
+			slog.Info("DNS data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
+		}
 	}
 
 	// Zone / record managers (dynamic updates + record aging + IXFR history).
@@ -1213,9 +1220,11 @@ func runServer(configPath string) error {
 		// D-14: expose the last-known-good data-plane revision this node has
 		// durably applied, so operators can see what config it will serve if
 		// the control plane is unreachable.
-		if rev, at, ok, lerr := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); lerr == nil && ok {
-			metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDHCP)).Set(float64(rev))
-			slog.Info("DHCP data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
+		if rev, at, ok, lerr := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); lerr == nil {
+			metrics.SetDataPlaneLKG(string(dataplane.DomainDHCP), rev, ok)
+			if ok {
+				slog.Info("DHCP data plane LKG", "revision", rev, "applied_at", at.UTC().Format("2006-01-02T15:04:05Z"))
+			}
 		}
 		slog.Info("DHCP server initialized",
 			"interfaces", cfg.DHCP.Interfaces, "lease_store", dhcpStore.DSN())
@@ -1572,7 +1581,7 @@ func runServer(configPath string) error {
 	defer backgroundCancel()
 	// D-20: refresh the LKG/projection gauges periodically (they are also set
 	// once at startup); the ticker is bounded by the background context.
-	if dhcpStore != nil {
+	if dhcpStore != nil || dnsDataDB != nil {
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -1581,15 +1590,7 @@ func runServer(configPath string) error {
 				case <-backgroundCtx.Done():
 					return
 				case <-ticker.C:
-					if gaps, err := ipam.ProjectionGaps(backgroundCtx, dhcpStore.DB); err == nil {
-						metrics.DHCPIPAMProjectionGaps.Set(float64(len(gaps)))
-					}
-					if rev, _, ok, err := dataplane.LKG(dhcpStore.DB, dataplane.DomainDHCP); err == nil && ok {
-						metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDHCP)).Set(float64(rev))
-					}
-					if rev, _, ok, err := dataplane.LKG(dnsDataDB, dataplane.DomainDNS); err == nil && ok {
-						metrics.DataPlaneLKGRevision.WithLabelValues(string(dataplane.DomainDNS)).Set(float64(rev))
-					}
+					refreshDataPlaneGauges(backgroundCtx, dhcpStoreDB(dhcpStore), dnsDataDB)
 				}
 			}
 		}()
@@ -3539,6 +3540,27 @@ func runMigrationStatus(configPath string, check bool) error {
 	return nil
 }
 
+func checkControlCompatibilityWithFS(cfg *config.Config, fsys fs.FS) error {
+	store := migrateStore{set: "control", dsn: cfg.Database.DSN, fsys: fsys}
+	status := migrationStatusOfStore(store)
+	switch {
+	case status.Err != nil:
+		return fmt.Errorf("控制库迁移状态无法读取，拒绝启动：%w", status.Err)
+	case len(status.Withdrawn) > 0:
+		return fmt.Errorf("控制库已应用的迁移版本 %v 不在本二进制之列；该数据库比本二进制更新，拒绝启动", status.Withdrawn)
+	case status.FilePresent && !status.TablePresent && len(status.Pending) > 0:
+		return fmt.Errorf("控制库文件已存在但没有迁移记录，且本二进制有 %d 个待应用迁移；拒绝在未知 schema 上运行", len(status.Pending))
+	}
+	return nil
+}
+
+func requireControlMigrationCompatibility(cfg *config.Config) error {
+	if !strings.EqualFold(strings.TrimSpace(cfg.Database.Driver), "sqlite") {
+		return nil // this preflight reads a SQLite file without opening it for writes
+	}
+	return checkControlCompatibilityWithFS(cfg, goddiassets.Migrations())
+}
+
 // migrationStatusOfStore reads one store's migration state without creating or
 // changing anything.
 func migrationStatusOfStore(store migrateStore) database.MigrationStatus {
@@ -3792,6 +3814,32 @@ func currentHAState(role string, repl *ha.Replicator, mirror *ha.Mirror) ha.Stat
 	default:
 		return ha.StateSolo
 	}
+}
+
+// refreshDataPlaneGauges updates D-14/D-20 gauges from the stores that are
+// actually present in this process. DNS LKG must not be gated on DHCP: a
+// role=dns process owns only dnsdata.db and still has to report what it serves.
+func refreshDataPlaneGauges(ctx context.Context, dhcpDB, dnsDB *sql.DB) {
+	if dhcpDB != nil {
+		if gaps, err := ipam.ProjectionGaps(ctx, dhcpDB); err == nil {
+			metrics.DHCPIPAMProjectionGaps.Set(float64(len(gaps)))
+		}
+		if rev, _, ok, err := dataplane.LKG(dhcpDB, dataplane.DomainDHCP); err == nil {
+			metrics.SetDataPlaneLKG(string(dataplane.DomainDHCP), rev, ok)
+		}
+	}
+	if dnsDB != nil {
+		if rev, _, ok, err := dataplane.LKG(dnsDB, dataplane.DomainDNS); err == nil {
+			metrics.SetDataPlaneLKG(string(dataplane.DomainDNS), rev, ok)
+		}
+	}
+}
+
+func dhcpStoreDB(store *dataplane.Store) *sql.DB {
+	if store == nil {
+		return nil
+	}
+	return store.DB
 }
 
 func dhcpStartupStatus(s *dhcpserver.Server) dhcpserver.StartupGateStatus {

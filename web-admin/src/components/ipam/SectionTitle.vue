@@ -1,8 +1,10 @@
 <script setup lang="ts">
+defineOptions({ name: 'IPAMSectionTitle' });
+
 defineProps<{
-  text: string
-  count?: number
-}>()
+  text: string;
+  count?: number;
+}>();
 </script>
 
 <template>

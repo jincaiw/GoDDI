@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -367,6 +368,41 @@ func TestPublish_IdempotentReplayReturnsSameRevision(t *testing.T) {
 	}
 }
 
+func TestPublish_IdempotencyKeyWithDifferentContentIsRejected(t *testing.T) {
+	db := newTestDB(t)
+	svc, _ := newScopeService(t, db)
+	seedScope(t, db, "scope-1")
+
+	req := PublishRequest{
+		ResourceType:   ResourceDHCPScope,
+		ResourceID:     "scope-1",
+		Content:        scopeContent(t, nil),
+		IdempotencyKey: "key-1",
+	}
+	if _, err := svc.Publish(req); err != nil {
+		t.Fatalf("publish 1: %v", err)
+	}
+
+	req.Content = scopeContent(t, func(c *DHCPScopeContent) { c.EndIP = "192.0.2.99" })
+	_, err := svc.Publish(req)
+	if err == nil {
+		t.Fatal("reusing an idempotency key with different content was accepted")
+	}
+	if !strings.Contains(err.Error(), "idempotency") {
+		t.Fatalf("err = %v, want an idempotency conflict", err)
+	}
+	var revisions, releases int
+	if err := db.QueryRow("SELECT COUNT(*) FROM config_revisions WHERE resource_id = ?", "scope-1").Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM config_release_outbox WHERE resource_id = ?", "scope-1").Scan(&releases); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 1 || releases != 1 {
+		t.Fatalf("mismatched replay wrote revisions=%d releases=%d, want 1/1", revisions, releases)
+	}
+}
+
 func TestPublish_IdempotencyKeyCannotBeReusedForAnotherResource(t *testing.T) {
 	db := newTestDB(t)
 	svc, _ := newScopeService(t, db)
@@ -386,9 +422,9 @@ func TestPublish_IdempotencyKeyCannotBeReusedForAnotherResource(t *testing.T) {
 		ResourceType: ResourceDHCPScope, ResourceID: "scope-2",
 		Content: scopeContent(t, nil), IdempotencyKey: "shared",
 	})
-	var conflict *ConflictError
+	var conflict *IdempotencyConflictError
 	if !errors.As(err, &conflict) {
-		t.Fatalf("err = %v, want *ConflictError", err)
+		t.Fatalf("err = %v, want *IdempotencyConflictError", err)
 	}
 }
 

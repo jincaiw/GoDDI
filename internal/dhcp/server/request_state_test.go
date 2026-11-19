@@ -211,6 +211,28 @@ func TestHandleDiscover_ReservesWithoutCreatingABinding(t *testing.T) {
 	}
 }
 
+func TestHandleDiscover_ReusesLiveLeaseForSameMAC(t *testing.T) {
+	s, _ := newDHCPTestServer(t)
+	mac := testMAC(40)
+
+	first, err := s.HandleDiscover(discoverMsg(t, mac), "eth0", net.ParseIP(testServerIP))
+	if err != nil {
+		t.Fatalf("first discover: %v", err)
+	}
+	ip := first.YourIPAddr.String()
+	if _, err := s.HandleRequest(selectingRequest(t, mac, ip), "eth0", net.ParseIP(testServerIP)); err != nil {
+		t.Fatalf("selecting request: %v", err)
+	}
+
+	again, err := s.HandleDiscover(discoverMsg(t, mac), "eth0", net.ParseIP(testServerIP))
+	if err != nil {
+		t.Fatalf("second discover: %v", err)
+	}
+	if got := again.YourIPAddr.String(); got != ip {
+		t.Fatalf("same-MAC discover offered %s, want live lease %s", got, ip)
+	}
+}
+
 func TestHandleRequest_SelectingPromotesOfferToBinding(t *testing.T) {
 	s, db := newDHCPTestServer(t)
 	mac := testMAC(2)

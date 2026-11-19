@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin } from 'tdesign-vue-next';
@@ -13,6 +14,8 @@ import {
 } from '@/service/api/goddi/user';
 
 defineOptions({ name: 'AdminTokensPage' });
+
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
 
 const { t } = useI18n();
 const perm = usePermission();
@@ -31,7 +34,7 @@ const createForm = reactive<{ name: string; description: string; expires_at: num
 });
 
 const formRules = {
-  name: [{ required: true, message: t('admin.tokens.tokenName') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('admin.tokens.tokenName') + t('common.required'), type: 'error' }]
 };
 
 const columns: PrimaryTableCol[] = [
@@ -47,7 +50,7 @@ const columns: PrimaryTableCol[] = [
     cell: (h, { row }) =>
       h(
         TLink,
-        { theme: 'danger', disabled: !perm.canDelete('token'), onClick: () => confirmDelete((row as APIToken).id) },
+        { theme: 'danger', disabled: !perm.canDelete('token'), onClick: () => confirmDelete((row as APIToken).id, (row as APIToken).name) },
         () => t('common.delete')
       )
   }
@@ -86,12 +89,13 @@ async function handleCreate() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('token')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteAPIToken(id);
@@ -107,8 +111,8 @@ function confirmDelete(id: string) {
 
 function copyToken() {
   void navigator.clipboard.writeText(createdToken.value).then(
-    () => void MessagePlugin.success('Copied!'),
-    () => void MessagePlugin.warning('Clipboard unavailable')
+    () => void MessagePlugin.success(t('common.copied')),
+    () => void MessagePlugin.warning(t('common.clipboardUnavailable'))
   );
 }
 </script>
@@ -116,7 +120,9 @@ function copyToken() {
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('admin.tokens.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('admin.tokens.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('token')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('admin.tokens.createToken') }}
@@ -179,12 +185,8 @@ function copyToken() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .token-alert {
   margin-bottom: 16px;

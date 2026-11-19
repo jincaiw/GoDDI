@@ -110,6 +110,27 @@ func call(t *testing.T, fn http.HandlerFunc, method, target string, body string)
 	return rec.Code, out
 }
 
+func callWithHeaders(t *testing.T, fn http.HandlerFunc, method, target, body string, headers map[string]string) (int, map[string]any) {
+	t.Helper()
+	var reader *bytes.Reader
+	if body == "" {
+		reader = bytes.NewReader(nil)
+	} else {
+		reader = bytes.NewReader([]byte(body))
+	}
+	req := httptest.NewRequest(method, target, reader)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("%s %s: the body is not JSON (%q): %v", method, target, rec.Body.String(), err)
+	}
+	return rec.Code, out
+}
+
 func dataField(t *testing.T, body map[string]any) map[string]any {
 	t.Helper()
 	data, ok := body["data"].(map[string]any)
@@ -185,6 +206,95 @@ func TestADryRunPublishStoresNothing(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("after a dry run the resource is at revision %d, want 0", n)
+	}
+}
+
+// An interrupted HTTP publish is retried with the same idempotency key.
+// The second attempt must return the same revision and must not queue a
+// second data-plane release; otherwise a retry could publish twice.
+
+func TestPublishUsesIfMatchPrecondition(t *testing.T) {
+	_, db := configVersionEnv(t)
+	seedConfigZone(t, db, "zone-ifmatch", "ifmatch.test.")
+	if _, err := db.Exec(`DELETE FROM config_release_outbox WHERE resource_id = ?`, "zone-ifmatch"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM config_revisions WHERE resource_id = ?`, "zone-ifmatch"); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/config/publish"
+	first := `{"resource_type":"dns_records","resource_id":"zone-ifmatch","content":{"schema":1,"records":[]}}`
+	if code, out := call(t, PublishConfigRevision, http.MethodPost, path, first); code != http.StatusCreated {
+		t.Fatalf("first publish = %d, want 201: %+v", code, out)
+	}
+	second := `{"resource_type":"dns_records","resource_id":"zone-ifmatch","content":{"schema":1,"records":[{"name":"www","type":"A","value":"192.0.2.1","ttl":300,"enabled":true}]}}`
+	if code, out := callWithHeaders(t, PublishConfigRevision, http.MethodPost, path, second, map[string]string{"If-Match": `"v1"`}); code != http.StatusCreated {
+		t.Fatalf("If-Match v1 publish = %d, want 201: %+v", code, out)
+	}
+	third := `{"resource_type":"dns_records","resource_id":"zone-ifmatch","content":{"schema":1,"records":[{"name":"mail","type":"A","value":"192.0.2.2","ttl":300,"enabled":true}]}}`
+	if code, out := callWithHeaders(t, PublishConfigRevision, http.MethodPost, path, third, map[string]string{"If-Match": `"v1"`}); code != http.StatusPreconditionFailed {
+		t.Fatalf("stale If-Match = %d, want 412: %+v", code, out)
+	}
+	if code, out := callWithHeaders(t, PublishConfigRevision, http.MethodPost, path, third, map[string]string{"If-Match": `W/"v2"`}); code != http.StatusBadRequest {
+		t.Fatalf("weak If-Match = %d, want 400: %+v", code, out)
+	}
+	mismatch := `{"resource_type":"dns_records","resource_id":"zone-ifmatch","content":{"schema":1,"records":[{"name":"mail","type":"A","value":"192.0.2.2","ttl":300,"enabled":true}]},"expected_revision":1}`
+	if code, out := callWithHeaders(t, PublishConfigRevision, http.MethodPost, path, mismatch, map[string]string{"If-Match": `"v2"`}); code != http.StatusBadRequest {
+		t.Fatalf("If-Match/body baseline mismatch = %d, want 400: %+v", code, out)
+	}
+	if code, out := callWithHeaders(t, PublishConfigRevision, http.MethodPost, path, third, map[string]string{"If-Match": `"v2"`, "X-Test": "1"}); code != http.StatusCreated {
+		t.Fatalf("If-Match v2 publish = %d, want 201: %+v", code, out)
+	}
+	var revisions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_revisions WHERE resource_id = ?`, "zone-ifmatch").Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 3 {
+		t.Fatalf("revision rows = %d, want 3 (rejected preconditions must not write)", revisions)
+	}
+}
+
+func TestARetriedPublishWithTheSameKeyDoesNotPublishTwice(t *testing.T) {
+	svc, db := configVersionEnv(t)
+	seedConfigZone(t, db, "zone-retry", "retry.test.")
+	if _, err := db.Exec(`DELETE FROM config_release_outbox WHERE resource_id = ?`, "zone-retry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM config_revisions WHERE resource_id = ?`, "zone-retry"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"resource_type":"dns_records","resource_id":"zone-retry","content":{"schema":1,"records":[]},"idempotency_key":"http-retry-1"}`
+	firstCode, first := call(t, PublishConfigRevision, http.MethodPost, "/api/v1/config/publish", body)
+	if firstCode != http.StatusCreated {
+		t.Fatalf("first publish = %d, want 201: %+v", firstCode, first)
+	}
+	secondCode, second := call(t, PublishConfigRevision, http.MethodPost, "/api/v1/config/publish", body)
+	if secondCode != http.StatusCreated {
+		t.Fatalf("retried publish = %d, want 201: %+v", secondCode, second)
+	}
+	firstRev, ok := dataField(t, first)["revision"].(map[string]any)
+	if !ok {
+		t.Fatalf("first publish returned no revision: %+v", first)
+	}
+	secondRev, ok := dataField(t, second)["revision"].(map[string]any)
+	if !ok {
+		t.Fatalf("retried publish returned no revision: %+v", second)
+	}
+	if firstRev["id"] != secondRev["id"] || firstRev["revision"] != secondRev["revision"] {
+		t.Fatalf("retry returned a different revision: %v / %v", firstRev, secondRev)
+	}
+	var revisions, releases int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_revisions WHERE resource_id = ?`, "zone-retry").Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_release_outbox WHERE resource_id = ?`, "zone-retry").Scan(&releases); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 1 || releases != 1 {
+		t.Fatalf("retry created revisions=%d releases=%d, want 1/1", revisions, releases)
+	}
+	if n, err := svc.CurrentRevision(configver.ResourceDNSRecords, "zone-retry"); err != nil || n != 1 {
+		t.Fatalf("current revision = %d, %v; want 1", n, err)
 	}
 }
 
@@ -330,6 +440,93 @@ func TestTheReleaseQueueSaysWhatHasNotReachedTheDataPlane(t *testing.T) {
 	// write because it changes what the worker will do.
 	if code, out := call(t, RetryConfigReleases, http.MethodPost, "/api/v1/config/releases/retry", ""); code != http.StatusOK {
 		t.Fatalf("POST /config/releases/retry = %d, want 200: %+v", code, out)
+	}
+}
+
+func TestARetriedPublishWithChangedContentIsAConflict(t *testing.T) {
+	_, db := configVersionEnv(t)
+	seedConfigZone(t, db, "zone-retry-conflict", "retry-conflict.test.")
+	if _, err := db.Exec(`DELETE FROM config_release_outbox WHERE resource_id = ?`, "zone-retry-conflict"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM config_revisions WHERE resource_id = ?`, "zone-retry-conflict"); err != nil {
+		t.Fatal(err)
+	}
+	first := `{"resource_type":"dns_records","resource_id":"zone-retry-conflict","content":{"schema":1,"records":[]},"idempotency_key":"http-retry-2"}`
+	if code, out := call(t, PublishConfigRevision, http.MethodPost, "/api/v1/config/publish", first); code != http.StatusCreated {
+		t.Fatalf("first publish = %d, want 201: %+v", code, out)
+	}
+	changed := `{"resource_type":"dns_records","resource_id":"zone-retry-conflict","content":{"schema":1,"records":[{"name":"www","type":"A","value":"192.0.2.1","ttl":300,"enabled":true}]},"idempotency_key":"http-retry-2"}`
+	if code, out := call(t, PublishConfigRevision, http.MethodPost, "/api/v1/config/publish", changed); code != http.StatusConflict {
+		t.Fatalf("changed replay = %d, want 409: %+v", code, out)
+	}
+	var revisions, releases int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_revisions WHERE resource_id = ?`, "zone-retry-conflict").Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_release_outbox WHERE resource_id = ?`, "zone-retry-conflict").Scan(&releases); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 1 || releases != 1 {
+		t.Fatalf("changed replay wrote revisions=%d releases=%d, want 1/1", revisions, releases)
+	}
+}
+
+func TestFailedReleaseIsVisibleToTheOperator(t *testing.T) {
+	svc, db := configVersionEnv(t)
+	seedConfigZone(t, db, "zone-failed", "failed.test.")
+	if _, err := svc.RetryFailed(configver.ResourceDNSRecords, "zone-failed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM config_release_outbox WHERE resource_type = ? AND resource_id = ?`,
+		string(configver.ResourceDNSRecords), "zone-failed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM config_revisions WHERE resource_type = ? AND resource_id = ?`,
+		string(configver.ResourceDNSRecords), "zone-failed"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"resource_type":"dns_records","resource_id":"zone-failed","content":{"schema":1,"records":[]}}`
+	if code, out := call(t, PublishConfigRevision, http.MethodPost, "/api/v1/config/publish", body); code != http.StatusCreated {
+		t.Fatalf("publish = %d, want 201: %+v", code, out)
+	}
+	var revisionID string
+	if err := db.QueryRow(`SELECT id FROM config_revisions WHERE resource_type = ? AND resource_id = ? ORDER BY revision DESC LIMIT 1`,
+		string(configver.ResourceDNSRecords), "zone-failed").Scan(&revisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE config_release_outbox SET status = ?, attempts = ?, last_error = ?, resource_applied = 1 WHERE revision_id = ?`,
+		configver.ReleaseFailed, configver.ReleaseMaxAttempts, "data plane unavailable", revisionID); err != nil {
+		t.Fatal(err)
+	}
+	code, out := call(t, ListConfigReleases, http.MethodGet, "/api/v1/config/releases?status=failed", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET failed releases = %d: %+v", code, out)
+	}
+	data := dataField(t, out)
+	stats, ok := data["stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("no stats: %+v", data)
+	}
+	if failed, _ := stats["failed"].(float64); failed < 1 {
+		t.Fatalf("failed stats = %v, want >=1", stats)
+	}
+	releases, ok := data["releases"].([]any)
+	if !ok || len(releases) == 0 {
+		t.Fatalf("failed releases not listed: %+v", data)
+	}
+	found := false
+	for _, item := range releases {
+		rel, _ := item.(map[string]any)
+		if rel["resource_id"] == "zone-failed" && rel["status"] == string(configver.ReleaseFailed) {
+			found = true
+			if rel["last_error"] != "data plane unavailable" {
+				t.Fatalf("error hidden: %+v", rel)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("failed release missing from listing: %+v", releases)
 	}
 }
 

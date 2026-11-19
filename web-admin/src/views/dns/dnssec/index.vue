@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
 import { usePermission } from '@/composables/usePermission';
+import { formatAPITime } from '@/utils/datetime';
 import {
   deleteDNSSECKey,
   disableDNSSEC,
@@ -42,9 +43,11 @@ const zoneOptions = computed(() =>
 );
 
 const status = ref<DNSSECStatus | null>(null);
+const dnssecOn = computed(() => Boolean(status.value?.dnssec_enabled));
 const dsRecords = ref<DSInfo[]>([]);
 const loading = ref(false);
 const dsLoaded = ref(false);
+const togglingId = ref<string | null>(null);
 
 const nsec3Form = reactive<{ iterations: number; salt: string; optout: boolean }>({
   iterations: 0,
@@ -86,11 +89,12 @@ const keyColumns: PrimaryTableCol[] = [
         size: 'small',
         value: r.enabled ?? true,
         disabled: !perm.canWrite('dns'),
+        loading: togglingId.value === r.id,
         onChange: (v: unknown) => void handleToggleKey(r, Boolean(v))
       });
     }
   },
-  { colKey: 'created_at', title: t('dns.dnssec.createdAt'), width: 190 },
+  { colKey: 'created_at', title: t('dns.dnssec.createdAt'), width: 190, cell: (_h, { row }) => formatAPITime((row as DNSSECKey).created_at) },
   {
     colKey: 'op',
     title: t('common.action'),
@@ -184,12 +188,16 @@ async function handleGenerateKey() {
 
 async function handleToggleKey(key: DNSSECKey, enabled: boolean) {
   if (!perm.canWrite('dns') || !selectedZone.value) return;
+  togglingId.value = key.id;
   try {
     await toggleDNSSECKey(selectedZone.value, key.id, enabled);
     key.enabled = enabled;
+    void MessagePlugin.success(t('common.updateSuccess'));
   } catch (err) {
     msgError(err);
     await loadAll();
+  } finally {
+    togglingId.value = null;
   }
 }
 
@@ -238,10 +246,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="dnssec-page">
-    <TAlert theme="warning" :message="t('dns.dnssec.experimentalHint')" class="mb-4" />
+  <div class="td-page">
+    <TCard :bordered="false" class="td-page-header">
+      <div class="td-page-title">
+        <h2>{{ t('dns.dnssec.title') }}</h2>
+      </div>
+    </TCard>
 
-    <TCard :bordered="false" class="mb-4">
+    <TAlert theme="warning" :message="t('dns.dnssec.experimentalHint')" />
+
+    <TCard :bordered="false">
       <TForm layout="inline" label-align="top">
         <TFormItem :label="t('dns.dnssec.zone')">
           <TSelect
@@ -254,8 +268,8 @@ onMounted(async () => {
           />
         </TFormItem>
         <TFormItem :label="t('dns.dnssec.status')">
-          <TTag :theme="status?.enabled ? 'success' : 'default'" variant="light" size="large">
-            {{ status?.enabled ? t('common.enabled') : t('common.disabled') }}
+          <TTag :theme="dnssecOn ? 'success' : 'default'" variant="light" size="large">
+            {{ dnssecOn ? t('common.enabled') : t('common.disabled') }}
           </TTag>
         </TFormItem>
         <TFormItem :label="t('dns.dnssec.keyCount')">
@@ -264,10 +278,10 @@ onMounted(async () => {
       </TForm>
     </TCard>
 
-    <TCard :bordered="false" :title="t('dns.dnssec.keyLifecycle')" class="mb-4">
-      <TSpace size="small" wrap class="mb-3">
+    <TCard :bordered="false" :title="t('dns.dnssec.keyLifecycle')">
+      <TSpace size="small" wrap class="section-actions">
         <TButton
-          v-if="!status?.enabled && perm.canWrite('dns')"
+          v-if="!dnssecOn && perm.canWrite('dns')"
           theme="warning"
           size="small"
           :disabled="!selectedZone"
@@ -276,14 +290,14 @@ onMounted(async () => {
           {{ t('dns.dnssec.enable') }}
         </TButton>
         <TButton
-          v-if="status?.enabled && perm.canWrite('dns')"
+          v-if="dnssecOn && perm.canWrite('dns')"
           theme="warning"
           size="small"
           @click="handleAction('disable')"
         >
           {{ t('dns.dnssec.disable') }}
         </TButton>
-        <TButton v-if="status?.enabled && perm.canWrite('dns')" size="small" variant="outline" @click="handleAction('rotate')">
+        <TButton v-if="dnssecOn && perm.canWrite('dns')" size="small" variant="outline" @click="handleAction('rotate')">
           {{ t('dns.dnssec.rotate') }}
         </TButton>
         <TButton v-if="perm.canWrite('dns')" size="small" variant="outline" :disabled="!selectedZone" @click="showGenerateKey = true">
@@ -301,7 +315,7 @@ onMounted(async () => {
       <TEmpty v-if="!loading && !(status?.keys?.length ?? 0)" :description="t('dns.dnssec.noKeys')" />
     </TCard>
 
-    <TCard :bordered="false" :title="t('dns.dnssec.dsTitle')" class="mb-4">
+    <TCard :bordered="false" :title="t('dns.dnssec.dsTitle')">
       <TTable :columns="dsColumns" :data="dsRecords" row-key="key_tag" stripe hover />
       <TEmpty v-if="dsLoaded && !dsRecords.length" :description="t('dns.dnssec.noDs')" />
       <p class="hint">{{ t('dns.dnssec.dsHint') }}</p>
@@ -313,7 +327,7 @@ onMounted(async () => {
           <TInputNumber v-model="nsec3Form.iterations" :min="0" :max="100" :disabled="!perm.canWrite('dns')" />
         </TFormItem>
         <TFormItem :label="t('dns.dnssec.salt')">
-          <TInput v-model="nsec3Form.salt" placeholder="hex" :disabled="!perm.canWrite('dns')" style="width: 240px" />
+          <TInput v-model="nsec3Form.salt" :placeholder="t('common.hexPlaceholder')" :disabled="!perm.canWrite('dns')" style="width: 240px" />
         </TFormItem>
         <TFormItem :label="t('dns.dnssec.optout')">
           <TSwitch v-model="nsec3Form.optout" :disabled="!perm.canWrite('dns')" />
@@ -337,41 +351,44 @@ onMounted(async () => {
     <TDialog
       v-model:visible="showGenerateKey"
       :header="t('dns.dnssec.generateKey')"
-      :footer="false"
+      :confirm-btn="t('common.confirm')"
+      :cancel-btn="t('common.cancel')"
       width="460px"
+      @confirm="handleGenerateKey"
     >
       <TForm label-align="top">
         <TFormItem :label="t('dns.dnssec.keyType')">
-          <TRadioGroup v-model="generateKeyType">
-            <TRadioButton value="KSK">KSK</TRadioButton>
-            <TRadioButton value="ZSK">ZSK</TRadioButton>
-          </TRadioGroup>
+          <TSelect
+            v-model="generateKeyType"
+            :options="[{ label: 'KSK', value: 'KSK' }, { label: 'ZSK', value: 'ZSK' }]"
+          />
         </TFormItem>
         <TFormItem :label="t('dns.dnssec.algorithm')">
           <TSelect v-model="generateKeyAlgorithm" :options="algorithmOptions" />
         </TFormItem>
       </TForm>
-      <div class="dialog-footer">
-        <TButton size="small" @click="showGenerateKey = false">{{ t('common.cancel') }}</TButton>
-        <TButton size="small" theme="primary" @click="handleGenerateKey">{{ t('common.confirm') }}</TButton>
-      </div>
     </TDialog>
   </div>
 </template>
 
 <style scoped>
-.dnssec-page {
-  padding: 4px;
+.td-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.td-page-header :deep(.t-card__body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.section-actions {
+  margin-bottom: 12px;
 }
 .hint {
   margin: 12px 0 0;
   color: var(--td-text-color-secondary);
   font-size: 12px;
-}
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
 }
 </style>

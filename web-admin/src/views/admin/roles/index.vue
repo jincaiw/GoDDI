@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { namedDeleteBody } from '@/utils/confirm';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Tag as TTag } from 'tdesign-vue-next';
@@ -19,6 +20,8 @@ import {
 
 defineOptions({ name: 'AdminRolesPage' });
 
+/** Starter CRUD page: TCard header + shared remote TTable + TDialog/TForm. */
+
 const { t } = useI18n();
 const perm = usePermission();
 
@@ -35,7 +38,7 @@ const assigningRoleId = ref('');
 const formData = reactive<CreateRoleRequest>({ name: '', description: '' });
 
 const formRules = {
-  name: [{ required: true, message: t('common.name') + ' required', type: 'error' }]
+  name: [{ required: true, message: t('common.name') + t('common.required'), type: 'error' }]
 };
 
 const permissionGroups = computed(() => {
@@ -115,7 +118,7 @@ const columns: PrimaryTableCol[] = [
         ),
         h(
           TLink,
-          { theme: 'danger', disabled: r.is_system || !perm.canDelete('role'), onClick: () => confirmDelete(r.id) },
+          { theme: 'danger', disabled: r.is_system || !perm.canDelete('role'), onClick: () => confirmDelete(r.id, r.name) },
           () => t('common.delete')
         )
       ]);
@@ -172,12 +175,13 @@ async function handleSubmit() {
   }
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(id: string, label?: string) {
   if (!perm.canDelete('role')) return;
   const dlg = DialogPlugin.confirm({
     header: t('common.delete'),
-    body: t('common.deleteConfirm'),
+    body: namedDeleteBody(label || id),
     theme: 'danger',
+    confirmBtn: { theme: 'danger', content: t('common.confirm') },
     onConfirm: async () => {
       try {
         await deleteRole(id);
@@ -217,7 +221,9 @@ onMounted(loadPermissions);
 <template>
   <div class="td-page">
     <TCard :bordered="false" class="td-page-header">
-      <h2>{{ t('admin.roles.title') }}</h2>
+      <div class="td-page-title">
+        <h2>{{ t('admin.roles.title') }}</h2>
+      </div>
       <TButton v-if="perm.canWrite('role')" theme="primary" @click="openCreate">
         <template #icon><TIcon name="add" /></template>
         {{ t('admin.roles.createRole') }}
@@ -280,12 +286,8 @@ onMounted(loadPermissions);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .perm-group {
   margin-bottom: 16px;

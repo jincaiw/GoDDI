@@ -17,6 +17,7 @@ func TestFullBackupRestoreRestoresDNSDHCPIPAM(t *testing.T) {
 		INSERT INTO dhcp_reservations (id,scope_id,ip_address,mac_address,hostname,enabled) VALUES ('res1','sc1','10.9.0.15','aa:bb:cc:dd:ee:77','printer',1);
 		INSERT INTO ipam_spaces (id,name) VALUES ('sp1','restore-space');
 		INSERT INTO ipam_subnets (id,space_id,name,cidr) VALUES ('sn1','sp1','restore-subnet','10.9.0.0/24');
+		INSERT INTO ipam_addresses (id,subnet_id,space_id,ip_address,status,observed_state,observed_source) VALUES ('addr1','sn1','sp1','10.9.0.12','used','in_use','dhcp');
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestFullBackupRestoreRestoresDNSDHCPIPAM(t *testing.T) {
 	if _, err := db.Exec(`
 		DELETE FROM dns_records; DELETE FROM dns_zones;
 		DELETE FROM dhcp_reservations; DELETE FROM dhcp_scopes;
-		DELETE FROM ipam_subnets; DELETE FROM ipam_spaces;
+		DELETE FROM ipam_addresses; DELETE FROM ipam_subnets; DELETE FROM ipam_spaces;
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -58,4 +59,12 @@ func TestFullBackupRestoreRestoresDNSDHCPIPAM(t *testing.T) {
 	assertRow("dhcp_reservations", "res1")
 	assertRow("ipam_spaces", "sp1")
 	assertRow("ipam_subnets", "sn1")
+	assertRow("ipam_addresses", "addr1")
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_address_observations WHERE address_id = ?`, "addr1").Scan(&n); err != nil {
+		t.Fatalf("count observations: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("observation restored rows = %d, want 1", n)
+	}
 }

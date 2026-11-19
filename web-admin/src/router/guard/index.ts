@@ -3,6 +3,7 @@ import { createRouteGuard } from './route';
 import { createPermissionGuard } from './permission';
 import { createProgressGuard } from './progress';
 import { createDocumentTitleGuard } from './title';
+import { createToastCleanupGuard } from './toast';
 
 /**
  * Router guard
@@ -14,4 +15,5 @@ export function createRouterGuard(router: Router) {
   createRouteGuard(router);
   createPermissionGuard(router);
   createDocumentTitleGuard(router);
+  createToastCleanupGuard(router);
 }

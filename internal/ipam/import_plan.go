@@ -198,7 +198,7 @@ type addressImport struct {
 // planAddressRows works out what each row would do, without writing anything.
 func (ie *ImportExport) planAddressRows(q importQuerier, subnetID string, data []byte) (*addressImport, error) {
 	var spaceID string
-	if err := q.QueryRow("SELECT space_id FROM ipam_subnets WHERE id = ?", subnetID).Scan(&spaceID); err != nil {
+	if err := q.QueryRow("SELECT space_id FROM ipam_subnets WHERE id = ? AND lifecycle_state = 'active'", subnetID).Scan(&spaceID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("%w: %s", subnet.ErrSubnetNotFound, subnetID)
 		}

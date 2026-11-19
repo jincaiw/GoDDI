@@ -7,19 +7,40 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
 )
 
-// ErrSpaceInUse is returned when deleting a space that still has subnets.
+// ErrSpaceInUse is returned when retiring a space that still has active subnets.
 // Handlers map it to HTTP 409 instead of a misleading 500.
 var ErrSpaceInUse = errors.New("space in use")
 
+// ErrSpaceRetired means an active-only operation was aimed at a retired space.
+var ErrSpaceRetired = errors.New("space is retired")
+
+// ErrSpaceNotRetired means a restore was aimed at an active space.
+var ErrSpaceNotRetired = errors.New("space is not retired")
+
+// ErrSpaceNameInUse means the restored name would collide with an active space.
+// Retirement frees the original name; restore cannot silently take it back.
+var ErrSpaceNameInUse = errors.New("space name is in use")
+
+// ErrSpaceHasChildren means a purge was aimed at a tombstone still holding subnets.
+var ErrSpaceHasChildren = errors.New("space still has child subnets")
+
+// ErrPurgeConfirmation means the caller did not name the exact resource being purged.
+var ErrPurgeConfirmation = errors.New("purge confirmation must name the resource id")
+
 // Space represents an IPAM address space.
 type Space struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	LifecycleState string `json:"lifecycle_state"`
+	RetiredAt      string `json:"retired_at,omitempty"`
+	RetiredBy      string `json:"retired_by,omitempty"`
+	RetireReason   string `json:"retire_reason,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // SpaceOptions holds parameters for creating or updating a space.
@@ -30,9 +51,10 @@ type SpaceOptions struct {
 
 // SpaceFilter holds filter parameters for listing spaces.
 type SpaceFilter struct {
-	Name     string `json:"name,omitempty"`
-	Page     int    `json:"page,omitempty"`
-	PageSize int    `json:"page_size,omitempty"`
+	Name           string `json:"name,omitempty"`
+	LifecycleState string `json:"lifecycle_state,omitempty"`
+	Page           int    `json:"page,omitempty"`
+	PageSize       int    `json:"page_size,omitempty"`
 }
 
 // Manager provides CRUD operations for IPAM spaces.
@@ -53,9 +75,9 @@ func (m *Manager) CreateSpace(name, description string) (*Space, error) {
 
 	id := uuid.New().String()
 	_, err := m.db.Exec(`
-		INSERT INTO ipam_spaces (id, name, description, created_at, updated_at)
-		VALUES (?, ?, ?, datetime('now'), datetime('now'))`,
-		id, name, description)
+		INSERT INTO ipam_spaces (id, name, description, lifecycle_state, created_at, updated_at)
+		VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		id, name, description, lifecycle.Active)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create space: %w", err)
 	}
@@ -69,9 +91,10 @@ func (m *Manager) GetSpace(id string) (*Space, error) {
 	var description sql.NullString
 
 	err := m.db.QueryRow(`
-		SELECT id, name, description, created_at, updated_at
+		SELECT id, name, description, lifecycle_state, COALESCE(retired_at, ''),
+			COALESCE(retired_by, ''), COALESCE(retire_reason, ''), created_at, updated_at
 		FROM ipam_spaces WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Name, &description, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.Name, &description, &s.LifecycleState, &s.RetiredAt, &s.RetiredBy, &s.RetireReason, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("space not found")
 	}
@@ -91,6 +114,14 @@ func (m *Manager) ListSpaces(filter SpaceFilter) ([]Space, int64, error) {
 	if filter.Name != "" {
 		conditions = append(conditions, "name LIKE ?")
 		args = append(args, "%"+filter.Name+"%")
+	}
+	state := filter.LifecycleState
+	if state == "" {
+		state = lifecycle.Active
+	}
+	if state != "all" {
+		conditions = append(conditions, "lifecycle_state = ?")
+		args = append(args, state)
 	}
 
 	whereClause := ""
@@ -117,7 +148,8 @@ func (m *Manager) ListSpaces(filter SpaceFilter) ([]Space, int64, error) {
 	}
 	offset := (page - 1) * pageSize
 
-	querySQL := `SELECT id, name, description, created_at, updated_at
+	querySQL := `SELECT id, name, description, lifecycle_state, COALESCE(retired_at, ''),
+			COALESCE(retired_by, ''), COALESCE(retire_reason, ''), created_at, updated_at
 		FROM ipam_spaces ` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, offset)
 
@@ -131,7 +163,7 @@ func (m *Manager) ListSpaces(filter SpaceFilter) ([]Space, int64, error) {
 	for rows.Next() {
 		var s Space
 		var description sql.NullString
-		if err := rows.Scan(&s.ID, &s.Name, &description, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &description, &s.LifecycleState, &s.RetiredAt, &s.RetiredBy, &s.RetireReason, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		s.Description = description.String
@@ -149,6 +181,9 @@ func (m *Manager) UpdateSpace(id string, opts SpaceOptions) (*Space, error) {
 	existing, err := m.GetSpace(id)
 	if err != nil {
 		return nil, err
+	}
+	if existing.LifecycleState == lifecycle.Retired {
+		return nil, ErrSpaceRetired
 	}
 
 	if opts.Name != "" {
@@ -168,28 +203,28 @@ func (m *Manager) UpdateSpace(id string, opts SpaceOptions) (*Space, error) {
 	return m.GetSpace(id)
 }
 
-// DeleteSpace deletes a space. A space that still has subnets is refused,
-// because ipam_subnets references ipam_spaces with ON DELETE CASCADE and
-// ipam_addresses does the same to ipam_subnets: proceeding would remove a
-// whole subtree, not the empty container the caller asked to delete.
+// RetireSpace marks a space as retired instead of deleting it.
 //
-// The count is read with its error checked. It used to discard it, which made
-// a check that could not run look exactly like a check that found nothing --
-// zero either way -- and the delete went ahead. That is the same failure this
-// project refuses everywhere else: something that could not be read must not
-// answer the way an empty list answers.
-func (m *Manager) DeleteSpace(id string) error {
+// Active subnets still block retirement: a live DHCP scope must never point at
+// a subnet whose parent has been taken out of service. Retired subnets remain
+// attached to the space as archived children and do not block it. The space
+// row itself stays so local-only ipam_addresses/ipam_history rows keep a valid
+// FK parent and the retire state can reach followers through snapshots.
+func (m *Manager) RetireSpace(id, actor, reason string) error {
 	var subnetCount int64
-	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ?", id).Scan(&subnetCount); err != nil {
-		return fmt.Errorf("failed to check for subnets in space %s: %w", id, err)
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ? AND lifecycle_state = ?", id, lifecycle.Active).Scan(&subnetCount); err != nil {
+		return fmt.Errorf("failed to check for active subnets in space %s: %w", id, err)
 	}
 	if subnetCount > 0 {
-		return fmt.Errorf("%w: cannot delete space with subnets (%d subnets exist)", ErrSpaceInUse, subnetCount)
+		return fmt.Errorf("%w: cannot retire space with active subnets (%d active subnets exist)", ErrSpaceInUse, subnetCount)
 	}
 
-	result, err := m.db.Exec("DELETE FROM ipam_spaces WHERE id = ?", id)
+	result, err := m.db.Exec(`UPDATE ipam_spaces SET
+		lifecycle_state = ?, retired_at = datetime('now'), retired_by = ?, retire_reason = ?,
+		name = name || '-retired-' || id, updated_at = datetime('now')
+		WHERE id = ? AND lifecycle_state = ?`, lifecycle.Retired, actor, reason, id, lifecycle.Active)
 	if err != nil {
-		return fmt.Errorf("failed to delete space: %w", err)
+		return fmt.Errorf("failed to retire space: %w", err)
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
@@ -197,3 +232,91 @@ func (m *Manager) DeleteSpace(id string) error {
 	}
 	return nil
 }
+
+// RestoreSpace brings a retired tombstone back into active service.
+//
+// Retirement renames the parent to free its original name, so restore has to
+// choose a name: the caller may supply one, or the original is recovered from
+// the tombstone suffix. A name already used by an active space is a conflict,
+// never an implicit overwrite. Retire metadata is cleared on success so the
+// archive stops listing a resource that is live again.
+func (m *Manager) RestoreSpace(id, name string) (*Space, error) {
+	existing, err := m.GetSpace(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.LifecycleState != lifecycle.Retired {
+		return nil, ErrSpaceNotRetired
+	}
+	if strings.TrimSpace(name) == "" {
+		name = strings.TrimSuffix(existing.Name, "-retired-"+id)
+	}
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("restored name is required")
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin restore: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var inUse int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM ipam_spaces WHERE name = ? AND id <> ? AND lifecycle_state = ?`, name, id, lifecycle.Active).Scan(&inUse); err != nil {
+		return nil, fmt.Errorf("check restored name: %w", err)
+	}
+	if inUse > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrSpaceNameInUse, name)
+	}
+	if _, err := tx.Exec(`UPDATE ipam_spaces SET
+			name = ?, lifecycle_state = ?, retired_at = NULL, retired_by = '', retire_reason = '',
+			updated_at = datetime('now')
+		WHERE id = ? AND lifecycle_state = ?`, name, lifecycle.Active, id, lifecycle.Retired); err != nil {
+		return nil, fmt.Errorf("restore space: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit restore: %w", err)
+	}
+	return m.GetSpace(id)
+}
+
+// PurgeSpace permanently removes a retired space tombstone.
+//
+// This is deliberately narrower than "delete": only a retired tombstone with
+// no child subnets can be purged. Anything else would either remove an active
+// configuration or break the FK parent of preserved local audit rows. The
+// caller must send the exact resource id as confirmation, so a stale dialog
+// cannot purge a different tombstone.
+func (m *Manager) PurgeSpace(id, confirmation string) error {
+	s, err := m.GetSpace(id)
+	if err != nil {
+		return err
+	}
+	if s.LifecycleState != lifecycle.Retired {
+		return ErrSpaceNotRetired
+	}
+	if confirmation != id {
+		return ErrPurgeConfirmation
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin purge: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var children int64
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM ipam_subnets WHERE space_id = ?`, id).Scan(&children); err != nil {
+		return fmt.Errorf("check purge children: %w", err)
+	}
+	if children > 0 {
+		return fmt.Errorf("%w: %d subnets remain", ErrSpaceHasChildren, children)
+	}
+	if _, err := tx.Exec(`DELETE FROM ipam_spaces WHERE id = ? AND lifecycle_state = ?`, id, lifecycle.Retired); err != nil {
+		return fmt.Errorf("purge space: %w", err)
+	}
+	return tx.Commit()
+}
+
+// DeleteSpace is kept as a compatibility alias; HTTP DELETE now retires.
+func (m *Manager) DeleteSpace(id string) error { return m.RetireSpace(id, "", "") }

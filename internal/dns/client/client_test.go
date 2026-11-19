@@ -62,6 +62,29 @@ func TestValidateUpstreamAddress(t *testing.T) {
 	}
 }
 
+func TestQueryWithoutUpstreamFailsClosed(t *testing.T) {
+	result, duration, err := NewDNSClient(time.Millisecond).Query("www.demo.test", dns.TypeA, "")
+	if err == nil {
+		t.Fatal("empty upstream performed a query instead of failing closed")
+	}
+	if result == nil || result.Source != "unspecified" {
+		t.Fatalf("result = %+v, want an explicit unspecified source", result)
+	}
+	if duration != 0 {
+		t.Fatalf("duration = %v, want no network time", duration)
+	}
+}
+
+func TestResultFromMessageMarksLocalAuthoritative(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.Rcode = dns.RcodeSuccess
+	msg.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "www.example.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: []byte{192, 0, 2, 10}}}
+	result := ResultFromMessage("www.example.test", dns.TypeA, "local-authoritative", msg, 0)
+	if result.Source != "local-authoritative" || len(result.Answers) != 1 || result.Answers[0].Data != "192.0.2.10" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestNewDNSClientAppliesDefaultTimeout(t *testing.T) {
 	if got := NewDNSClient(0).timeout; got != 10*time.Second {
 		t.Fatalf("default timeout = %v, want 10s", got)

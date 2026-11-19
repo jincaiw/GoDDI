@@ -64,7 +64,8 @@ func (r *ScopeIdentityResolver) Resolve(scopeID, ip string) (ScopeIdentity, erro
 func (r *ScopeIdentityResolver) resolveExact(scopeID, cidr string) (ScopeIdentity, error) {
 	var identity ScopeIdentity
 	err := r.db.QueryRow(`
-		SELECT id, space_id, cidr FROM ipam_subnets WHERE cidr = ?`, cidr).
+		SELECT id, space_id, cidr FROM ipam_subnets WHERE cidr = ? AND lifecycle_state = 'active'`,
+		cidr).
 		Scan(&identity.SubnetID, &identity.SpaceID, &identity.CIDR)
 	if err == sql.ErrNoRows {
 		return ScopeIdentity{ScopeID: scopeID}, nil
@@ -77,7 +78,7 @@ func (r *ScopeIdentityResolver) resolveExact(scopeID, cidr string) (ScopeIdentit
 }
 
 func (r *ScopeIdentityResolver) resolveContaining(scopeID string, ip net.IP) (ScopeIdentity, error) {
-	rows, err := r.db.Query(`SELECT id, space_id, cidr FROM ipam_subnets`)
+	rows, err := r.db.Query(`SELECT id, space_id, cidr FROM ipam_subnets WHERE lifecycle_state = 'active'`)
 	if err != nil {
 		return ScopeIdentity{}, fmt.Errorf("ipam scope identity: list subnets: %w", err)
 	}

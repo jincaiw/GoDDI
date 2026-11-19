@@ -4,15 +4,16 @@ export const themeSettings: App.Theme.ThemeSetting = {
   grayscale: false,
   colourWeakness: false,
   recommendColor: false,
-  themeColor: '#646cff',
+  // TDesign Vue Next Starter dashboard/base default theme ('devflow').
+  themeColor: '#0052D9',
   themeRadius: 6,
   otherColor: {
     info: '#2080f0',
-    success: '#52c41a',
-    warning: '#faad14',
-    error: '#f5222d'
+    success: '#00A870',
+    warning: '#ED7B2F',
+    error: '#E34D59'
   },
-  isInfoFollowPrimary: true,
+  isInfoFollowPrimary: false,
   layout: {
     mode: 'vertical',
     scrollMode: 'content'
@@ -24,7 +25,7 @@ export const themeSettings: App.Theme.ThemeSetting = {
   header: {
     height: 56,
     breadcrumb: {
-      visible: true,
+      visible: false,
       showIcon: true
     },
     multilingual: {
@@ -35,7 +36,7 @@ export const themeSettings: App.Theme.ThemeSetting = {
     }
   },
   tab: {
-    visible: true,
+    visible: false,
     cache: true,
     height: 44,
     mode: 'chrome',
@@ -59,7 +60,7 @@ export const themeSettings: App.Theme.ThemeSetting = {
   },
   watermark: {
     visible: false,
-    text: 'SoybeanAdmin',
+    text: 'GoDDI',
     enableUserName: false,
     enableTime: false,
     timeFormat: 'YYYY-MM-DD HH:mm'
@@ -68,8 +69,8 @@ export const themeSettings: App.Theme.ThemeSetting = {
     light: {
       colors: {
         container: 'rgb(255, 255, 255)',
-        layout: 'rgb(247, 250, 252)',
-        inverted: 'rgb(0, 20, 40)',
+        layout: 'rgb(243, 244, 246)',
+        inverted: 'rgb(0, 31, 151)',
         'base-text': 'rgb(31, 31, 31)'
       },
       boxShadow: {
@@ -80,8 +81,8 @@ export const themeSettings: App.Theme.ThemeSetting = {
     },
     dark: {
       colors: {
-        container: 'rgb(28, 28, 28)',
-        layout: 'rgb(18, 18, 18)',
+        container: 'rgb(36, 36, 36)',
+        layout: 'rgb(17, 17, 17)',
         'base-text': 'rgb(224, 224, 224)'
       }
     }
@@ -93,4 +94,29 @@ export const themeSettings: App.Theme.ThemeSetting = {
  *
  * If publish new version, use `overrideThemeSettings` to override certain theme settings
  */
-export const overrideThemeSettings: Partial<App.Theme.ThemeSetting> = {};
+export const overrideThemeSettings: Partial<App.Theme.ThemeSetting> = {
+  themeScheme: 'light',
+  themeColor: '#0052D9',
+  themeRadius: 6,
+  otherColor: {
+    info: '#2080f0',
+    success: '#00A870',
+    warning: '#ED7B2F',
+    error: '#E34D59'
+  },
+  isInfoFollowPrimary: false,
+  layout: { mode: 'vertical', scrollMode: 'content' },
+  header: {
+    height: 56,
+    breadcrumb: { visible: false, showIcon: true },
+    multilingual: { visible: true },
+    globalSearch: { visible: true }
+  },
+  tab: {
+    visible: false,
+    cache: true,
+    height: 44,
+    mode: 'chrome',
+    closeTabByMiddleClick: false
+  }
+};

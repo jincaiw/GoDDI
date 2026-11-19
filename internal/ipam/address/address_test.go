@@ -79,6 +79,95 @@ func insertAddress(t *testing.T, db *sql.DB, spaceID, subnetID, ip string, statu
 	return id
 }
 
+func TestObservationIsStoredInSeparateTable(t *testing.T) {
+	db := newTestDB(t)
+	seedSubnet(t, db, "sp1", "sn1", "192.0.2.0/24")
+	m := NewManager(db)
+	a, err := m.AllocateIP(AllocateRequest{
+		SubnetID: "sn1", IPAddress: "192.0.2.10", Status: StatusUsed,
+		Owner: "alice", Actor: "tester", Source: SourceAdmin,
+	})
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+
+	changed, err := m.ObserveBySpaceIP("sp1", "192.0.2.10", Observation{
+		State: ObservedInUse, Source: SourceDHCP, MAC: "02:00:00:00:00:10",
+		Hostname: "host10", LeaseID: "lease-10", Actor: "dhcp",
+	})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if changed {
+		t.Fatal("an observation of an already-used address must not change intent")
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ipam_address_observations WHERE address_id = ?`, a.ID).Scan(&count); err != nil {
+		t.Fatalf("count observations: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("observation rows = %d, want 1", count)
+	}
+	var state, source, mac, hostname, leaseID string
+	if err := db.QueryRow(`SELECT state, source, mac_address, hostname, lease_id FROM ipam_address_observations WHERE address_id = ?`, a.ID).
+		Scan(&state, &source, &mac, &hostname, &leaseID); err != nil {
+		t.Fatalf("read observation: %v", err)
+	}
+	if state != string(ObservedInUse) || source != SourceDHCP || mac != "02:00:00:00:00:10" || hostname != "host10" || leaseID != "lease-10" {
+		t.Fatalf("split observation = %q/%q/%q/%q/%q", state, source, mac, hostname, leaseID)
+	}
+
+	got, err := m.GetAddress(a.ID)
+	if err != nil {
+		t.Fatalf("get address: %v", err)
+	}
+	if got.Status != StatusUsed {
+		t.Fatalf("observation overwrote intent: status=%q, want used", got.Status)
+	}
+	if got.ObservedState != ObservedInUse || got.ObservedMAC != "02:00:00:00:00:10" {
+		t.Fatalf("address view lost observation: %+v", got)
+	}
+}
+
+func TestLegacyObservedWriteMirrorsIntoSplitTable(t *testing.T) {
+	db := newTestDB(t)
+	seedSubnet(t, db, "sp1", "sn1", "192.0.2.0/24")
+	m := NewManager(db)
+	id := insertAddress(t, db, "sp1", "sn1", "192.0.2.11", StatusUsed)
+
+	// This is the compatibility path: callers that still write the 020-era
+	// columns must not leave the split table stale.
+	if _, err := db.Exec(`UPDATE ipam_addresses SET observed_state=?, observed_source=?, observed_mac=?
+		WHERE id=?`, string(ObservedContested), SourceDHCP, "02:00:00:00:00:11", id); err != nil {
+		t.Fatalf("legacy observed update: %v", err)
+	}
+
+	var state, source, mac string
+	if err := db.QueryRow(`SELECT state, source, mac_address FROM ipam_address_observations WHERE address_id=?`, id).
+		Scan(&state, &source, &mac); err != nil {
+		t.Fatalf("read mirrored observation: %v", err)
+	}
+	if state != string(ObservedContested) || source != SourceDHCP || mac != "02:00:00:00:00:11" {
+		t.Fatalf("mirrored observation = %q/%q/%q", state, source, mac)
+	}
+
+	rows, total, err := m.ListAddresses(AddressFilter{SpaceID: "sp1", ObservedState: ObservedContested})
+	if err != nil {
+		t.Fatalf("list by observed_state: %v", err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("filtered rows=%+v total=%d, want only %s", rows, total, id)
+	}
+	rows, total, err = m.ListAddresses(AddressFilter{SpaceID: "sp1", ObservedState: ObservedInUse})
+	if err != nil {
+		t.Fatalf("list by old observed_state: %v", err)
+	}
+	if total != 0 || len(rows) != 0 {
+		t.Fatalf("old observation still matched: rows=%+v total=%d", rows, total)
+	}
+}
+
 // --- allocation ------------------------------------------------------------
 
 func TestAllocateIP_Explicit(t *testing.T) {

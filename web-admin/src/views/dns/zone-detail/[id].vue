@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { onBeforeRouteLeave, useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { DialogPlugin, Link as TLink, MessagePlugin, Space as TSpace, Switch as TSwitch, Tag as TTag } from 'tdesign-vue-next';
 import type { FormInstanceFunctions, PrimaryTableCol } from 'tdesign-vue-next';
@@ -71,6 +71,49 @@ const aclForm = reactive<ZoneACL & { query_access?: string }>({
   notify: []
 });
 
+const aclDirty = ref(false);
+let aclBaseline = '';
+
+function aclSnapshot() {
+  return JSON.stringify({
+    query_access: aclForm.query_access,
+    allow_query: aclForm.allow_query,
+    allow_transfer: aclForm.allow_transfer,
+    allow_update: aclForm.allow_update,
+    notify: aclForm.notify
+  });
+}
+
+function confirmDiscard(message: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const dlg = DialogPlugin.confirm({
+      header: t('common.confirm'),
+      body: message,
+      theme: 'warning',
+      confirmBtn: t('common.confirm'),
+      cancelBtn: t('common.cancel'),
+      onConfirm: () => { dlg.hide(); resolve(true); },
+      onCancel: () => { dlg.hide(); resolve(false); },
+      onClose: () => resolve(false)
+    });
+  });
+}
+
+watch(aclForm, () => {
+  aclDirty.value = Boolean(zone.value) && aclSnapshot() !== aclBaseline;
+}, { deep: true });
+
+onBeforeRouteLeave(async () => {
+  if (!aclDirty.value) return true;
+  return confirmDiscard(t('dns.zones.unsavedChanges'));
+});
+
+window.addEventListener('beforeunload', event => {
+  if (!aclDirty.value) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
 async function loadZone() {
   try {
     zone.value = await getDNSZone(zoneId);
@@ -80,6 +123,8 @@ async function loadZone() {
     aclForm.allow_transfer = [...(acl?.allow_transfer ?? [])];
     aclForm.allow_update = [...(acl?.allow_update ?? [])];
     aclForm.notify = [...(acl?.notify ?? [])];
+    aclBaseline = aclSnapshot();
+    aclDirty.value = false;
     await loadCatalogData();
   } catch (err) {
     msgError(err);
@@ -92,6 +137,7 @@ const recordSearch = ref('');
 const recordTypeFilter = ref<string | undefined>(undefined);
 const showAddRecord = ref(false);
 const recordSubmitting = ref(false);
+const togglingId = ref<string | null>(null);
 const editingRecord = ref<DNSRecord | null>(null);
 const recordFormRef = ref<FormInstanceFunctions | null>(null);
 
@@ -146,6 +192,7 @@ const recordColumns: PrimaryTableCol[] = [
         size: 'small',
         value: Boolean(r.enabled),
         disabled: !perm.canWrite('dns'),
+        loading: togglingId.value === r.id,
         onChange: (value: unknown) => void toggleRecordEnabled(r, Boolean(value))
       });
     }
@@ -222,6 +269,20 @@ async function handleRecordSubmit() {
   }
 }
 
+async function toggleRecordEnabled(record: DNSRecord, value: boolean) {
+  if (!perm.canWrite('dns')) return;
+  togglingId.value = record.id;
+  try {
+    await updateDNSRecord(zoneId, record.id, { enabled: value });
+    void MessagePlugin.success(t('common.updateSuccess'));
+    await recordsTable.value?.reload();
+  } catch (err) {
+    msgError(err);
+  } finally {
+    togglingId.value = null;
+  }
+}
+
 function confirmDeleteRecord(id: string) {
   if (!perm.canDelete('dns')) return;
   const dlg = DialogPlugin.confirm({
@@ -241,15 +302,6 @@ function confirmDeleteRecord(id: string) {
   });
 }
 
-async function toggleRecordEnabled(record: DNSRecord, value: boolean) {
-  if (!perm.canWrite('dns')) return;
-  try {
-    await updateDNSRecord(zoneId, record.id, { enabled: value });
-    await recordsTable.value?.reload();
-  } catch (err) {
-    msgError(err);
-  }
-}
 
 // --- Import / export / sync ---
 const showImport = ref(false);
@@ -994,11 +1046,6 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 16px 20px;
-}
-.td-page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
 }
 .subtitle {
   font-size: 12px;

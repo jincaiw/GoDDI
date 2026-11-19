@@ -30,6 +30,7 @@ const (
 type DHCPLogEntry struct {
 	ID         string        `json:"id"`
 	ScopeID    string        `json:"scope_id,omitempty"`
+	ScopeName  string        `json:"scope_name,omitempty"`
 	MACAddress string        `json:"mac_address,omitempty"`
 	IPAddress  string        `json:"ip_address,omitempty"`
 	EventType  DHCPEventType `json:"event_type"`
@@ -270,27 +271,27 @@ func QueryDHCPLogs(db *sql.DB, filter DHCPLogFilter) ([]DHCPLogEntry, int64, err
 	var args []interface{}
 
 	if filter.ScopeID != "" {
-		conditions = append(conditions, "scope_id = ?")
+		conditions = append(conditions, "l.scope_id = ?")
 		args = append(args, filter.ScopeID)
 	}
 	if filter.EventType != "" {
-		conditions = append(conditions, "event_type = ?")
+		conditions = append(conditions, "l.event_type = ?")
 		args = append(args, string(filter.EventType))
 	}
 	if filter.MACAddress != "" {
-		conditions = append(conditions, "mac_address = ?")
+		conditions = append(conditions, "l.mac_address = ?")
 		args = append(args, filter.MACAddress)
 	}
 	if filter.IPAddress != "" {
-		conditions = append(conditions, "ip_address = ?")
+		conditions = append(conditions, "l.ip_address = ?")
 		args = append(args, filter.IPAddress)
 	}
 	if filter.StartTime != "" {
-		conditions = append(conditions, "created_at >= ?")
+		conditions = append(conditions, "l.created_at >= ?")
 		args = append(args, filter.StartTime)
 	}
 	if filter.EndTime != "" {
-		conditions = append(conditions, "created_at <= ?")
+		conditions = append(conditions, "l.created_at <= ?")
 		args = append(args, filter.EndTime)
 	}
 
@@ -318,8 +319,11 @@ func QueryDHCPLogs(db *sql.DB, filter DHCPLogFilter) ([]DHCPLogEntry, int64, err
 	}
 	offset := (page - 1) * pageSize
 
-	querySQL := `SELECT id, scope_id, mac_address, ip_address, event_type, message, created_at
-		FROM dhcp_logs ` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	querySQL := `SELECT l.id, l.scope_id, COALESCE(s.name, ''), l.mac_address,
+			l.ip_address, l.event_type, l.message, l.created_at
+		FROM dhcp_logs l
+		LEFT JOIN dhcp_scopes s ON s.id = l.scope_id ` + whereClause +
+		` ORDER BY l.created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, offset)
 
 	rows, err := db.Query(querySQL, args...)
@@ -332,7 +336,7 @@ func QueryDHCPLogs(db *sql.DB, filter DHCPLogFilter) ([]DHCPLogEntry, int64, err
 	for rows.Next() {
 		var e DHCPLogEntry
 		var scopeID, macAddress, ipAddress, message sql.NullString
-		if err := rows.Scan(&e.ID, &scopeID, &macAddress, &ipAddress, &e.EventType, &message, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &scopeID, &e.ScopeName, &macAddress, &ipAddress, &e.EventType, &message, &e.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		e.ScopeID = scopeID.String
