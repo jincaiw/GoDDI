@@ -126,7 +126,7 @@ func main() {
 	fmt.Println("\n--- Phase 11: Extensions (501 Not Implemented) ---")
 	test("GET /api/v1/sso - returns 501", testExtSSO)
 	test("GET /api/v1/cluster - returns 501", testExtCluster)
-	test("GET /api/v1/dhcp/ha - returns 501", testExtDHCPHA)
+	test("GET /api/v1/dhcp/ha - returns 200 read-only status", testExtDHCPHA)
 
 	// ---- Phase 12: Cleanup ----
 	fmt.Println("\n--- Phase 12: Cleanup & Session ---")
@@ -858,12 +858,22 @@ func testExtCluster() error {
 }
 
 func testExtDHCPHA() error {
+	// Round 285 changed /dhcp/ha from a 501 extension stub to a 200 read-only
+	// status document (see internal/api/handler/extension.go). Assert the
+	// current contract: 200 with a boolean ha_enabled fact.
 	resp, result := doRequest("GET", "/api/v1/dhcp/ha", nil)
 	if resp == nil {
 		return fmt.Errorf("no response")
 	}
-	if resp.StatusCode != 501 {
-		return fmt.Errorf("expected 501, got %d, body: %v", resp.StatusCode, result)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("expected 200 read-only status, got %d, body: %v", resp.StatusCode, result)
+	}
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("missing data object: %v", result)
+	}
+	if _, ok := data["ha_enabled"].(bool); !ok {
+		return fmt.Errorf("ha_enabled missing or not bool: %v", data)
 	}
 	return nil
 }
