@@ -282,7 +282,7 @@ jobs:
           cache: true
 
       - name: Build Linux arm64 binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.24.1" -o /tmp/goddi-arm64 ./cmd/goddi
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.25.0" -o /tmp/goddi-arm64 ./cmd/goddi
 
       - name: Smoke test Linux arm64 binary
-        run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.24.1
+        run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.25.0
