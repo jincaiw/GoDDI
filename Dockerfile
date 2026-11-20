@@ -17,9 +17,18 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
-# Cache dependencies
+# Live in a known-good module proxy unless the caller overrides it. The Go
+# default (proxy.golang.org) can hang indefinitely on networks where it is
+# reachable but slow, which stalls the whole build at this step with no output.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+
+# Cache dependencies. The BuildKit cache mount keeps the module cache across
+# builds; without it every build re-downloads the full dependency set.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 # Copy source code
 COPY . .
