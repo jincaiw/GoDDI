@@ -111,7 +111,7 @@ func TestReextractFromTheComposedCandidateValidates(t *testing.T) {
 	}
 	var raw []byte
 	for _, l := range lines {
-		b, e := json.Marshal(wireRow{Table: l.Table, Row: l.Row})
+		b, e := json.Marshal(wireRow(l))
 		if e != nil {
 			t.Fatal(e)
 		}

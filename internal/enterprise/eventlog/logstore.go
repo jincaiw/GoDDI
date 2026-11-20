@@ -247,7 +247,6 @@ type WriteTx struct {
 	audited   bool
 	committed bool
 	dirty     bool
-	abandoned bool
 }
 
 // Begin refuses protected writes until an independent role authority and
@@ -428,14 +427,6 @@ func (t *WriteTx) abort(ctx context.Context, cause error) error {
 			err, cause)
 	}
 	return cause
-}
-
-// discard closes a connection that never handed out a transaction.
-func (t *WriteTx) discard(ctx context.Context) {
-	if _, err := t.conn.ExecContext(ctx, "ROLLBACK"); err != nil {
-		_ = t.conn.Raw(func(any) error { return driver.ErrBadConn })
-	}
-	t.close()
 }
 
 func (t *WriteTx) close() {

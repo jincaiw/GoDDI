@@ -63,7 +63,7 @@ import (
 
 var (
 	// Build information, set at compile time via ldflags.
-	Version   = "v0.25.0"
+	Version   = "v0.25.1"
 	GitCommit = "unknown"
 	BuildDate = "unknown"
 )
@@ -1618,7 +1618,7 @@ func runServer(configPath string) error {
 	// A snapshot is a full replace, so an apply that lands is complete: a missed
 	// pull is corrected by the next one. Failures are logged and retried; the
 	// follower keeps serving whatever it already has.
-	if cfg.Cluster.ConfigReplication && cfg.Cluster.IsConfigAuthor() == false {
+	if cfg.Cluster.ConfigReplication && !cfg.Cluster.IsConfigAuthor() {
 		puller := configrepl.NewPuller(db.DB,
 			configrepl.PullerConfig{
 				SourceURL: cfg.Cluster.ConfigReplicationSource,

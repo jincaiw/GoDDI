@@ -349,7 +349,7 @@ func Check(ctx context.Context, conn *sql.Conn, l Limits) (out Evidence, err err
 			return Evidence{}, err
 		}
 		p, ok := prefixes[key3{a.key.tenant, a.key.space, a.subnet}]
-		if !ok || p.kind != "SUBNET" || p.usage != "STANDARD" || p.family != a.family || bytes.Compare(a.first[:], p.first[:]) <= 0 || bytes.Compare(a.last[:], p.last[:]) > 0 || (a.family == 4 && bytes.Compare(a.last[:], p.last[:]) == 0) {
+		if !ok || p.kind != "SUBNET" || p.usage != "STANDARD" || p.family != a.family || bytes.Compare(a.first[:], p.first[:]) <= 0 || bytes.Compare(a.last[:], p.last[:]) > 0 || (a.family == 4 && bytes.Equal(a.last[:], p.last[:])) {
 			return Evidence{}, ErrInvalid
 		}
 		key := scopeFamily{a.key.tenant, a.key.space, a.family}

@@ -251,7 +251,7 @@ func TestVarintAndEightMiBBoundary(t *testing.T) {
 		}
 		out := unmarshal(t, b)
 		if len(b) > pullbudget.MaxBytes || len(out.Events) != 1 {
-			t.Fatal(fmt.Sprintf("wire=%d events=%d", len(b), len(out.Events)))
+			t.Fatalf("wire=%d events=%d", len(b), len(out.Events))
 		}
 	})
 }

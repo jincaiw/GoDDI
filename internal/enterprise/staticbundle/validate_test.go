@@ -206,22 +206,22 @@ func TestRehashedCrossFieldTampering(t *testing.T) {
 }
 
 func TestEnvelopeFailures(t *testing.T) {
-	e, c := fixture(t)
+	e, _ := fixture(t)
 	e.Position.Hash[0] ^= 1
 	if _, err := Validate(e); err == nil {
 		t.Fatal("bad hash")
 	}
-	e, c = fixture(t)
+	e, _ = fixture(t)
 	e.Payload = e.Payload[:len(e.Payload)-1]
 	if _, err := Validate(e); err == nil {
 		t.Fatal("truncated")
 	}
-	e, c = fixture(t)
+	e, _ = fixture(t)
 	e.Payload = []byte(strings.Repeat("x", eventlog.MaxPayloadBytes+1))
 	if _, err := Validate(e); err == nil {
 		t.Fatal("oversized")
 	}
-	e, c = fixture(t)
+	e, c := fixture(t)
 	e = rehash(t, e, c[:2])
 	if _, err := Validate(e); err == nil {
 		t.Fatal("missing")

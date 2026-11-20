@@ -82,7 +82,7 @@ func TestEmptyAndPublicRemainClosed(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM main.sqlite_schema`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("empty changed: %d %v", n, err)
 	}
-	if migrateFixture(nil, db, hooks{}) == nil || migrateFixture(context.Background(), nil, hooks{}) == nil {
+	if migrateFixture(nil, db, hooks{}) == nil || migrateFixture(context.Background(), nil, hooks{}) == nil { //nolint:staticcheck // deliberate nil-context negative test
 		t.Fatal("nil accepted")
 	}
 }

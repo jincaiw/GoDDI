@@ -157,7 +157,7 @@ func TestOpenWALPipelineRejectsBadConfig(t *testing.T) {
 			t.Fatalf("case %d: error = %v, want ErrWALPipelineConfig", i, err)
 		}
 	}
-	if _, err := OpenWALPipeline(nil, WALPipelineConfig{Path: "x", DB: store.DB, Capacity: 8, NextOp: pipelineBuilder}); !errors.Is(err, ErrWALPipelineConfig) {
+	if _, err := OpenWALPipeline(nil, WALPipelineConfig{Path: "x", DB: store.DB, Capacity: 8, NextOp: pipelineBuilder}); !errors.Is(err, ErrWALPipelineConfig) { //nolint:staticcheck // deliberate nil-context negative test
 		t.Fatalf("nil context error = %v, want ErrWALPipelineConfig", err)
 	}
 }

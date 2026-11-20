@@ -90,7 +90,7 @@ func TestMigrationPathsAreIndependentCopies(t *testing.T) {
 		t.Fatalf("paths: %v", paths)
 	}
 	paths[0] = "migrations/forged.sql"
-	paths = append(paths, "extra.sql")
+	_ = append(paths, "extra.sql")
 	if got := ipamstore.MigrationPaths(); len(got) != 2 || got[0] != "migrations/001_ipam.sql" || got[1] != "migrations/002_rowid_guards.sql" {
 		t.Fatalf("paths changed: %v", got)
 	}

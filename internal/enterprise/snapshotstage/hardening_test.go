@@ -107,7 +107,9 @@ func TestCleanupErrorRemainsVisible(t *testing.T) {
 		}
 		return nil
 	}}
-	if !errors.Is(s.close(), failure) || !errors.Is(s.close(), failure) || calls != 3 {
+	first := s.close()
+	second := s.close()
+	if !errors.Is(first, failure) || !errors.Is(second, failure) || calls != 3 {
 		t.Fatalf("error swallowed or repeated operations: %d", calls)
 	}
 }

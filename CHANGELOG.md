@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.25.1 — 2026-11-20
+
+- Clear the CI gate debt that surfaced after v0.25.0. The branch had accumulated 51 un-pushed commits that never ran CI; this release makes all five CI jobs pass.
+- lint: fix 33 golangci-lint findings (ineffassign 5, staticcheck 21, unused 7). Deliberate nil-context negative tests are annotated with a justified nolint rather than changed.
+- security (Go): bump the toolchain to 1.26.11 (standard-library fixes in 1.26.9-1.26.11) and golang.org/x/net to v0.60.0; govulncheck is now clean.
+- security (frontend): upgrade axios, vite, vue-i18n, qs and oxfmt, and pin transitive packages (follow-redirects, source-map-js, tinypool, @vue/server-renderer, @intlify/*, braces, decode-uri-component, esbuild, glob, micromatch, minimatch, postcss) via pnpm overrides. pnpm audit reports no known vulnerabilities and the frontend still builds.
+- Note: the v0.25.0 tag was published with red CI; its binaries were fine, but this release supersedes it as the first green-CI release of the TDesign console.
+
 ## v0.25.0 — 2026-11-20
 
 - Rebuild the admin console on the TDesign Vue Next Starter theme, replacing the

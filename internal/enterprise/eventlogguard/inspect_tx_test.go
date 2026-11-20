@@ -69,7 +69,7 @@ func TestInspectTxInvalidInputsAndPolicy(t *testing.T) {
 	if v != Unknown || !errors.Is(err, ErrInvalid) || !errors.Is(err, sql.ErrTxDone) {
 		t.Fatalf("closed tx: %v %v", v, err)
 	}
-	if v, err = InspectTx(nil, tx); v != Unknown || !errors.Is(err, ErrInvalid) {
+	if v, err = InspectTx(nil, tx); v != Unknown || !errors.Is(err, ErrInvalid) { //nolint:staticcheck // deliberate nil-context negative test
 		t.Fatal("nil context accepted")
 	}
 	if v, err = InspectTx(context.Background(), nil); v != Unknown || !errors.Is(err, ErrInvalid) {

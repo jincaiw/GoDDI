@@ -144,10 +144,10 @@ func TestLegacyReadRejectsNilInputs(t *testing.T) {
 	db, l := logFixture(t)
 	_ = db
 	for _, log := range []*Log{nil, {}, l} {
-		if _, err := log.Read(nil, Position{Epoch: 1}, 1); err == nil {
+		if _, err := log.Read(nil, Position{Epoch: 1}, 1); err == nil { //nolint:staticcheck // deliberate nil-context negative test
 			t.Fatal("nil context accepted")
 		}
-		if _, _, err := log.ReadSnapshot(nil, Position{Epoch: 1}, 1); err == nil {
+		if _, _, err := log.ReadSnapshot(nil, Position{Epoch: 1}, 1); err == nil { //nolint:staticcheck // deliberate nil-context negative test
 			t.Fatal("nil context accepted")
 		}
 	}

@@ -11,7 +11,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
 # Backend build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.11-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 

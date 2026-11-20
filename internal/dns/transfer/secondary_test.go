@@ -166,7 +166,7 @@ func TestValidateTransferredAXFRRejectsBadFrameTail(t *testing.T) {
 		t.Fatalf("mismatched closing SOA = %v, want rejection", err)
 	}
 
-	opening, closing = axfrFrameTOKs()
+	opening, _ = axfrFrameTOKs()
 	if err := validateTransferredAXFR("example.test.", []dns.RR{opening, record}); err == nil ||
 		!strings.Contains(err.Error(), "begin and end with SOA") {
 		t.Fatalf("truncated tail = %v, want rejection", err)

@@ -65,7 +65,7 @@ func TestVerifyRejectsLegacyAndCancellation(t *testing.T) {
 	if err = fresh.QueryRowContext(context.Background(), `SELECT count(*) FROM main.sqlite_schema`).Scan(&n); err != nil || n == 0 {
 		t.Fatalf("fresh connection failed %v", err)
 	}
-	if !errors.Is(Verify(nil, fresh), ErrInvalid) || !errors.Is(Verify(context.Background(), nil), ErrInvalid) {
+	if !errors.Is(Verify(nil, fresh), ErrInvalid) || !errors.Is(Verify(context.Background(), nil), ErrInvalid) { //nolint:staticcheck // deliberate nil-context negative test
 		t.Fatal("nil accepted")
 	}
 }

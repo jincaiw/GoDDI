@@ -11,7 +11,6 @@ import (
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/miekg/dns"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
@@ -78,22 +77,6 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...interface{}) {
 	if _, err := db.Exec(query, args...); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
 	}
-}
-
-// resolve asks the authoritative store for an A record, the way a query would.
-func resolve(t *testing.T, store *zone.Store, name string) []string {
-	t.Helper()
-	_, answers, found := store.Lookup(dns.Fqdn(name), dns.TypeA)
-	if !found {
-		return nil
-	}
-	var out []string
-	for _, rr := range answers {
-		if a, ok := rr.(*dns.A); ok {
-			out = append(out, a.A.String())
-		}
-	}
-	return out
 }
 
 func discoverWithHostname(t *testing.T, mac net.HardwareAddr, hostname string) *dhcpv4.DHCPv4 {

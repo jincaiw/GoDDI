@@ -79,15 +79,6 @@ func newSplitServer(t *testing.T) (*Server, *sql.DB, *sql.DB) {
 	return s, leaseStore.DB, dnsStore.DB
 }
 
-func splitCount(t *testing.T, db *sql.DB, query string, args ...any) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
-		t.Fatalf("count with %q: %v", query, err)
-	}
-	return n
-}
-
 // TestTheReplyDependsOnlyOnTheLeaseStore is the property the split is for.
 //
 // The DNS store is closed before the exchange. Nothing on the path from

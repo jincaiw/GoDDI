@@ -101,7 +101,7 @@ func TestInspectCanceledNilAndClosed(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		db := legacy(t)
 		c := connQueryOnly(t, db)
-		v, err := Inspect(nil, c)
+		v, err := Inspect(nil, c) //nolint:staticcheck // deliberate nil-context negative test
 		if v != Unknown || !errors.Is(err, ErrInvalid) {
 			t.Fatal("nil ctx")
 		}

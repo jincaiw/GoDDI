@@ -381,13 +381,6 @@ func TestReadOnlyRoleIsRefusedByEveryMutatingOperation(t *testing.T) {
 	}
 }
 
-// authedBodyRequest is authedRequest with an explicit method and empty-body
-// option, kept separate so the table-driven callers stay readable.
-func authedBodyRequest(t *testing.T, srvURL, method, path, token string, body interface{}) (int, []byte) {
-	t.Helper()
-	return authedRequest(t, srvURL, method, path, token, body)
-}
-
 // Per-resource isolation, the other axis of the old browser RBAC matrix: a
 // role scoped to one resource's read must grant exactly that resource's reads
 // and nothing else, and a second role must union rather than replace. The old

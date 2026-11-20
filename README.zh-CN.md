@@ -22,9 +22,9 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 
 ![备份管理](docs/images/backup.png)
 
-## v0.25.0 功能边界
+## v0.25.1 功能边界
 
-GoDDI v0.25.0 是一套基于 SQLite/WAL 的自托管 DDI 平台。管理控制台已按 TDesign Vue Next Starter 主题全面重构，替换此前的 Naive UI 前端，同时保持全部路由、API 调用与业务流程可用；并保留 v0.24.x 的安全与质量更新与受支持的 Alpine 运行镜像。生产能力边界如下：
+GoDDI v0.25.1 是一套基于 SQLite/WAL 的自托管 DDI 平台。管理控制台已按 TDesign Vue Next Starter 主题全面重构，替换此前的 Naive UI 前端，同时保持全部路由、API 调用与业务流程可用；并保留 v0.24.x 的安全与质量更新与受支持的 Alpine 运行镜像。生产能力边界如下：
 
 - **已实现**：权威与递归 DNS、DHCP 处理、IPAM、配置版本、备份恢复、监控指标、Web 控制台，以及 DoT/DoH/DoQ 监听器配置。真实 DoT/DoH/DoQ 客户端握手仍需部署环境验证。
 - **实验性/不完整**：DHCP HA 尚未通过 GA 认证；DNSSEC 密钥与 DS 管理尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
@@ -41,7 +41,7 @@ GoDDI v0.25.0 是一套基于 SQLite/WAL 的自托管 DDI 平台。管理控制�
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.25.0/goddi-v0.25.0-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.25.1/goddi-v0.25.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```

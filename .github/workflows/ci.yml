@@ -14,7 +14,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.11'
           cache: true
 
       - name: Set up pnpm
@@ -201,7 +201,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.11'
           cache: true
 
       # The binary embeds web/dist through go:embed. That directory is a build
@@ -218,7 +218,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           # Pinned: "latest" resolved to a binary built with Go 1.24,
-          # which refuses configs targeting go 1.26.6.
+          # which refuses configs targeting go 1.26.11.
           version: v2.13.2
 
   # L2: dependency vulnerability scan against the Go vulnerability DB.
@@ -231,7 +231,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.11'
           cache: true
 
       # The binary embeds web/dist through go:embed. That directory is a build
@@ -296,7 +296,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.11'
           cache: true
 
       - name: Set up pnpm
@@ -327,7 +327,7 @@ jobs:
           cp -R web-admin/dist/. web/dist/
 
       - name: Build Linux arm64 binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.25.0" -o /tmp/goddi-arm64 ./cmd/goddi
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.25.1" -o /tmp/goddi-arm64 ./cmd/goddi
 
       - name: Smoke test Linux arm64 binary
-        run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.25.0
+        run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.25.1

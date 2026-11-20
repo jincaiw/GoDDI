@@ -43,14 +43,14 @@ func TestPublicReadHelpersRejectNilInputsWithoutPanic(t *testing.T) {
 	defer db.Close()
 	real := NewLog(db, ID{1}, ID{2})
 	//lint:ignore SA1012 intentionally probing nil-context robustness
-	mustErr("Head/nil-ctx", func() error { _, err := real.Head(nil); return err })
+	mustErr("Head/nil-ctx", func() error { _, err := real.Head(nil); return err }) //nolint:staticcheck // deliberate nil-context negative test
 	//lint:ignore SA1012
-	mustErr("Applied/nil-ctx", func() error { _, err := real.Applied(nil, ID{}); return err })
+	mustErr("Applied/nil-ctx", func() error { _, err := real.Applied(nil, ID{}); return err }) //nolint:staticcheck // deliberate nil-context negative test
 
 	// CurrentAuthority nil inputs.
 	mustErr("CurrentAuthority/nil-db", func() error { _, err := CurrentAuthority(ctx, nil, ID{1}); return err })
 	//lint:ignore SA1012
-	mustErr("CurrentAuthority/nil-ctx", func() error { _, err := CurrentAuthority(nil, db, ID{1}); return err })
+	mustErr("CurrentAuthority/nil-ctx", func() error { _, err := CurrentAuthority(nil, db, ID{1}); return err }) //nolint:staticcheck // deliberate nil-context negative test
 
 	// Sanity: valid inputs still hit the database (missing row -> ErrChainBreak/ErrNoAuthority),
 	// not the nil-input error, proving the guards did not swallow normal paths.

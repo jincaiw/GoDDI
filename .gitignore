@@ -89,3 +89,6 @@ bin/
 # UI change look like dozens of unrelated binary diffs, so the artifact is no
 # longer tracked. Run: make web-build
 /web/dist/
+
+# DevFlow process artifacts (local)
+/artifacts/

@@ -26,8 +26,8 @@ func TestReadmeCapabilityClaimsMatchReleaseBoundary(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"v0.25.0",
-			"releases/download/v0.25.0",
+			"v0.25.1",
+			"releases/download/v0.25.1",
 			"DoT/DoH/DoQ",
 			"DNSSEC",
 			"501 Not Implemented",

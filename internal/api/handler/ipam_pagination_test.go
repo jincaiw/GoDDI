@@ -67,11 +67,9 @@ func TestListSpacesPageTwoShowsTheNextRowsNotAReSlice(t *testing.T) {
 	withIPAMServices(t, &IPAMServiceContainer{DB: db, SpaceMgr: space.NewManager(db)})
 
 	const count = 11
-	var all []string
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("page-cover-%02d", i)
 		createSpaceViaHandler(t, name)
-		all = append(all, name)
 	}
 
 	page1, total, pages := spacePage(t, "1", "10")

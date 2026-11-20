@@ -46,8 +46,7 @@ type fixtureHooks struct {
 	beforeInsert func(*sql.Conn) error
 	beforeCommit func() error
 	afterCommit  func() error
-	afterVerify  func() error        // runs after eventlogguard.Verify: schema-2 lease staging lands here, because the hardened structure match is strict about extra tables
-	leaseInsert  func(*sql.Tx) error // runs inside the main transaction after the IPAM rows: schema-2 lease-row application
+	afterVerify  func() error // runs after eventlogguard.Verify: schema-2 lease staging lands here, because the hardened structure match is strict about extra tables
 	seePath      func(string)
 	// schema2 switches the pipeline to the twelve-table schema-2 stream
 	// (eight IPAM tables + the four frozen lease tables) and captures the

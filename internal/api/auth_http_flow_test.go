@@ -613,7 +613,7 @@ func TestAuthRefreshFlowIssuesAWorkingPairAndHonorsRevocation(t *testing.T) {
 			uid = u.ID
 		}
 	}
-	st, body = adminCall(http.MethodGet, "/api/v1/permissions", nil)
+	_, body = adminCall(http.MethodGet, "/api/v1/permissions", nil)
 	var perms struct {
 		Data []struct {
 			ID       string `json:"id"`
@@ -630,7 +630,7 @@ func TestAuthRefreshFlowIssuesAWorkingPairAndHonorsRevocation(t *testing.T) {
 			ids = append(ids, p.ID)
 		}
 	}
-	st, body = adminCall(http.MethodPost, "/api/v1/roles", map[string]string{
+	_, body = adminCall(http.MethodPost, "/api/v1/roles", map[string]string{
 		"name": "refresh_writer_role", "description": "refresh flow",
 	})
 	var roleOut struct {
@@ -641,10 +641,10 @@ func TestAuthRefreshFlowIssuesAWorkingPairAndHonorsRevocation(t *testing.T) {
 	if err := json.Unmarshal(body, &roleOut); err != nil {
 		t.Fatal(err)
 	}
-	st, _ = adminCall(http.MethodPut, "/api/v1/roles/"+roleOut.Data.ID+"/permissions", map[string]interface{}{
+	_, _ = adminCall(http.MethodPut, "/api/v1/roles/"+roleOut.Data.ID+"/permissions", map[string]interface{}{
 		"permission_ids": ids,
 	})
-	st, _ = adminCall(http.MethodPost, "/api/v1/users/"+uid+"/roles", map[string]interface{}{
+	_, _ = adminCall(http.MethodPost, "/api/v1/users/"+uid+"/roles", map[string]interface{}{
 		"role_ids": []string{roleOut.Data.ID},
 	})
 

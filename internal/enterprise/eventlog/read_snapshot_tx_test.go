@@ -79,7 +79,7 @@ func TestReadSnapshotTxPreconditionsAndErrors(t *testing.T) {
 	tx.Rollback()
 	reader := readerFor(t, db)
 	tx = readTx(t, reader)
-	if events, head, err := l.ReadSnapshotTx(nil, tx, Position{Epoch: 1}, 1); err == nil || len(events) != 0 || head != (Position{}) {
+	if events, head, err := l.ReadSnapshotTx(nil, tx, Position{Epoch: 1}, 1); err == nil || len(events) != 0 || head != (Position{}) { //nolint:staticcheck // deliberate nil-context negative test
 		t.Fatalf("nil context: %v %v %v", events, head, err)
 	}
 	for _, max := range []int{0, MaxBatchEvents + 1} {
