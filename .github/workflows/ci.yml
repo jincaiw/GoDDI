@@ -204,6 +204,15 @@ jobs:
           go-version: '1.26.6'
           cache: true
 
+      # The binary embeds web/dist through go:embed. That directory is a build
+      # artifact and is no longer tracked, so give these compile-only jobs a
+      # placeholder. They lint/scan code and never serve the UI, so the content
+      # does not matter; it only has to exist for the embed pattern to resolve.
+      - name: Prepare embedded web/dist placeholder
+        run: |
+          mkdir -p web/dist
+          printf '<!doctype html><div id="app"></div>\n' > web/dist/index.html
+
       - name: golangci-lint
         # v7 is required for golangci-lint v2 (v6 only supports v1).
         uses: golangci/golangci-lint-action@v7
@@ -224,6 +233,15 @@ jobs:
         with:
           go-version: '1.26.6'
           cache: true
+
+      # The binary embeds web/dist through go:embed. That directory is a build
+      # artifact and is no longer tracked, so give these compile-only jobs a
+      # placeholder. They lint/scan code and never serve the UI, so the content
+      # does not matter; it only has to exist for the embed pattern to resolve.
+      - name: Prepare embedded web/dist placeholder
+        run: |
+          mkdir -p web/dist
+          printf '<!doctype html><div id="app"></div>\n' > web/dist/index.html
 
       - name: govulncheck
         run: |
@@ -280,6 +298,33 @@ jobs:
         with:
           go-version: '1.26.6'
           cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: web-admin/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: web-admin
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # This job actually runs the binary and checks the served HTML, so it
+      # needs the real UI, not a placeholder. web/dist is a build artifact and
+      # is no longer tracked, so build it here.
+      - name: Sync frontend dist into embed directory
+        run: |
+          rm -rf web/dist
+          mkdir -p web/dist
+          cp -R web-admin/dist/. web/dist/
 
       - name: Build Linux arm64 binary
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=v0.25.0" -o /tmp/goddi-arm64 ./cmd/goddi
