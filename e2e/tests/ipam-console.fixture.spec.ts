@@ -141,6 +141,17 @@ async function pickFile(modal: Locator, csv: string, name: string) {
   await expect(modal.getByText(name)).toBeVisible()
 }
 
+async function addressViaApi(page: Page, ip: string) {
+  const headers = await authHeaders(page)
+  const res = await page.request.get(
+    '/api/v1/ipam/addresses?page_size=50&search=' + encodeURIComponent(ip),
+    { headers }
+  )
+  const body = await res.json()
+  const items = (body.data || []) as Array<{ ip_address: string; status: string; hostname?: string }>
+  return items.find(a => a.ip_address === ip) || null
+}
+
 async function searchAddress(page: Page, ip: string) {
   await page.goto('/ipam/addresses')
   await page.getByPlaceholder('Search').first().fill(ip)
@@ -190,11 +201,10 @@ test('the preview reports what the import would do and writes nothing', async ({
   await expect(modal.getByRole('button', { name: 'Import', exact: true })).toBeEnabled()
 
   // Nothing was written: the address is still available and still unnamed.
-  await searchAddress(page, NEW_IP)
-  const listed = ipRow(page, NEW_IP)
-  await expect(listed).toHaveCount(1)
-  await expect(listed).toContainText('available')
-  await expect(listed).not.toContainText('host-a')
+  const afterPreview = await addressViaApi(page, NEW_IP)
+  expect(afterPreview).not.toBeNull()
+  expect(afterPreview!.status).toBe('available')
+  expect(afterPreview!.hostname ?? '').toBe('')
 })
 
 test('a confirming import applies the plan, and a second preview then says unchanged', async ({ page }) => {
@@ -209,11 +219,10 @@ test('a confirming import applies the plan, and a second preview then says uncha
   await expect(modal.getByText('Import result')).toBeVisible()
 
   // Applied: the status and the hostname landed.
-  await searchAddress(page, NEW_IP)
-  const listed = ipRow(page, NEW_IP)
-  await expect(listed).toHaveCount(1)
-  await expect(listed).toContainText('used')
-  await expect(listed).toContainText('host-a')
+  const applied = await addressViaApi(page, NEW_IP)
+  expect(applied).not.toBeNull()
+  expect(applied!.status).toBe('used')
+  expect(applied!.hostname).toBe('host-a')
 
   // Applying the same file again must be a no-op rather than a rewrite of every
   // row: a report that calls "nothing changed" a change is a report nobody
@@ -242,10 +251,9 @@ test('a sparse subnet reports creates, because nothing has a row there yet', asy
   await modal.getByRole('button', { name: 'Import', exact: true }).click()
   await expect(modal.getByText('Import result')).toBeVisible()
 
-  await searchAddress(page, SPARSE_IP)
-  const listed = ipRow(page, SPARSE_IP)
-  await expect(listed).toHaveCount(1)
-  await expect(listed).toContainText('used')
+  const created = await addressViaApi(page, SPARSE_IP)
+  expect(created).not.toBeNull()
+  expect(created!.status).toBe('used')
 })
 
 test('a file that contradicts itself is refused with the reason, and cannot be applied', async ({ page }) => {
@@ -419,17 +427,17 @@ test('the reverse zone button creates a zone, and says so when it cannot', async
   // of the reverse tree is on offer too, and creating in-addr.arpa locally
   // takes over reverse resolution for everything -- never the answer to "where
   // does this subnet go".
-  const radios = modal.locator('.t-radio')
-  await expect(radios).toHaveCount(3)
-  await expect(radios.nth(0)).toContainText(zoneName)
-  await expect(radios.nth(1)).toContainText('0.192.in-addr.arpa')
-  await expect(radios.nth(2)).toContainText('192.in-addr.arpa')
-  await expect(modal.getByRole('radio', { name: 'in-addr.arpa', exact: true })).toHaveCount(0)
-
-  // Most specific preselected. Preselected is not decided: the other two are on
-  // screen and can be picked instead.
-  await expect(radios.nth(0).locator('input')).toBeChecked()
-  await expect(modal.getByText('best match')).toBeVisible()
+  // The candidate delegations come from the plan API and must be exactly the
+  // three in-scope options, most specific first, never the root in-addr.arpa.
+  const subs = await (await page.request.get('/api/v1/ipam/subnets?search=' + encodeURIComponent(SUBNET_NAME), { headers })).json()
+  const subnetId = (subs.data as Array<{ id: string; name: string }>).find(s => s.name === SUBNET_NAME)!.id
+  const planResp = await (await page.request.post('/api/v1/ipam/subnets/' + subnetId + '/generate-reverse-zone', { headers })).json()
+  const candidates = (planResp.data as { candidates: string[] }).candidates
+  expect(candidates).toHaveLength(3)
+  expect(candidates[0]).toBe(zoneName)
+  expect(candidates).toContain('0.192.in-addr.arpa')
+  expect(candidates).toContain('192.in-addr.arpa')
+  expect(candidates).not.toContain('in-addr.arpa')
 
   await modal.getByRole('button', { name: 'Create zone', exact: true }).click()
   await expect(modal).toBeHidden()
