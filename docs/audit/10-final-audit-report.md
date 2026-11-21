@@ -1,5 +1,7 @@
 # 10 · 最终审计结论与生产验收阻塞项
 
+> **【历史记录 · 已被取代】** 本结论基线为 `8e769d7`。其后 D-01 mTLS、D-02 Owner Epoch、D-03 facts 哈希链等已实现并通过测试；当前状态以 `docs/audit/11-completion-status.md` 与 `docs/STATUS.md` 为准。以下 PARTIAL / NOT_IMPLEMENTED 判断仅反映当时快照，不得作为现状引用。
+
 > 基线 commit `8e769d7`（工作树干净）。审计为只读；证据命令：`go build ./...` exit 0、`go vet ./...` exit 0、`go test ./...` 102 包 ok / 0 FAIL。故障注入多数 NOT_VERIFIED（见 `07-failure-test-matrix.csv`）。
 
 ## 一、结论（直接回答）

@@ -27,8 +27,8 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 GoDDI v0.25.1 is a self-hosted DDI platform backed by SQLite/WAL. Its admin console has been rebuilt on the TDesign Vue Next Starter theme, replacing the earlier Naive UI frontend while keeping every route, API call and business flow available; it also keeps the v0.24.x security and quality updates and the supported Alpine runtime base for Docker deployments. Its production boundaries remain explicit:
 
 - **Implemented:** authoritative and recursive DNS, DHCP processing, IPAM, configuration revisions, backup/restore, metrics, the web console, and DoT/DoH/DoQ listener configuration. Real DoT/DoH/DoQ client handshakes still require deployment validation.
-- **Experimental/incomplete:** DHCP HA is not certified as GA. DNSSEC key and DS management does not provide a complete signing chain with RRSIG, DNSKEY, and NSEC/NSEC3 serving.
-- **Reserved APIs (`501 Not Implemented`):** SSO, general multi-node cluster coordination, the application extension runtime, and the management-plane DHCP HA extension.
+- **Experimental/incomplete:** DHCP HA is not certified as GA. DNSSEC signing (RRSIG/DNSKEY) and NSEC/NSEC3 denial-of-existence are implemented and tested; serving a complete public chain and DS management still require deployment validation.
+- **Reserved APIs (`501 Not Implemented`):** SSO, general multi-node cluster coordination, and the application extension runtime.
 - **external-validation-required:** real-secondary IXFR interoperability, multi-host fencing and network partitions, prolonged control database outage recovery, key and power-loss recovery, Prometheus alert delivery, and capacity/stability on target hardware. No RPO, RTO, or capacity target is claimed without those measurements.
 
 The built-in management TLS listener is available but disabled by default. Enable it or place GoDDI behind an HTTPS reverse proxy before sending credentials over a shared network.

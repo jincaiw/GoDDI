@@ -55,7 +55,7 @@
 
 ## 3. 保留占位（**配置可被解析，但功能未实现 / 501**）
 
-以下段落对应的管理 API 仍返回 `501`（`/sso`、`/cluster`、`/apps`），`internal/cluster.ErrNotImplemented`、`internal/apps/*/ErrNotImplemented` 保持。**写入这些键不会启用相应能力**；按 v0.9.0 计划保留至真实 transport、持久化状态与外部验收完成。
+以下段落对应的管理 API 仍返回 `501`（`/sso`、`/cluster`、`/apps`），`internal/cluster.ErrNotImplemented`、`internal/apps/*/ErrNotImplemented` 保持。**写入这些键不会启用相应能力**；按当前版本保留至真实 transport、持久化状态与外部验收完成。
 
 | 段落 | 键 | 默认 | 说明 |
 |---|---|---|---|

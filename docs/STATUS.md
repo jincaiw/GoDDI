@@ -1,6 +1,6 @@
 # GoDDI 实施状态总览（交接单页）
 
-> 本文件是「根据开发文档，完成全部实施任务」的**当前状态索引**，不是生产验收声明。完整证据见 `docs/audit/IMPLEMENTATION-STATUS.md`（§1 当前验证矩阵、§1b–§1aw 补记的历史增量、§1g 完成边界），独立评审输入见 `docs/audit/ENTERPRISE-REVIEW-DOSSIER.md`。
+> 本文件是「根据开发文档，完成全部实施任务」的**当前状态索引**，不是生产验收声明。完整证据见 `docs/audit/IMPLEMENTATION-STATUS.md`（§1 当前验证矩阵、§1b 及后续各轮补记（截至 round 392）、§1g 完成边界），独立评审输入见 `docs/audit/ENTERPRISE-REVIEW-DOSSIER.md`。
 > 范围约定（用户口径）：**先单机实现所有功能，双机（HA / 复制 / 多节点协调）从技术架构角度预留，最后实现**；不得触碰生产、不得提升受保护写门禁。
 > 证据范围：隔离单机（`/tmp/goddi-run` 临时 DB / 配置 / 非生产网卡）+ **容器化双节点环境**（2 Docker 容器独立网络/数据卷——HA/facts 链证据层，round 246–270）；均**不构成** Linux 物理双主机、物理断电、生产网络分区或生产环境证据（B8.5 A–D 未验收）。
 
@@ -12,7 +12,7 @@
 
 | 领域 | 状态 |
 |---|---|
-| 前端 | Vue 3 + TypeScript + **TDesign Vue Next Starter `dashboard/base` devflow 主题**（TDesign Blue `#0052D9`、light side menu、TDesign token 化 shell、生产缓存覆盖；round 142–145）；**32 个 TDesign 页面**（含 round 286 新增 `/dhcp/ha` 只读 HA 状态页）（含 round 133 补齐的独立 DNSSEC 密钥生命周期页 `/dns/dnssec`）；Naive UI 100% 移除；登录、RBAC、19 个浏览器套件覆盖全部页面（含只读角色 `batch16`，round 178；11 个跨模块「创建 e2e」步骤，round 206 补齐 option/backup 后无仅渲染的生命周期页）；**round 172–173 复活仓内 Playwright e2e**：fixture 套件 8/8 全绿（针对 TDesign 重写选择器）、`api.spec` 1/1（token 隔离/CSRF/单次令牌/DNS 备份恢复）；3 个旧 shell UI 规格处置为待重写（独有 RBAC 只读写拒绝与分页跨页语义已分别以 §1aw/§1ax 服务端回归钉住） |
+| 前端 | Vue 3 + TypeScript + **TDesign Vue Next Starter `dashboard/base` devflow 主题**（TDesign Blue `#0052D9`、light side menu、TDesign token 化 shell、生产缓存覆盖；round 142–145）；**31 个 TDesign 页面（业务叶子路由）**（含 round 286 新增 `/dhcp/ha` 只读 HA 状态页）（含 round 133 补齐的独立 DNSSEC 密钥生命周期页 `/dns/dnssec`）；Naive UI 100% 移除；登录、RBAC、19 个浏览器套件覆盖全部页面（含只读角色 `batch16`，round 178；11 个跨模块「创建 e2e」步骤，round 206 补齐 option/backup 后无仅渲染的生命周期页）；**round 172–173 复活仓内 Playwright e2e**：fixture 套件 8/8 全绿（针对 TDesign 重写选择器）、`api.spec` 1/1（token 隔离/CSRF/单次令牌/DNS 备份恢复）；3 个旧 shell UI 规格处置为待重写（独有 RBAC 只读写拒绝与分页跨页语义已分别以 §1aw/§1ax 服务端回归钉住） |
 | 后端 API | **216 个 `/api/v1` 操作**全部有 OpenAPI 文档（`internal/api/openapi.go`），路由与文档双向一致性由 `TestEveryRegisteredAPIRouteIsDocumentedInOpenAPI` 钉住；**round 357 新增区域传送授权 API（`GET/POST /dns/zones/{id}/transfers`、`DELETE .../{transferId}`）**；**round 285 `GET /dhcp/ha` 由 501 升级为只读 HA 状态 API**（200，复用 CLI 状态数据，6 个 501 端点有意保留——`docs/audit/RESERVED-EXTENSION-DECISION.md`）；行为级回归钉住：RBAC 四象限（无权读 403/有权读 200/无权写 403/有权写 201）、按资源隔离+多角色并集、只读角色 120 变更全拒、501 预留扩展行为、分页跨页语义、auth 全流程（限速 429+解锁闭环、TOTP 状态机+登录强制+恢复码单次、会话吊销、must_change_password 禁闭、禁用即时失效、refresh SEC-05、令牌吊销）（round 196–205；见 `internal/api/auth_http_flow_test.go`、`internal/api/rbac_coverage_test.go`、`internal/api/handler/ipam_pagination_test.go`） |
 | 单机运行期 | 四次握手 / option 54 / 续租 / 保留 / DECLINE / 过期回收；AXFR/IXFR ACL、cache 配置覆盖、RFC 2136 TSIG UPDATE、RENEWING 策略、DNSSEC NSEC/NSEC3 签名与否定证明、DoT/DoH/DoQ 上游装配等运行期缺陷已修复并实测 |
 | 分离角色 | `role=control` + `role=dns` 两进程实跑：端口隔离、控制面→数据面复制（约 4s 权威应答）、**杀掉控制面后 DNS 仍从 `dnsdata.db` 应答**、重启恢复（§1b） |

@@ -11,7 +11,7 @@
 ## v0.25.0 — 2026-11-20
 
 - Rebuild the admin console on the TDesign Vue Next Starter theme, replacing the
-  Naive UI frontend. All 30 business routes, the API surface and the DNS, DHCP
+  Naive UI frontend. All 31 business routes, the API surface and the DNS, DHCP
   and IPAM flows remain usable.
 - Align the console with the upstream starter layout: 56px header, 64px
   collapsed sider, #0052D9 brand, 6px radius and an 11-section settings drawer,

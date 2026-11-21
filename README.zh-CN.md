@@ -27,8 +27,8 @@ GoDDI 是一套紧凑、自托管的 DDI 管理平台，在同一个 Web 控制�
 GoDDI v0.25.1 是一套基于 SQLite/WAL 的自托管 DDI 平台。管理控制台已按 TDesign Vue Next Starter 主题全面重构，替换此前的 Naive UI 前端，同时保持全部路由、API 调用与业务流程可用；并保留 v0.24.x 的安全与质量更新与受支持的 Alpine 运行镜像。生产能力边界如下：
 
 - **已实现**：权威与递归 DNS、DHCP 处理、IPAM、配置版本、备份恢复、监控指标、Web 控制台，以及 DoT/DoH/DoQ 监听器配置。真实 DoT/DoH/DoQ 客户端握手仍需部署环境验证。
-- **实验性/不完整**：DHCP HA 尚未通过 GA 认证；DNSSEC 密钥与 DS 管理尚未提供包含 RRSIG、DNSKEY、NSEC/NSEC3 服务的完整签名链路。
-- **预留 API（`501 Not Implemented`）**：SSO、通用多节点集群协调、应用扩展运行时，以及管理面 DHCP HA 扩展。
+- **实验性/不完整**：DHCP HA 尚未通过 GA 认证；DNSSEC 签名（RRSIG/DNSKEY）与 NSEC/NSEC3 否定证明已实现并测试，完整公网签名链与 DS 管理仍需部署环境验证。
+- **预留 API（`501 Not Implemented`）**：SSO、通用多节点集群协调、应用扩展运行时。
 - **需要部署环境验收（`external-validation-required`）**：真实 secondary 的 IXFR 互操作、多主机 fencing 与网络分区、控制数据库长时间故障恢复、密钥和掉电恢复、Prometheus 告警投递，以及目标硬件容量/稳定性。未完成测量前不承诺 RPO、RTO 或容量指标。
 
 内置管理面 TLS 监听器可用但默认关闭；在共享网络上传输凭据前，应启用 TLS 或使用 HTTPS 反向代理。
