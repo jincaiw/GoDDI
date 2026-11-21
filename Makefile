@@ -91,7 +91,7 @@ verify-tidy:
 verify-e2e:
 	@bash scripts/e2e_local.sh
 
-## verify-browser: Run the 20 browser/static suites against a running isolated server (needs GODDI_ADMIN_PASS)
+## verify-browser: Run the 24 browser/static suites against a running isolated server (needs GODDI_ADMIN_PASS)
 # Requires a running server and Playwright; see test/browser/README.md.
 verify-browser:
 	@test -n "$(GODDI_ADMIN_PASS)" || { echo "GODDI_ADMIN_PASS is required; see test/browser/README.md" >&2; exit 2; }

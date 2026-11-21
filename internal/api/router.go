@@ -342,7 +342,8 @@ func NewRouter(cfg *config.Config, db *database.DB) http.Handler {
 			r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/logs/dns", handler.ListDNSQueryLogs)
 			r.With(rbac.RequirePermission(rbacMgr, "dns", "read")).Get("/logs/dns/export", handler.ExportDNSQueryLogs)
 
-			// DNS Extension Points (501 Not Implemented).
+			// DNS Encryption Listeners (DoT/DoH/DoQ). Implemented in
+			// handler.configureListener; these are not 501 stubs.
 			r.Route("/dns/listeners", func(r chi.Router) {
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Put("/dot", handler.ConfigureDoT)
 				r.With(rbac.RequirePermission(rbacMgr, "settings", "write")).Put("/doh", handler.ConfigureDoH)

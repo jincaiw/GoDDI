@@ -13,7 +13,8 @@ import (
 )
 
 // --- Extension Point API Handlers ---
-// SSO / Cluster / Apps / DoQ remain extension stubs (501).
+// SSO / Cluster / Apps remain extension stubs (501); the DoT/DoH/DoQ
+// listeners below are implemented in configureListener.
 
 func notImplementedExtension(w http.ResponseWriter) {
 	response.NotImplemented(w, "此功能将在后续版本中提供")

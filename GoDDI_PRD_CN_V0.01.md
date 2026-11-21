@@ -1,5 +1,7 @@
 # GoDDI 产品需求文档最终稿
 
+> **【历史归档】** 本文件为 V0.01 历史需求稿，其技术栈描述（Naive UI、sqlc）已过时；当前实现为 TDesign + 非 sqlc 生成，状态以 `docs/STATUS.md` 为准，归档说明见 `docs/ARCHIVE-INDEX.md`。
+
 **文档版本：V0.01**  
 **产品名称：GoDDI**  
 **产品类型：DNS + DHCP + IPAM 一体化 DDI 平台**  

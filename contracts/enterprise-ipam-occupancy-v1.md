@@ -1,6 +1,6 @@
 # Enterprise IPAM 占用复制事件 v1
 
-本切片制定首个占用事件 v1，待系统集成及迁移评审；它不是资料包原有示例已冻结的业务 schema。它不启用复制应用、不授予写权限，不替代接收方校验、事务门禁、作用域授权或迁移对账。资料包依据：`/Volumes/My-Data/jason.wa/goddi/docs/02-data-ipam.md` 第 20–25、34–48、52–73 行及 `/Volumes/My-Data/jason.wa/goddi/docs/04-replication-ha.md` 第 24–49 行；SQL 参考 `/Volumes/My-Data/jason.wa/goddi/contracts/001_ipam.sql` 第 165–184 行。
+本切片制定首个占用事件 v1，待系统集成及迁移评审；它不是资料包原有示例已冻结的业务 schema。它不启用复制应用、不授予写权限，不替代接收方校验、事务门禁、作用域授权或迁移对账。资料包依据：`资料包(外部，未随仓库提供)/docs/02-data-ipam.md` 第 20–25、34–48、52–73 行及 `资料包(外部，未随仓库提供)/docs/04-replication-ha.md` 第 24–49 行；SQL 参考 `资料包(外部，未随仓库提供)/contracts/001_ipam.sql` 第 165–184 行。
 
 复用事件封套 `changes`、`kind`、`objectId`、`revision`、`body`：`ipam.occupancy.set` 表示已决定的完整占用行，`ipam.occupancy.cleared` 表示删除前完整行的墓碑。二者 body 的 `id` 与封套 `objectId`、body 的 `revision` 与封套 `revision` 必须分别逐字相等。删除 revision 是被删除行的最后修订，不是新建修订；该 ID 永不复用。接收方须核对同租户、空间、ID、子网、地址、创建时间及修订和现有行一致，拒绝缺失、冲突和陈旧墓碑；重放只按已验证日志位置/哈希去重，不能通过重用 ID 覆盖新占用。此处只定义数据与检查要求，未实现数据库应用。
 

@@ -143,7 +143,7 @@ W12-a/W12-c 隔离式 restore 演练通过；W13 真实浏览器/API 权限场�
 
 ## 已启动工作
 
-- 工作树：`/Volumes/My-Data/jason.wa/WorkBuddy/Worktrees/GoDDI/ddi-review-implementation-20260923`
+- 工作树：`（本地路径）/WorkBuddy/Worktrees/GoDDI/ddi-review-implementation-20260923`
 - 基线：`d3ddb16 / v0.10.0`，独立分支 `codex/ddi-review-implementation-20260923`。
 - 修改：`internal/dns/transfer/transfer.go` 初期暂停使用尚不完整的 IXFR journal，非当前 serial 请求回退 AXFR；该阶段状态已由下方最新 W01 记录更新。AXFR 遇到扫描失败、无效/不支持 RR 或缺少 SOA 时 fail-closed。
 - AXFR 的记录和 SOA 现在在同一数据库读快照中取得；IXFR 的“客户端已最新”判断也从同一 SOA 快照读取 serial，避免版本检查本身读到互不一致的数据。
