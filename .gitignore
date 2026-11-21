@@ -92,3 +92,7 @@ bin/
 
 # DevFlow process artifacts (local)
 /artifacts/
+
+# dnsprobe is a build artifact produced from tests/h2/tools/dnsprobe
+# (see Makefile / scripts). Do not commit the binary.
+dnsprobe

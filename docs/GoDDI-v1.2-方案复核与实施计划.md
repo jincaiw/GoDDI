@@ -1,5 +1,7 @@
 # GoDDI 企业级 DDI 方案复核与实施计划
 
+> **【历史归档】** 本文件为历史记录，已不再反映当前状态；当前状态见 `docs/STATUS.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md`，归档说明见 `docs/ARCHIVE-INDEX.md`。
+
 版本：v1.2
 日期：2026-09-24
 用途：在 v1.1 评审基础上，对照当前代码收敛实施次序，并记录已启动的工作。

@@ -1,5 +1,7 @@
 # Production Review v0.1.1
 
+> **【历史归档】** 本文件为历史记录，已不再反映当前状态；当前状态见 `docs/STATUS.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md`，归档说明见 `docs/ARCHIVE-INDEX.md`。
+
 ## Plan
 
 1. Inspect the working tree, release source completeness, and deployment entry points.

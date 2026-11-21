@@ -1,5 +1,7 @@
 # GoDDI × Technitium DNS Server 对标评估与实施方案
 
+> **【历史归档】** 本文件为历史记录，已不再反映当前状态；当前状态见 `docs/STATUS.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md`，归档说明见 `docs/ARCHIVE-INDEX.md`。
+
 > 版本：v0.1（待确认）
 > 日期：2026-09-07
 > 对标基线：TechnitiumSoftware/DnsServer v15.4（源码浅克隆核对，非仅凭文档）

@@ -1,5 +1,7 @@
 # GoDDI 前端迁移 soybean-admin 实施方案
 
+> **【历史归档】** 本文件为历史记录，已不再反映当前状态；当前状态见 `docs/STATUS.md` 与 `docs/audit/IMPLEMENTATION-STATUS.md`，归档说明见 `docs/ARCHIVE-INDEX.md`。
+
 > **【已被取代（round 226 注记）】** 本方案描述的 soybean-admin/Naive UI 迁移**未被执行**：实际落地的是 **TDesign Vue Next Starter** 骨架（见 `docs/tdesign-migration.md`，30 个 TDesign 页面、Naive UI 100% 移除）。本文件保留为历史方案记录，其中的文件路径与组件引用不反映当前代码。
 
 > 版本：v1.1 ｜ 日期：2026-09-07 ｜ 模板：[soybeanjs/soybean-admin](https://github.com/soybeanjs/soybean-admin) v2.2.0（MIT）

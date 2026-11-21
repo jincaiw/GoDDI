@@ -1,6 +1,6 @@
 {
   "name": "goddi-web-admin",
-  "version": "2.2.0",
+  "version": "0.25.1",
   "packageManager": "pnpm@10.15.0",
   "description": "GoDDI web console: Vue 3 + TypeScript + Vite + TDesign Vue Next Starter.",
   "keywords": [

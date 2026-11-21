@@ -1,2 +1,0 @@
--- Placeholder for sqlc queries.
--- Add your SQL queries here for sqlc code generation.
