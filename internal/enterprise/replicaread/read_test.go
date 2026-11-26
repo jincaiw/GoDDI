@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlogguard"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
-	"github.com/jasonwa/goddi/internal/enterprise/pullbudget"
-	"github.com/jasonwa/goddi/internal/enterprise/pullresponse"
-	replica "github.com/jasonwa/goddi/internal/gen/replica/v1"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlogguard"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/pullbudget"
+	"github.com/jincaiw/GoDDI/internal/enterprise/pullresponse"
+	replica "github.com/jincaiw/GoDDI/internal/gen/replica/v1"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 	"google.golang.org/protobuf/proto"
 )
 

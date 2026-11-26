@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 func TestResolveIPAMSpaceByIPPrefersMostSpecificSubnet(t *testing.T) {

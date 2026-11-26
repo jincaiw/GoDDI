@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dns/transfer"
+	"github.com/jincaiw/GoDDI/internal/dns/transfer"
 )
 
 // A DNS data plane answers AXFR/IXFR without ever opening the control

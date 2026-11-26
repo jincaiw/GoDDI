@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
 )
 
 var errDrift = errors.New("eventlogguard: reference drift")

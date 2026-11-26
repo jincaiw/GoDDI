@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 var ErrNoAuthority = errors.New("dhcptx: no write authority")

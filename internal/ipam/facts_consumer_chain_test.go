@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // TestFactsConsumerVerifiesProducerChain proves the consumer accepts a clean

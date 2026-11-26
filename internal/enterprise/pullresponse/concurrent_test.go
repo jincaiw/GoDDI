@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 func TestConcurrentBuildCopiesResults(t *testing.T) {

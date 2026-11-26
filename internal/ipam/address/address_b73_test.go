@@ -12,7 +12,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	goddiassets "github.com/jasonwa/goddi"
+	goddiassets "github.com/jincaiw/GoDDI"
 )
 
 // openB73DB uses two independent SQLite handles against one WAL database. The

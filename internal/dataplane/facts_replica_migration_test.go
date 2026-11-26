@@ -3,7 +3,7 @@ package dataplane
 import (
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 func TestFactsReplicaStagingMigrationIsApplied(t *testing.T) {

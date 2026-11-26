@@ -11,9 +11,9 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/auditwire"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamrequest"
-	"github.com/jasonwa/goddi/internal/enterprise/receiptwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/auditwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamrequest"
+	"github.com/jincaiw/GoDDI/internal/enterprise/receiptwire"
 )
 
 var ErrStaticOccupancy = errors.New("eventlog: invalid static occupancy transaction")

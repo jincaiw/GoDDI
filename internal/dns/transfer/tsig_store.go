@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 )
 
 // TSIGKeyRecord is a stored TSIG key with its metadata (extends the

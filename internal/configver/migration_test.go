@@ -7,7 +7,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	goddiassets "github.com/jasonwa/goddi"
+	goddiassets "github.com/jincaiw/GoDDI"
 )
 
 // TestMigration019UpDownUp verifies that migration 019 is reversible and that

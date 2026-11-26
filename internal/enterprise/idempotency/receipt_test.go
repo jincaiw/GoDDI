@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 func fixture(t *testing.T) (*sql.DB, Scope, Receipt) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	replica "github.com/jasonwa/goddi/internal/gen/replica/v1"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	replica "github.com/jincaiw/GoDDI/internal/gen/replica/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"

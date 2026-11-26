@@ -6,9 +6,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/dns/transfer"
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/dns/transfer"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 )
 
 // --- TSIG Key Management API (RFC 8945, Technitium parity) ---

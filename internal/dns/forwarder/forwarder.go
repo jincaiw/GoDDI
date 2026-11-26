@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 )

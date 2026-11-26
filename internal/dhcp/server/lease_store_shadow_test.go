@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 type shadowStore struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
 )
 
 var ctx = context.Background()

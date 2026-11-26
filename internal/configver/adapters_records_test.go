@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 // seedRecord inserts one dns_records row with the given authorship.

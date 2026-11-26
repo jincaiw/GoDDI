@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/jasonwa/goddi/internal/facts"
-	"github.com/jasonwa/goddi/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
 )
 
 const IPAMFactsConsumerDomain = "ipam"

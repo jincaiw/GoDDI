@@ -26,8 +26,8 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/configver"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/configver"
 )
 
 // One service and one database for the whole file, because production has one

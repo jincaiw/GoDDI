@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 // The two-author rule, and the queues that carry a data plane's work back up.

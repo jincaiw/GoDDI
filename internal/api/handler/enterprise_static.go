@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamaddr"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamaddr"
 )
 
 const enterpriseBodyLimit = 1 << 20

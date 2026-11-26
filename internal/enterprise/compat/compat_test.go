@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func TestCandidateConstantsArePinnedToOwningPackages(t *testing.T) {

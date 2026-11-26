@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/database"
+	"github.com/jincaiw/GoDDI/internal/database"
 )
 
 const (

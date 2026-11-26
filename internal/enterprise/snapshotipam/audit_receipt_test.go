@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotpipeline"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotpipeline"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func encoded(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

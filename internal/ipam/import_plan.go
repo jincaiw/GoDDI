@@ -9,8 +9,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 // importQuerier is satisfied by *sql.DB and *sql.Tx.

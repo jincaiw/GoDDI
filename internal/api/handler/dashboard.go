@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/backup"
-	"github.com/jasonwa/goddi/internal/metrics"
-	"github.com/jasonwa/goddi/internal/system"
-	"github.com/jasonwa/goddi/internal/task"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/system"
+	"github.com/jincaiw/GoDDI/internal/task"
 )
 
 // SystemServices holds references to all system-level service components.

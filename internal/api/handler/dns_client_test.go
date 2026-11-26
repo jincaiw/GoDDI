@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dns/client"
-	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dns/client"
+	dnsserver "github.com/jincaiw/GoDDI/internal/dns/server"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 	"github.com/miekg/dns"
 )
 

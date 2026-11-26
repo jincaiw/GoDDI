@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/dns/cache"
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/dns/cache"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 )
 
 // blockingUntilValue keeps the zero time out of the JSON contract: the UI

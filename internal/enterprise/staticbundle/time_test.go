@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/auditwire"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/receiptwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/auditwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/receiptwire"
 )
 
 func TestWindowBoundaryAndOverflow(t *testing.T) {

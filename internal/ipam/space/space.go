@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
+	"github.com/jincaiw/GoDDI/internal/ipam/lifecycle"
 )
 
 // ErrSpaceInUse is returned when retiring a space that still has active subnets.

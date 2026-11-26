@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamresponse"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamresponse"
 )
 
 // StaticReceiptMinRetentionMS is the candidate seven-day pilot minimum.

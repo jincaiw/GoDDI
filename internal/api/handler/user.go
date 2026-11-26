@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/audit"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/audit"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // emailRegex validates basic email format.

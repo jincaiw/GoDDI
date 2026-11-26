@@ -6,9 +6,9 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/audit"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/audit"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // ListRoles handles GET /api/v1/roles

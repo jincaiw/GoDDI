@@ -19,7 +19,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotpipeline"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotpipeline"
 )
 
 var ErrInvalid = errors.New("snapshotipam: invalid row")

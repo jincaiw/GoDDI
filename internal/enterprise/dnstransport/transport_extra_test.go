@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dnsanswer"
-	"github.com/jasonwa/goddi/internal/enterprise/dnswire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dnsanswer"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dnswire"
 	"github.com/miekg/dns"
 )
 

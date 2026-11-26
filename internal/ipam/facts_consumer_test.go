@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/facts"
-	"github.com/jasonwa/goddi/internal/ipam/address"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )

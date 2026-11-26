@@ -10,14 +10,14 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/configver"
-	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
-	"github.com/jasonwa/goddi/internal/dhcp/option"
-	"github.com/jasonwa/goddi/internal/dhcp/reservation"
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
-	dhcpserver "github.com/jasonwa/goddi/internal/dhcp/server"
-	"github.com/jasonwa/goddi/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/configver"
+	dhcpinternal "github.com/jincaiw/GoDDI/internal/dhcp"
+	"github.com/jincaiw/GoDDI/internal/dhcp/option"
+	"github.com/jincaiw/GoDDI/internal/dhcp/reservation"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
+	dhcpserver "github.com/jincaiw/GoDDI/internal/dhcp/server"
+	"github.com/jincaiw/GoDDI/internal/ipam"
 )
 
 // DHCPServices holds references to DHCP server components for API handlers.

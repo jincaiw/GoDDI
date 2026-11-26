@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
 )
 
 func TestIsInfrastructureAddress(t *testing.T) {

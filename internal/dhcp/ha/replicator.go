@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // ErrNoSecondCopy is returned when a binding cannot be confirmed because this

@@ -11,8 +11,8 @@ import (
 	"net/netip"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/httpcontract"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamaddr"
+	"github.com/jincaiw/GoDDI/internal/enterprise/httpcontract"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamaddr"
 )
 
 var ErrInvalid = errors.New("ipamrequest: invalid static create request")

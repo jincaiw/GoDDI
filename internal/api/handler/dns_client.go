@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/dns/client"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/dns/client"
 	"github.com/miekg/dns"
 )
 

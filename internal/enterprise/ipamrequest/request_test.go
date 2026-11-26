@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/httpcontract"
+	"github.com/jincaiw/GoDDI/internal/enterprise/httpcontract"
 )
 
 func request() Request {

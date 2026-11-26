@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // PullerConfig configures the follower side of ADR-0013 configuration

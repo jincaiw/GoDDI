@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 // legacyFixture explicitly constructs the reviewed 001 reference, never an

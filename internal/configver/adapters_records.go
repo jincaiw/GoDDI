@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // DNSRecordsSchema is the version of DNSRecordsContent's shape.

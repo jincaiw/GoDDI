@@ -9,13 +9,13 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/configver"
-	"github.com/jasonwa/goddi/internal/dns/dnssec"
-	"github.com/jasonwa/goddi/internal/dns/transfer"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/rbac"
-	"github.com/jasonwa/goddi/pkg/dnsutil"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/configver"
+	"github.com/jincaiw/GoDDI/internal/dns/dnssec"
+	"github.com/jincaiw/GoDDI/internal/dns/transfer"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/rbac"
+	"github.com/jincaiw/GoDDI/pkg/dnsutil"
 )
 
 // Cached DNS manager instances, initialized once.

@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // newGuardTestServer boots the router against a migrated temp database. It is

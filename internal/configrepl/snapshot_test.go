@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 	_ "modernc.org/sqlite"
 )
 

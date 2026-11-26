@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 	_ "modernc.org/sqlite"
 )
 

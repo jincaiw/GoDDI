@@ -8,7 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // ZoneReloader is the part of the zone store this adapter needs.

@@ -12,14 +12,14 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/configver"
-	"github.com/jasonwa/goddi/internal/ipam"
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/space"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/configver"
+	"github.com/jincaiw/GoDDI/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/space"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // IPAMServices holds references to IPAM server components for API handlers.

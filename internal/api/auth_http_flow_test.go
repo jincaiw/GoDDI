@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 	"github.com/pquerna/otp/totp"
 )
 

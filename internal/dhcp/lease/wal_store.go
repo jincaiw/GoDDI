@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 const leaseTimeLayout = "2006-01-02T15:04:05Z"

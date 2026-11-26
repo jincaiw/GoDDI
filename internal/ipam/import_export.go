@@ -8,7 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
 )
 
 // ImportExport handles IPAM data import and export.

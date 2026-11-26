@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 func TestWriterPolicyAfterPhysicalReconnect(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamaddr"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamaddr"
 )
 
 var ErrInvalid = errors.New("ipamresponse: invalid STATIC result")

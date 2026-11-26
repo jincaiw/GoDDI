@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/auditlog"
+	"github.com/jincaiw/GoDDI/internal/auditlog"
 )
 
 // leaseAuditRow is one audit entry, as read back.

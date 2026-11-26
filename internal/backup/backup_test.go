@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
 )
 
 func TestDNSBackupPreservesNullableNumbers(t *testing.T) {

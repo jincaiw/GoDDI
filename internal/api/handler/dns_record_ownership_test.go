@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	_ "modernc.org/sqlite"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // These tests pin the console's write guard on records the data plane owns.

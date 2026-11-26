@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
 )
 
 // wireListFloor is how many lists each type carries. It is a floor rather than

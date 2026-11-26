@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // StartupGate is an optional admission prerequisite. Implementations must

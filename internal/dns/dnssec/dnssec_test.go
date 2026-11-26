@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // setupDSSECTest builds a migrated sqlite database with zone + dnssec

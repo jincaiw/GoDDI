@@ -6,10 +6,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/rbac"
-	"github.com/jasonwa/goddi/pkg/dnsutil"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/rbac"
+	"github.com/jincaiw/GoDDI/pkg/dnsutil"
 )
 
 // --- Record Management API Handlers ---

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/staticbundle"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/staticbundle"
 )
 
 const MaxEvents = 256

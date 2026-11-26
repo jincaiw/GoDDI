@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 // ErrInvalid means a version set was malformed. ErrIncompatible means there is

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jasonwa/goddi/internal/api/handler"
-	"github.com/jasonwa/goddi/internal/dns/filter"
-	"github.com/jasonwa/goddi/internal/dns/forwarder"
+	"github.com/jincaiw/GoDDI/internal/api/handler"
+	"github.com/jincaiw/GoDDI/internal/dns/filter"
+	"github.com/jincaiw/GoDDI/internal/dns/forwarder"
 )
 
 // loadFilterData loads block lists, allow rules, and client policies from the database.

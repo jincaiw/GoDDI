@@ -14,8 +14,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
 )
 
 var ErrInvalid = errors.New("snapshotauditcheck: invalid staging rows or limits")

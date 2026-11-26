@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 func receiptSeed(t testing.TB) []byte {

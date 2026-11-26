@@ -6,7 +6,7 @@ package dhcplease
 // snapshotrows validator.
 
 import (
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotpipeline"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotpipeline"
 )
 
 // SchemaTables returns the lease-table set's pipeline schema entries in frozen

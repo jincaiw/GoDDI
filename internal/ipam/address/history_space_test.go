@@ -12,7 +12,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	goddiassets "github.com/jasonwa/goddi"
+	goddiassets "github.com/jincaiw/GoDDI"
 )
 
 // ipam_history.space_id is denormalised from the subnet, and every read of the

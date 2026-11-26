@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/peeridentity"
-	replica "github.com/jasonwa/goddi/internal/gen/replica/v1"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/peeridentity"
+	replica "github.com/jincaiw/GoDDI/internal/gen/replica/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"

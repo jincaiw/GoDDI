@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 type leaseBody struct {

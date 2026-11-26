@@ -14,7 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/jasonwa/goddi/internal/enterprise/soaserial"
+	"github.com/jincaiw/GoDDI/internal/enterprise/soaserial"
 )
 
 var (

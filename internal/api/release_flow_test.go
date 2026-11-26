@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/api/handler"
-	"github.com/jasonwa/goddi/internal/backup"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/handler"
+	"github.com/jincaiw/GoDDI/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // newReleaseTestServer boots a router backed by a migrated temp database.

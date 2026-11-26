@@ -1,4 +1,4 @@
-module github.com/jasonwa/goddi
+module github.com/jincaiw/GoDDI
 
 go 1.26.11
 

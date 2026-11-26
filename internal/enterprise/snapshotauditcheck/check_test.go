@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 func fixture(t *testing.T) *sql.DB {

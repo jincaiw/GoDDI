@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotpipeline"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotpipeline"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func ledger(kind, tenant, space, id string) string {

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 var baseCounts = Counts{Tenants: 2, Spaces: 2, Prefixes: 3, Occupancies: 2, Ledger: 9}

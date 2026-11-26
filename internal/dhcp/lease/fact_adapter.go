@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // FactEnvelope builds the migration-era DHCP lease observation fact for a

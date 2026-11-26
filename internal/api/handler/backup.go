@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/backup"
 )
 
 // backupNotFound reports whether err means "no such backup job", so handlers

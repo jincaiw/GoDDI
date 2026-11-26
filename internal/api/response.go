@@ -1,9 +1,9 @@
 package api
 
 // Re-export response functions from the response sub-package for backward compatibility.
-// New code should import github.com/jasonwa/goddi/internal/api/response directly.
+// New code should import github.com/jincaiw/GoDDI/internal/api/response directly.
 import (
-	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/api/response"
 )
 
 // Re-export types and functions.

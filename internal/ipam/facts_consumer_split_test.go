@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/facts"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/facts"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 const golden = `{"version":"1","tenantId":"11111111-1111-4111-8111-111111111111","principal":"user:1","method":"POST","path":"/api/addresses","key":"22222222-2222-4222-8222-222222222222","requestDigest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","status":201,"etag":"\"v1\"","body":"AP8","createdAtMs":"100","expiresAtMs":"200"}`

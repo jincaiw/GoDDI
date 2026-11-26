@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	d "github.com/jasonwa/goddi/internal/enterprise/dnssnapshot"
+	d "github.com/jincaiw/GoDDI/internal/enterprise/dnssnapshot"
 )
 
 func setup(t *testing.T) (*d.Store, *d.Snapshot, d.Identity) {

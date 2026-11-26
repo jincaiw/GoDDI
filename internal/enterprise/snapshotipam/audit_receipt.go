@@ -12,8 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/auditwire"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/auditwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 func candidateText(fields map[string]json.RawMessage, name string, limit int) (string, error) {

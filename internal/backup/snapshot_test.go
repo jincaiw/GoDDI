@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 	_ "modernc.org/sqlite"
 )
 

@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
-	"github.com/jasonwa/goddi/internal/dhcp/option"
-	"github.com/jasonwa/goddi/internal/dhcp/reservation"
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/option"
+	"github.com/jincaiw/GoDDI/internal/dhcp/reservation"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 
-	"github.com/jasonwa/goddi/internal/config"
-	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
+	"github.com/jincaiw/GoDDI/internal/config"
+	dhcpinternal "github.com/jincaiw/GoDDI/internal/dhcp"
 )
 
 // Server represents a DHCPv4 server.

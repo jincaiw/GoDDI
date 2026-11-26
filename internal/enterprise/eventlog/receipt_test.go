@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 // fixtureWriteTx bypasses the public, deliberately closed authority gate only

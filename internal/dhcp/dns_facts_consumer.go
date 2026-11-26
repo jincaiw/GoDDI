@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // DNSFactsDomain is the watermark domain that tracks this consumer's

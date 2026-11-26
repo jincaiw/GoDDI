@@ -8,10 +8,10 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/configver"
-	"github.com/jasonwa/goddi/internal/enterprise/httpcontract"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/configver"
+	"github.com/jincaiw/GoDDI/internal/enterprise/httpcontract"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // ConfigVersionService is the process-wide publishing service. It is set once

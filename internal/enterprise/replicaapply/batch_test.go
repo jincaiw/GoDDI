@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 func pair(t *testing.T, a *testApplier, first eventlog.Event, address string) []eventlog.Event {

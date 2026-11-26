@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // sensitiveQueryKeys are lower-case query parameter names whose values must

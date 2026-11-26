@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
 
-	"github.com/jasonwa/goddi/internal/auditlog"
+	"github.com/jincaiw/GoDDI/internal/auditlog"
 )
 
 func newAuditStore(t *testing.T) *AuditManager {

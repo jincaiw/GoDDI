@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 // TestDialPeerUsesBackupWhenPrimaryPathDown proves the dual-link contract on the

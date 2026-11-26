@@ -3,8 +3,8 @@ package handler
 import (
 	"net/http"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	dhcpinternal "github.com/jincaiw/GoDDI/internal/dhcp"
 )
 
 // ListDHCPLogs queries DHCP logs with pagination and filtering.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 func logFixture(t *testing.T) (*sql.DB, *Log) {

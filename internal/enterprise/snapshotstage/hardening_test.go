@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/replicaschema"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/replicaschema"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
 )
 
 func assertRemoved(t *testing.T, path string) {

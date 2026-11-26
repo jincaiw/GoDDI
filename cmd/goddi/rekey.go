@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dns/transfer"
-	applog "github.com/jasonwa/goddi/internal/log"
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dns/transfer"
+	applog "github.com/jincaiw/GoDDI/internal/log"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 )
 
 // runMigrations runs database migrations only.

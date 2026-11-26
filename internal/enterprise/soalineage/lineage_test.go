@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/soaserial"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/enterprise/soaserial"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 func dbForTest(t *testing.T) *sql.DB {

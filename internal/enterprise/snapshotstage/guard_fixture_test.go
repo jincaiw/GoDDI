@@ -9,7 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 const fixtureGuardSQL = `CREATE TRIGGER writer_authority_rowid_insert_guard BEFORE INSERT ON writer_authority WHEN EXISTS (SELECT 1 FROM writer_authority WHERE rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'EVENTLOG_ROWID_CONFLICT'); END;

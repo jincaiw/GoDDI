@@ -10,7 +10,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // ErrStaleEpoch reports that the peer carries a higher Owner Epoch, so this

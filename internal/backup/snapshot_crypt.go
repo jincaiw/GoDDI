@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 )
 
 // A snapshot holds every password hash, TOTP seed and TSIG key the instance

@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/lifecycle"
 )
 
 // ErrSubnetNotFound means the subnet does not exist.

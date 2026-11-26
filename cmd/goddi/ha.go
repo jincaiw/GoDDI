@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/backup"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/dhcp/ha"
+	"github.com/jincaiw/GoDDI/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dhcp/ha"
 )
 
 // haNode is an opened lease store and the operator view of it.

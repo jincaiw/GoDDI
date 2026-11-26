@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jasonwa/goddi/internal/api/middleware"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/audit"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/middleware"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/audit"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // logAuditError logs (but does not propagate) an audit logging failure.

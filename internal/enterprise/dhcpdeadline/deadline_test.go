@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/trustedtime"
+	"github.com/jincaiw/GoDDI/internal/enterprise/trustedtime"
 )
 
 func TestBoundaries(t *testing.T) {

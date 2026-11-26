@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
 	_ "modernc.org/sqlite"
 )
 

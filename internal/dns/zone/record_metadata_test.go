@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 	"github.com/miekg/dns"
 )
 

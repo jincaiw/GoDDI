@@ -6,9 +6,9 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamaddr"
-	"github.com/jasonwa/goddi/internal/enterprise/staticbundle"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamaddr"
+	"github.com/jincaiw/GoDDI/internal/enterprise/staticbundle"
 )
 
 // applyFixture is private and exists only for isolated tests. Validation does

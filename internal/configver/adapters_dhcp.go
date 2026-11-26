@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
 )
 
 // DHCPScopeContent is a complete snapshot of a DHCP scope's publishable state.

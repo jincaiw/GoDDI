@@ -11,7 +11,7 @@ import (
 	"database/sql"
 
 	"errors"
-	"github.com/jasonwa/goddi/internal/ipam/lifecycle"
+	"github.com/jincaiw/GoDDI/internal/ipam/lifecycle"
 	"testing"
 
 	_ "modernc.org/sqlite"

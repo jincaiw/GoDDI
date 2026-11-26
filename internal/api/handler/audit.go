@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/audit"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/audit"
 )
 
 // ListAuditLogs handles GET /api/v1/logs/audit

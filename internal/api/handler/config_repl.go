@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"net/http"
 
-	"github.com/jasonwa/goddi/internal/configrepl"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/configrepl"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // ConfigSnapshotHandler serves ADR-0013 configuration replication: it returns

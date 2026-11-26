@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlogguard"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlogguard"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 // hardenedFixture builds an isolated on-disk database that matches the frozen

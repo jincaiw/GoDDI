@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 // Where a proposed router came from.

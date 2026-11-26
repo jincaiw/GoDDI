@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // LeaseStore is the narrow DHCP data-plane contract. It deliberately contains

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // A missing table is an intentional "feature not deployed here" signal and

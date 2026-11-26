@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 var ErrInvalid = errors.New("snapshotpipeline: invalid state or configuration")

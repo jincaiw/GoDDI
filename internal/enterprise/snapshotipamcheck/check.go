@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
 )
 
 var ErrInvalid = errors.New("snapshotipamcheck: invalid staging database")

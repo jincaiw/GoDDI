@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 const golden = `{"changes":[{"kind":"ipam.occupancy.set","objectId":"33333333-3333-4333-8333-333333333333","revision":"1","body":{"tenantId":"11111111-1111-4111-8111-111111111111","spaceId":"22222222-2222-4222-8222-222222222222","id":"33333333-3333-4333-8333-333333333333","subnetId":"44444444-4444-4444-8444-444444444444","family":4,"address":"192.0.2.10","kind":"STATIC","ownerRef":"host-1","createdAtMs":"100","expiresAtMs":null,"revision":"1"}}]}`

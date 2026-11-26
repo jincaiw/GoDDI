@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/auditwire"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/receiptwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/auditwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/receiptwire"
 )
 
 func preparedStatic(t *testing.T, tx *WriteTx, s idempotency.Scope, r idempotency.Receipt, o StaticOccupancy) []Change {

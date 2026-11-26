@@ -2,7 +2,7 @@ package configrepl
 
 import (
 	"context"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 	"testing"
 )
 

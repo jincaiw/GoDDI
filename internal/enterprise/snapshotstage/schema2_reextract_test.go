@@ -14,11 +14,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dhcplease"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotpipeline"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcplease"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotpipeline"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func TestReextractFromTheComposedCandidateValidates(t *testing.T) {

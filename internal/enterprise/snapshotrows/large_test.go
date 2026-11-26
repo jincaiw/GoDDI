@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 const transportChunk = 1 << 20

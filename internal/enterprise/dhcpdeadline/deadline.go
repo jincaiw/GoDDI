@@ -9,7 +9,7 @@ import (
 	"errors"
 	"math"
 
-	"github.com/jasonwa/goddi/internal/enterprise/trustedtime"
+	"github.com/jincaiw/GoDDI/internal/enterprise/trustedtime"
 )
 
 var ErrUnavailable = errors.New("dhcpdeadline: no safe lease duration")

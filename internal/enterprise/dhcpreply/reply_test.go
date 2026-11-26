@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/enterprise/dhcpwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcpwire"
 )
 
 func ip(s string) netip.Addr { return netip.MustParseAddr(s) }

@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/backup"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // TestCompareVersionOrdersDottedNumbers covers the comparison the gate is

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 const importHeader = "ip_address,status,mac_address,hostname,owner,device,location,description"

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
 )
 
 var ErrNoAuthority = errors.New("replicaapply: no authenticated authority")

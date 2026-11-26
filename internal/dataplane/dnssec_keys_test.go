@@ -6,8 +6,8 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/jasonwa/goddi/internal/dns/dnssec"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/dns/dnssec"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // A DNS data plane mints RRSIGs on the query path without ever opening the

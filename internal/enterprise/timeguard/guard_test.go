@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/timewater"
-	"github.com/jasonwa/goddi/internal/enterprise/trustedtime"
+	"github.com/jincaiw/GoDDI/internal/enterprise/timewater"
+	"github.com/jincaiw/GoDDI/internal/enterprise/trustedtime"
 )
 
 type clock struct{ n atomic.Int64 }

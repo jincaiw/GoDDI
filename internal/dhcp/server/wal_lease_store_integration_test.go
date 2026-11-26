@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // TestWALLeaseStoreServesDORAAndEmitsFacts drives a real DISCOVER/REQUEST through

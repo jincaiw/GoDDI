@@ -3,8 +3,8 @@ package eventlogguard
 import (
 	"fmt"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
 )
 
 // ReferenceDDLs returns the ordered DDL statements that build an isolated

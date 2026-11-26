@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/auditlog"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/auditlog"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 )
 
 // Meta keys this package owns for the decisions an operator makes.

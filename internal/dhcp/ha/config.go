@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 // Config is the HA settings this package works from, with the durations

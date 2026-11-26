@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // These tests exercise the split the whole W07 batch exists for: the DHCP

@@ -13,7 +13,7 @@ import (
 	"math"
 	"net/netip"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dhcpwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcpwire"
 )
 
 var ErrInvalid = errors.New("dhcpreply: invalid request or plan")

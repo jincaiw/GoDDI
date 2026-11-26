@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/replicabatch"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/replicabatch"
 )
 
 // Batch remains closed: a validated batch does not establish authority.

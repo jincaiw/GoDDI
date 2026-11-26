@@ -37,11 +37,11 @@
 | A3 | DONE | 新增 `docs/COMPAT-ALIASES.md`（兼容别名登记） |
 | C1 | DONE(文档) | 新增 `internal/enterprise/README.md` 边界声明；长期去留待单独决策 |
 | C2 | DONE | `cmd/goddi/main.go`（4054 行）已拆分为 `main/serve/filters/rekey/snapshot/ha/migrate/unlock/runtime/status.go`（纯移动，无逻辑变更）；分支 `refactor/split-cmd-main`，已 `go build ./...` + 受影响包测试验证 |
-| G4 | DEFERRED | `go.mod` 模块路径 `github.com/jasonwa/goddi` vs 远端 `jincaiw/GoDDI`：改模块路径影响全仓 import，需全量编译验证，单独批次处理 |
+| G4 | DONE | `go.mod` 与全仓 import 已统一为 `github.com/jincaiw/GoDDI`（匹配远端）；`go build ./...`、`go vet`、受影响包测试均通过；分支 `chore/module-path-align` |
 
 ## 验证说明
 - 本沙箱直接用默认 `GOCACHE` 会因写权限失败；改用临时缓存（`GOCACHE=/tmp/...`、`GOMODCACHE=/tmp/...`）
   并临时放置 `web/dist/index.html`（`//go:embed` 前置，gitignore 内，验证后删除）后，
   `go build ./...`、`go vet`、`go test ./cmd/goddi ./internal/api ./internal/database ./internal/dataplane ./internal/dhcp/server` 均通过。
 - 仍需在完整环境补跑：`make verify`、`make verify-e2e`、`make verify-browser`。
-- G4（模块路径）仍需全量编译验证，单独批次。
+- G4（模块路径）已执行并通过 `go build ./...` + 受影响包测试合并入 main。

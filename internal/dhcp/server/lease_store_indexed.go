@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // IndexedLeaseStore is the N3.3 transition adapter. SQLite-backed primary

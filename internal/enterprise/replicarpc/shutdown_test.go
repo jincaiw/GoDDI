@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	replica "github.com/jasonwa/goddi/internal/gen/replica/v1"
+	replica "github.com/jincaiw/GoDDI/internal/gen/replica/v1"
 )
 
 func TestStopRepeatedAndConcurrentBeforeRequests(t *testing.T) {

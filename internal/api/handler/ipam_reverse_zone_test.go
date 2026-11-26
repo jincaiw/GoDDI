@@ -33,7 +33,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 type reverseZoneEnvelope struct {

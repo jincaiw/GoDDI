@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/auth"
 	_ "modernc.org/sqlite"
 )
 

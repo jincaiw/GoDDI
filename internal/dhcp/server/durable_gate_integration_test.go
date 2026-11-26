@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 type recordingDurableGate struct {

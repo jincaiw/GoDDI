@@ -27,9 +27,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 func authCoverageFixture(t *testing.T) *httptest.Server {

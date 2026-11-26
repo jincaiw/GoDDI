@@ -11,8 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamaddr"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamaddr"
 )
 
 const Set = "ipam.occupancy.set"

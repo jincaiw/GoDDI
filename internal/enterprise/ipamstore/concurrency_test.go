@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 )
 
 // This is a schema-level test, not an end-to-end allocation test. Independent

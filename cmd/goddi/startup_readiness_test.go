@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/api/handler"
-	dhcpserver "github.com/jasonwa/goddi/internal/dhcp/server"
+	"github.com/jincaiw/GoDDI/internal/api/handler"
+	dhcpserver "github.com/jincaiw/GoDDI/internal/dhcp/server"
 )
 
 func TestMergeStartupStatusKeepsUnconfiguredDHCPReady(t *testing.T) {

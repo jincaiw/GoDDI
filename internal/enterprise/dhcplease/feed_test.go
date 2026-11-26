@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
 )
 
 func TestSchemaTablesReturnsTheFrozenOrderWithValidators(t *testing.T) {

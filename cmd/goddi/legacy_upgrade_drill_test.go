@@ -24,9 +24,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
+	"github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
 )
 
 const legacyBaselineMigrations = 25 // v0.8.2/v0.9.0: 001–025

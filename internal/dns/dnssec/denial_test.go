@@ -5,7 +5,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 )
 
 // denialFixture builds a signed zone whose name chain is

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // queryer is the subset of *sql.DB / *sql.Tx used to read one table. A single

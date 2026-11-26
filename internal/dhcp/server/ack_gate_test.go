@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // stubReplicator stands in for the second copy.

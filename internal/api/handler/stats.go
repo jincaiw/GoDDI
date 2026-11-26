@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/api/response"
 )
 
 // --- Long-term Statistics API (Technitium v13.4 parity) ---

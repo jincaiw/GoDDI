@@ -11,15 +11,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dns/cache"
-	"github.com/jasonwa/goddi/internal/dns/client"
-	"github.com/jasonwa/goddi/internal/dns/filter"
-	"github.com/jasonwa/goddi/internal/dns/forwarder"
-	dnsserver "github.com/jasonwa/goddi/internal/dns/server"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dns/cache"
+	"github.com/jincaiw/GoDDI/internal/dns/client"
+	"github.com/jincaiw/GoDDI/internal/dns/filter"
+	"github.com/jincaiw/GoDDI/internal/dns/forwarder"
+	dnsserver "github.com/jincaiw/GoDDI/internal/dns/server"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 )
 
 // validProtocols contains the set of allowed DNS forwarder protocols.

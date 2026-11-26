@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // DeclineTombstoneFact is the payload for a DECLINE about an address that had

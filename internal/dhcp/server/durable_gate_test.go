@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 type durableGateProbe struct{ err error }

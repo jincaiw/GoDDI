@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	goddiassets "github.com/jasonwa/goddi"
+	goddiassets "github.com/jincaiw/GoDDI"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )

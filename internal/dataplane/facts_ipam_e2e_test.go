@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/facts"
-	"github.com/jasonwa/goddi/internal/ipam"
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/space"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/space"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 func TestDHCPFactRelaysFromLeaseStoreIntoControlIPAMProjection(t *testing.T) {

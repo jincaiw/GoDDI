@@ -3,8 +3,8 @@ package eventlog_test
 import (
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamevent"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamevent"
 )
 
 func TestStaticCandidateInteroperatesWithReplicaDecoder(t *testing.T) {

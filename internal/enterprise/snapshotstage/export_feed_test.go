@@ -11,7 +11,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
 )
 
 func TestExportedCandidateRowsPassTheValidator(t *testing.T) {

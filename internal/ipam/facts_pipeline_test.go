@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
-	"github.com/jasonwa/goddi/internal/facts"
-	"github.com/jasonwa/goddi/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
 )
 
 func TestFactsPipelineDisabledIsSafeNoOp(t *testing.T) {

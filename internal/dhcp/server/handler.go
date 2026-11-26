@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
-	"github.com/jasonwa/goddi/internal/dhcp/option"
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/option"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
 
-	dhcpinternal "github.com/jasonwa/goddi/internal/dhcp"
+	dhcpinternal "github.com/jincaiw/GoDDI/internal/dhcp"
 )
 
 // fqdnLabelRegex matches a single valid DNS label per RFC 1035 §2.3.4.

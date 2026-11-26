@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	goddiassets "github.com/jasonwa/goddi"
+	goddiassets "github.com/jincaiw/GoDDI"
 )
 
 // staticDirCandidates returns the directories that may contain the built

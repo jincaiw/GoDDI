@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/secretbox"
+	"github.com/jincaiw/GoDDI/internal/secretbox"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )

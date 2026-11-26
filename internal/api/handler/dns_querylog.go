@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	dnsquerylog "github.com/jincaiw/GoDDI/internal/dns"
 )
 
 // ListDNSQueryLogs lists DNS query logs with filtering and pagination.

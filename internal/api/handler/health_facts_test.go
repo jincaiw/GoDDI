@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 func TestDHCPFactsPlaneMapsTheOutboxState(t *testing.T) {

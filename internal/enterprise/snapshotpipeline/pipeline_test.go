@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotrows"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotrows"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func fixture() (snapshotverify.Manifest, snapshotverify.Trust, snapshotverify.Limits, snapshotrows.Limits, []SchemaTable, [][]byte) {

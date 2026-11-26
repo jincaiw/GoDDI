@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func eightTableSchema() []SchemaTable {

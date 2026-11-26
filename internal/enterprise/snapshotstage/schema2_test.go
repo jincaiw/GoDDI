@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dhcplease"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcplease"
 )
 
 // v4mapped builds the 16-byte network-order form of an IPv4 address, the

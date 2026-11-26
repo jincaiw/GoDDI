@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // renewingRequest builds the RFC 2131 RENEWING REQUEST: ciaddr names the

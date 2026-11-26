@@ -6,9 +6,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/pullbudget"
-	replica "github.com/jasonwa/goddi/internal/gen/replica/v1"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/pullbudget"
+	replica "github.com/jincaiw/GoDDI/internal/gen/replica/v1"
 	"google.golang.org/protobuf/proto"
 )
 

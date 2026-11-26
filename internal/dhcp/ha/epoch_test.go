@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 // TestOwnerEpochTakeoverBumpsMonotonically proves a promotion bumps the

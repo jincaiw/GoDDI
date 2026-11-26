@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamstore"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamstore"
 	_ "modernc.org/sqlite"
 )
 

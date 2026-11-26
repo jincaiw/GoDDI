@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/api/response"
 )
 
 // Zone transfer authorization (dns_zone_transfer) is what makes AXFR/IXFR

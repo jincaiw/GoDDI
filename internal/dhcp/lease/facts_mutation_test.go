@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 func newFactsMutationWriter(t *testing.T) (*FactsMutationWriter, *sql.DB, *Manager) {

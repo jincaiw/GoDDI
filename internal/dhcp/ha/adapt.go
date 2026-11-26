@@ -3,7 +3,7 @@ package ha
 import (
 	"context"
 
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
 )
 
 // Adapter presents the primary's replicator to the DHCP server in the server

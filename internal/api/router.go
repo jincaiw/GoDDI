@@ -8,14 +8,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
-	"github.com/jasonwa/goddi/internal/api/handler"
-	"github.com/jasonwa/goddi/internal/api/middleware"
-	"github.com/jasonwa/goddi/internal/audit"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/metrics"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/api/handler"
+	"github.com/jincaiw/GoDDI/internal/api/middleware"
+	"github.com/jincaiw/GoDDI/internal/audit"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // NewRouter creates and configures the main API router.

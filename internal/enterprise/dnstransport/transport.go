@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dnsanswer"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dnsanswer"
 	"github.com/miekg/dns"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
+	"github.com/jincaiw/GoDDI/internal/config"
 )
 
 // TestSyncWritesAtomicLKG proves the LKG stamp is written in the same sync as

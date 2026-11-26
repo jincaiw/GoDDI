@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 	dto "github.com/prometheus/client_model/go"
 )
 

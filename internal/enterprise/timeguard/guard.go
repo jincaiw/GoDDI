@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/jasonwa/goddi/internal/enterprise/trustedtime"
+	"github.com/jincaiw/GoDDI/internal/enterprise/trustedtime"
 )
 
 var ErrLocked = errors.New("timeguard: permanently unavailable; recreate guard")

@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/dhcp/lease"
-	"github.com/jasonwa/goddi/internal/facts"
-	"github.com/jasonwa/goddi/internal/ipam"
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/space"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/internal/dhcp/lease"
+	"github.com/jincaiw/GoDDI/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/space"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 // These tests close the DHCP -> IPAM half of the linkage over the real

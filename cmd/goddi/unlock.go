@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	applog "github.com/jasonwa/goddi/internal/log"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	applog "github.com/jincaiw/GoDDI/internal/log"
 )
 
 // runUnlock clears login rate-limit lockouts. It intentionally does NOT need

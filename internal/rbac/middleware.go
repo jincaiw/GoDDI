@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/jasonwa/goddi/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/auth"
 )
 
 // Context keys for storing user information.

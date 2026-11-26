@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/ipam"
 )
 
 func importBody(t *testing.T, importType, parentID, data string) []byte {

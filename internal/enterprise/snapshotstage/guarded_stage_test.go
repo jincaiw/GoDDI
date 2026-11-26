@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/eventlogguard"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlogguard"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
 )
 
 func guardedLines() []line {

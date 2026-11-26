@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jasonwa/goddi/internal/auditlog"
+	"github.com/jincaiw/GoDDI/internal/auditlog"
 )
 
 // ddnsAuditRecord is one dns_records row, reduced to what identifies it. The

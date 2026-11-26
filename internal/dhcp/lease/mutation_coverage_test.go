@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 var allMutationKinds = []MutationKind{

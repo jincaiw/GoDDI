@@ -8,7 +8,7 @@ package handler
 //
 // The mapping lives here rather than in the wiring so the readiness semantics
 // are testable without a DHCP-enabled server.
-import "github.com/jasonwa/goddi/internal/facts"
+import "github.com/jincaiw/GoDDI/internal/facts"
 
 func DHCPFactsPlane(status facts.ObservationOutboxStatus, err error) PlaneStatus {
 	if err != nil {

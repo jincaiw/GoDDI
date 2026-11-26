@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	dnsquerylog "github.com/jasonwa/goddi/internal/dns"
-	"github.com/jasonwa/goddi/internal/dns/filter"
-	"github.com/jasonwa/goddi/internal/dns/zone"
-	"github.com/jasonwa/goddi/internal/metrics"
+	dnsquerylog "github.com/jincaiw/GoDDI/internal/dns"
+	"github.com/jincaiw/GoDDI/internal/dns/filter"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 	"github.com/miekg/dns"
 )
 

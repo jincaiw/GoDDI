@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 func enqueueTestFact(t *testing.T, db *sql.DB, id string, seq int64) {

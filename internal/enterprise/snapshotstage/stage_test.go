@@ -10,8 +10,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotipam"
-	"github.com/jasonwa/goddi/internal/enterprise/snapshotverify"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotipam"
+	"github.com/jincaiw/GoDDI/internal/enterprise/snapshotverify"
 )
 
 func ip(a, b, c, d byte) string {

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/backup"
-	"github.com/jasonwa/goddi/internal/config"
-	applog "github.com/jasonwa/goddi/internal/log"
+	"github.com/jincaiw/GoDDI/internal/backup"
+	"github.com/jincaiw/GoDDI/internal/config"
+	applog "github.com/jincaiw/GoDDI/internal/log"
 )
 
 // rest holds the flags of the restore subcommand. They are read together

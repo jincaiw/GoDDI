@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dns/cache"
-	"github.com/jasonwa/goddi/internal/dns/filter"
-	"github.com/jasonwa/goddi/internal/dns/forwarder"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dns/cache"
+	"github.com/jincaiw/GoDDI/internal/dns/filter"
+	"github.com/jincaiw/GoDDI/internal/dns/forwarder"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 	"github.com/miekg/dns"
 )
 

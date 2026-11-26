@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dns/transfer"
+	"github.com/jincaiw/GoDDI/internal/dns/transfer"
 	"github.com/miekg/dns"
 )
 

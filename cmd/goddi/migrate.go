@@ -7,13 +7,13 @@ import (
 	"os"
 	"strings"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/auth"
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	applog "github.com/jasonwa/goddi/internal/log"
-	"github.com/jasonwa/goddi/internal/rbac"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/auth"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	applog "github.com/jincaiw/GoDDI/internal/log"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 func runMigrations(configPath string) error {

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 )
 
 // RunnerConfig configures a replication loop.

@@ -17,7 +17,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dhcplease"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcplease"
 )
 
 func leaseFixtureLines() []line {

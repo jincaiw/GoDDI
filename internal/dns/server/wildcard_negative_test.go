@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dns/zone"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dns/zone"
 	"github.com/miekg/dns"
 )
 

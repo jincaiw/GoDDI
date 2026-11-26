@@ -30,8 +30,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/sqlitepolicy"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/sqlitepolicy"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )

@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/jasonwa/goddi/internal/configver"
-	"github.com/jasonwa/goddi/internal/rbac"
+	"github.com/jincaiw/GoDDI/internal/configver"
+	"github.com/jincaiw/GoDDI/internal/rbac"
 )
 
 // recordResourceCreation writes a resource's creation as its first revision.

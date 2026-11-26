@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/facts"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/facts"
 )
 
 // Meta keys this package owns in dataplane_meta.

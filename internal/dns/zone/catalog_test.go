@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/database"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/database"
 )
 
 // setupCatalogTest builds a migrated sqlite database plus a ZoneManager, the

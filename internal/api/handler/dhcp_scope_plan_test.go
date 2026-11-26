@@ -30,10 +30,10 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/dhcp/scope"
-	"github.com/jasonwa/goddi/internal/ipam"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/dhcp/scope"
+	"github.com/jincaiw/GoDDI/internal/ipam"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
 )
 
 // newControlPlaneTestDB opens the real control-plane schema in memory, so a

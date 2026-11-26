@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/idempotency"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamrequest"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamresponse"
+	"github.com/jincaiw/GoDDI/internal/enterprise/idempotency"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamrequest"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamresponse"
 )
 
 func staticSetup(t *testing.T) (*sql.DB, *Log, idempotency.Scope, idempotency.Receipt, StaticOccupancy) {

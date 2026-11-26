@@ -6,10 +6,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/jasonwa/goddi/internal/config"
-	"github.com/jasonwa/goddi/internal/dataplane"
-	"github.com/jasonwa/goddi/internal/dhcp/ha"
-	"github.com/jasonwa/goddi/internal/system"
+	"github.com/jincaiw/GoDDI/internal/config"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/dhcp/ha"
+	"github.com/jincaiw/GoDDI/internal/system"
 )
 
 func loadRuntimeConfig(configPath string) (*config.Config, error) {

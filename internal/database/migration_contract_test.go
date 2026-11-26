@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	goddiassets "github.com/jasonwa/goddi"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	goddiassets "github.com/jincaiw/GoDDI"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // The rules checked here are ADR-0002. The point of writing them as code

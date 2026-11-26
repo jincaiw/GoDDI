@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/ipam/space"
+	"github.com/jincaiw/GoDDI/internal/ipam/space"
 )
 
 func spacePage(t *testing.T, page, pageSize string) (names []string, total int, pages int) {

@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jasonwa/goddi/internal/api/response"
-	"github.com/jasonwa/goddi/internal/configrepl"
-	"github.com/jasonwa/goddi/internal/dataplane"
+	"github.com/jincaiw/GoDDI/internal/api/response"
+	"github.com/jincaiw/GoDDI/internal/configrepl"
+	"github.com/jincaiw/GoDDI/internal/dataplane"
 )
 
 // ConfigReplicationInfo is the deployment's ADR-0013 role for this node. It is

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jasonwa/goddi/internal/enterprise/dnswire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dnswire"
 	"github.com/miekg/dns"
 )
 

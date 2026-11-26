@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/jasonwa/goddi/internal/enterprise/dhcpingress"
-	"github.com/jasonwa/goddi/internal/enterprise/dhcpwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcpingress"
+	"github.com/jincaiw/GoDDI/internal/enterprise/dhcpwire"
 )
 
 // This exercises only in-process composition. The tuple here is fabricated by

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jasonwa/goddi/internal/auditlog"
-	"github.com/jasonwa/goddi/internal/metrics"
+	"github.com/jincaiw/GoDDI/internal/auditlog"
+	"github.com/jincaiw/GoDDI/internal/metrics"
 )
 
 // leaseState is the part of a lease row an audit entry describes.

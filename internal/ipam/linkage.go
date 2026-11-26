@@ -9,10 +9,10 @@ import (
 	"net"
 	"strings"
 
-	"github.com/jasonwa/goddi/internal/ipam/address"
-	"github.com/jasonwa/goddi/internal/ipam/space"
-	"github.com/jasonwa/goddi/internal/ipam/subnet"
-	"github.com/jasonwa/goddi/pkg/dnsutil"
+	"github.com/jincaiw/GoDDI/internal/ipam/address"
+	"github.com/jincaiw/GoDDI/internal/ipam/space"
+	"github.com/jincaiw/GoDDI/internal/ipam/subnet"
+	"github.com/jincaiw/GoDDI/pkg/dnsutil"
 )
 
 var ErrAmbiguousAddress = errors.New("ipam: address exists in multiple spaces")

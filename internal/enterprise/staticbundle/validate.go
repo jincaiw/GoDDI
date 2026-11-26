@@ -9,12 +9,12 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	"github.com/jasonwa/goddi/internal/enterprise/auditwire"
-	"github.com/jasonwa/goddi/internal/enterprise/eventlog"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamevent"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamrequest"
-	"github.com/jasonwa/goddi/internal/enterprise/ipamresponse"
-	"github.com/jasonwa/goddi/internal/enterprise/receiptwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/auditwire"
+	"github.com/jincaiw/GoDDI/internal/enterprise/eventlog"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamevent"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamrequest"
+	"github.com/jincaiw/GoDDI/internal/enterprise/ipamresponse"
+	"github.com/jincaiw/GoDDI/internal/enterprise/receiptwire"
 )
 
 var ErrInvalid = errors.New("staticbundle: invalid STATIC create bundle")
