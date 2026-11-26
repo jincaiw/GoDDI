@@ -36,10 +36,12 @@
 | DB2 | DONE | 新增 `docs/MIGRATIONS-MAP.md`（迁移目录→目标库登记） |
 | A3 | DONE | 新增 `docs/COMPAT-ALIASES.md`（兼容别名登记） |
 | C1 | DONE(文档) | 新增 `internal/enterprise/README.md` 边界声明；长期去留待单独决策 |
-| C2 | DEFERRED | `cmd/goddi/main.go`（4054 行）拆分：需可编译环境验证，建议单独 PR 并跑 `go build/test` 后合并 |
+| C2 | DONE | `cmd/goddi/main.go`（4054 行）已拆分为 `main/serve/filters/rekey/snapshot/ha/migrate/unlock/runtime/status.go`（纯移动，无逻辑变更）；分支 `refactor/split-cmd-main`，已 `go build ./...` + 受影响包测试验证 |
 | G4 | DEFERRED | `go.mod` 模块路径 `github.com/jasonwa/goddi` vs 远端 `jincaiw/GoDDI`：改模块路径影响全仓 import，需全量编译验证，单独批次处理 |
 
 ## 验证说明
-- 本沙箱 `go build ./...` 因 Go 构建缓存目录无写权限（`operation not permitted`）无法执行；
-  上述 Go 代码仅改动**注释**（router.go/extension.go），不影响编译。
-- 待可编译环境补跑：`make verify`、`make verify-e2e`、`make verify-browser`。
+- 本沙箱直接用默认 `GOCACHE` 会因写权限失败；改用临时缓存（`GOCACHE=/tmp/...`、`GOMODCACHE=/tmp/...`）
+  并临时放置 `web/dist/index.html`（`//go:embed` 前置，gitignore 内，验证后删除）后，
+  `go build ./...`、`go vet`、`go test ./cmd/goddi ./internal/api ./internal/database ./internal/dataplane ./internal/dhcp/server` 均通过。
+- 仍需在完整环境补跑：`make verify`、`make verify-e2e`、`make verify-browser`。
+- G4（模块路径）仍需全量编译验证，单独批次。
