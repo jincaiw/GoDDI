@@ -24,18 +24,27 @@ const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g;
 const ENUM = /(?:^|\n)(active|retired|archived|used|available|reserved|conflict|allow|block|apply_lists|primary|secondary|stub|forward|catalog|standby|monitor|true|false|NXDOMAIN|NODATA|REFUSED|DROP|CUSTOM_IP|noerror|nxdomain|servfail|refused|assign_role|set_permissions|dns_dynamic_update|ddns_record_create|ddns_record_delete|dhcp_lease_bind|dhcp_lease_release|dhcp_lease_decline|dhcp_lease_expire|dhcp_ha_degrade|dhcp_ha_takeover|dhcp_ha_fence|dhcp_ha_rejoin)(?:\n|$)/g;
 
 async function zoneDetailRoute(page) {
-  const zoneId = await page.evaluate(async base => {
+  return await page.evaluate(async base => {
     const token = sessionStorage.getItem('token');
-    if (!token) return '';
-    const res = await fetch(base + '/api/v1/dns/zones?page=1&page_size=1', {
-      headers: { Authorization: 'Bearer ' + token }
+    if (!token) return { route: '', createdId: '' };
+    const csrf = sessionStorage.getItem('csrf_token') || '';
+    const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf };
+    const list = await fetch(base + '/api/v1/dns/zones?page=1&page_size=1', { headers });
+    if (list.ok) {
+      const body = await list.json();
+      const id0 = body?.data?.[0]?.id;
+      if (id0) return { route: '/dns/zone-detail/' + encodeURIComponent(id0), createdId: '' };
+    }
+    // Fresh database: create a temporary zone so the dynamic route is exercisable.
+    const name = 'tdroute' + Date.now().toString() + Math.floor(Math.random() * 1000) + '.test.';
+    const created = await fetch(base + '/api/v1/dns/zones', {
+      method: 'POST', headers, body: JSON.stringify({ name, type: 'primary', enabled: true })
     });
-    if (!res.ok) return '';
-    const body = await res.json();
-    return body?.data?.[0]?.id || '';
+    if (!created.ok) return { route: '', createdId: '' };
+    const cb = await created.json();
+    const zid = cb?.data?.id || '';
+    return { route: zid ? '/dns/zone-detail/' + encodeURIComponent(zid) : '', createdId: zid };
   }, BASE);
-  if (!zoneId) throw new Error('no DNS zone fixture for /dns/zone-detail/:id');
-  return '/dns/zone-detail/' + encodeURIComponent(zoneId);
 }
 
 (async () => {
@@ -50,7 +59,9 @@ async function zoneDetailRoute(page) {
   await page.getByRole('button', { name: '登录' }).click();
   await page.waitForFunction(() => !location.pathname.startsWith('/login'), null, { timeout: 15000 });
 
-  const allRoutes = [...routes, await zoneDetailRoute(page)];
+  const zoneRoute = await zoneDetailRoute(page);
+  if (!zoneRoute.route) throw new Error('no DNS zone fixture for /dns/zone-detail/:id');
+  const allRoutes = [...routes, zoneRoute.route];
   const out = [];
   let failed = 0;
   for (const route of allRoutes) {
@@ -73,6 +84,16 @@ async function zoneDetailRoute(page) {
       failed += 1;
       console.log('FAIL ' + route + ' ' + JSON.stringify(findings));
     }
+  }
+
+  if (zoneRoute.createdId) {
+    await page.evaluate(async ({ base, id }) => {
+      const token = sessionStorage.getItem('token');
+      const csrf = sessionStorage.getItem('csrf_token') || '';
+      await fetch(base + '/api/v1/dns/zones/' + encodeURIComponent(id), {
+        method: 'DELETE', headers: { Authorization: 'Bearer ' + token, 'X-CSRF-Token': csrf }
+      }).catch(() => {});
+    }, { base: BASE, id: zoneRoute.createdId });
   }
 
   fs.mkdirSync(SHOT_DIR, { recursive: true });

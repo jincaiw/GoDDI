@@ -10,6 +10,13 @@ the suites create and delete test rows in the configured database.
 > suites on every push/PR (23 of the 24 — `h2-report-ref` needs a generated
 > `tests/h2/reports/H2-REPORT-*.json` and is local-only) against a freshly
 > built, isolated server. `make verify-browser` remains the local entry point.
+>
+> **Baseline data**: a fresh database has no zone/scope for a few suites to act
+> on, so the CI job first runs `node test/browser/seed_ci.mjs` (with
+> `GODDI_BASE_URL`/`GODDI_ADMIN_PASS`). It idempotently creates `demo.test`
+> (with `www` A record), a `td-demo-scope` DHCP scope with free addresses, and a
+> `td-demo-space` IPAM space. Run it the same way when testing a fresh server.
+> The debug-client suite also needs DNS enabled on a high port (CI uses 15353).
 
 ## Prerequisites
 

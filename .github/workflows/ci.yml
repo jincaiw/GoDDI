@@ -391,7 +391,11 @@ jobs:
           GODDI_SECURITY_JWT_SECRET: ci-only-secret-not-for-production-123456
           GODDI_ADMIN_USERNAME: admin
           GODDI_ADMIN_PASSWORD: Admin@123456
-          GODDI_DNS_ENABLED: 'false'
+          # DNS must be on (high port) so the debug-client suite gets a local
+          # authoritative answer; DHCP stays off (needs raw sockets).
+          GODDI_DNS_ENABLED: 'true'
+          GODDI_DNS_LISTENERS_UDP_ADDR: '127.0.0.1:15353'
+          GODDI_DNS_LISTENERS_TCP_ADDR: '127.0.0.1:15353'
           GODDI_DHCP_ENABLED: 'false'
         run: |
           set -euo pipefail
@@ -409,6 +413,8 @@ jobs:
           export GODDI_BASE_URL=http://127.0.0.1:18080
           export GODDI_ADMIN_USER=admin
           export GODDI_ADMIN_PASS=Admin@123456
+          echo "--- seeding baseline data ---"
+          node test/browser/seed_ci.mjs
           export GODDI_TEST_DB=/tmp/goddi-browser/goddi.db
           # h2-report-ref needs generated tests/h2/reports evidence -> local only.
           export GODDI_SUITES="docs contracts i18n theme keyboard route-audit batch16 smoke batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12 batch13 batch14 batch15 legacy"
