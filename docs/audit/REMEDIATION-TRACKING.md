@@ -23,7 +23,8 @@
 | C5 | 删除 web-admin Soybean 模板 CHANGELOG/README.en_US/soybean.jpg；README 重写；version→0.25.1 |
 | T3 | 删除 `e2e/tests/console.spec.ts`、`workflows.spec.ts`（明确 STALE 且被 CI 排除）；清理 config |
 | T4 | 删除 `test/browser/tmp-inspect*.cjs` |
-| T5 | Makefile/STATUS 套件口径对齐（24 个浏览器/静态套件，本地不进入 CI） |
+| T5 | Makefile/STATUS 套件口径对齐（24 个浏览器/静态套件；本地 `make verify-browser`） |
+| T1/T2 | DONE: `test/browser` 接入 CI —— 新增 `browser-regression` job，运行 23 个子集（排除本地证据守卫 `h2-report-ref`）；静态守卫 docs/theme/contracts 本地已验证 PASS |
 | D7/D8/D13 | 历史计划/测试报告加“历史归档”横幅 + `docs/ARCHIVE-INDEX.md` |
 | D9 | `docs/RELEASE-NOTES-INDEX.md`：声明 `CHANGELOG.md` 为 v0.24+ 权威，登记缺口（保留历史文件，未删除） |
 | D10 | PRD 标记历史（见 ARCHIVE-INDEX） |

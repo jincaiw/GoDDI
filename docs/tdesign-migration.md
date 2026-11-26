@@ -1,6 +1,6 @@
 # GoDDI 前端 TDesign 迁移 + 单机优先 / 双机架构预留
 
-> 状态：**阶段 1 + 阶段 2 均已完成**（脚手架 + 登录 + 完整样板页 + 批次 2–15 共 31 个 TDesign 页面（业务叶子路由）+ 死代码清理；**Naive UI 已 100% 移除**），全部在隔离单机环境下浏览器实测；`pnpm lint` / `typecheck` / `build` 全绿。
+> 状态：**阶段 1 + 阶段 2 均已完成**（脚手架 + 登录 + 完整样板页 + 批次 2–15 共 32 个 TDesign 页面（含 `_builtin/login`）+ 死代码清理；**Naive UI 已 100% 移除**），全部在隔离单机环境下浏览器实测；`pnpm lint` / `typecheck` / `build` 全绿。
 > 技术栈：Vue 3 + TypeScript + Vite + **TDesign Vue Next Starter** 分层，替换原 soybean-admin / Naive UI。
 > 范围约定：**先单机实现所有功能，双机（HA / 复制 / 多节点协调）从技术架构角度预留，最后实现。**
 
@@ -40,8 +40,8 @@
 - 修过一个真实组件 API 坑：TDesign Empty 的操作区插槽是 `#action`，不是 `#extra`（原写法导致 501 提示不渲染）。
 - 验证：`pnpm typecheck`=0、`pnpm build`=0、`web/dist` 重建；Chromium 中 5 个页面（含样板页）全部 PASS、0 console/page error；核心登录+CRUD 冒烟与 10 个未迁移页面回归全绿。
 
-**当前 TDesign 业务页面共 31 个（不含 `_builtin` 登录/错误页）**（0 处 `naive-ui` 引用）：
-`ipam/spaces`、`logs/audit`、`logs/dhcp`、`logs/dns`、`dns/apps`、`dns/security`、`dhcp/ha`、`dhcp/leases`、`settings/system`、`dhcp/options`、`dhcp/reservations`、`settings/backup`、`admin/tokens`、`admin/sessions`、`dhcp/scopes`、`dns/allowed`、`admin/groups`、`admin/users`、`admin/roles`、`dns/cache`、`dns/forwarders`、`dns/blocked`、`tools/client`、`dns/zones`、`ipam/addresses`、`ipam/subnets`、`ipam/retirement-archive`、`dns/zone-detail`、`settings/config-versions`、`dashboard`、`dns/dnssec`。
+**当前 TDesign 页面共 32 个（含 `_builtin/login`）**（0 处 `naive-ui` 引用）：
+`_builtin/login`、`ipam/spaces`、`logs/audit`、`logs/dhcp`、`logs/dns`、`dns/apps`、`dns/security`、`dhcp/ha`、`dhcp/leases`、`settings/system`、`dhcp/options`、`dhcp/reservations`、`settings/backup`、`admin/tokens`、`admin/sessions`、`dhcp/scopes`、`dns/allowed`、`admin/groups`、`admin/users`、`admin/roles`、`dns/cache`、`dns/forwarders`、`dns/blocked`、`tools/client`、`dns/zones`、`ipam/addresses`、`ipam/subnets`、`ipam/retirement-archive`、`dns/zone-detail`、`settings/config-versions`、`dashboard`、`dns/dnssec`。
 
 **批次 3 已完成（round 100）**，新增 3 个纯 TDesign 页面 + `RemoteTable` 增强：
 - `views/dns/security/index.vue`：客户端策略表 + 新建弹窗（`t-form` 校验）+ `DialogPlugin.confirm` 删除；浏览器实测**创建策略成功并回显**。

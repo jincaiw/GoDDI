@@ -331,3 +331,85 @@ jobs:
 
       - name: Smoke test Linux arm64 binary
         run: bash scripts/release_smoke.sh /tmp/goddi-arm64 v0.25.1
+
+  # L4: full browser regression harness (test/browser). This is the suite that
+  # actually covers every management page; it used to run only via
+  # `make verify-browser` on a developer machine, so "all pages are covered"
+  # was never gated by CI. It runs the 23-suite subset that is meaningful on a
+  # clean checkout: `h2-report-ref` is a local evidence guard (it needs a
+  # generated tests/h2/reports/H2-REPORT-*.json) and is skipped here on purpose.
+  browser-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.11'
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: web-admin/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: web-admin
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # docs.cjs compares the deployed bundle against the freshly built one, and
+      # the server serves the embedded copy, so sync it before running suites.
+      - name: Sync frontend dist into embed directory
+        run: |
+          rm -rf web/dist
+          mkdir -p web/dist
+          cp -R web-admin/dist/. web/dist/
+
+      - name: Install browser harness deps
+        working-directory: test/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Start isolated server and run browser suites
+        env:
+          GODDI_SERVER_HTTP_ADDR: 127.0.0.1:18080
+          GODDI_SERVER_PUBLIC_URL: http://127.0.0.1:18080
+          GODDI_SERVER_DATA_DIR: /tmp/goddi-browser
+          GODDI_DATABASE_DSN: /tmp/goddi-browser/goddi.db
+          GODDI_SECURITY_JWT_SECRET: ci-only-secret-not-for-production-123456
+          GODDI_ADMIN_USERNAME: admin
+          GODDI_ADMIN_PASSWORD: Admin@123456
+          GODDI_DNS_ENABLED: 'false'
+          GODDI_DHCP_ENABLED: 'false'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/goddi-browser
+          mkdir -p /tmp/goddi-browser
+          go build -o /tmp/goddi-browser-server ./cmd/goddi
+          /tmp/goddi-browser-server serve > /tmp/goddi-browser.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; echo "--- server log ---"; tail -50 /tmp/goddi-browser.log' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health >/dev/null || { echo "server did not become healthy"; exit 1; }
+          export GODDI_BASE_URL=http://127.0.0.1:18080
+          export GODDI_ADMIN_USER=admin
+          export GODDI_ADMIN_PASS=Admin@123456
+          export GODDI_TEST_DB=/tmp/goddi-browser/goddi.db
+          # h2-report-ref needs generated tests/h2/reports evidence -> local only.
+          export GODDI_SUITES="docs contracts i18n theme keyboard route-audit batch16 smoke batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12 batch13 batch14 batch15 legacy"
+          ./test/browser/run.sh

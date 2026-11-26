@@ -1,10 +1,15 @@
 # Browser regression harness
 
-19 Playwright suites that exercise the TDesign management UI against an
+24 Playwright/static suites that exercise the TDesign management UI against an
 **isolated** GoDDI server (real Chromium headless, real HTTP API, real SQLite).
 This is the reproducible form of the browser evidence in
 `docs/audit/IMPLEMENTATION-STATUS.md` §1. **Never point it at production** —
 the suites create and delete test rows in the configured database.
+
+> **CI**: the `.github/workflows/ci.yml` `browser-regression` job runs these
+> suites on every push/PR (23 of the 24 — `h2-report-ref` needs a generated
+> `tests/h2/reports/H2-REPORT-*.json` and is local-only) against a freshly
+> built, isolated server. `make verify-browser` remains the local entry point.
 
 ## Prerequisites
 
