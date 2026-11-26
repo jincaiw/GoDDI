@@ -5,7 +5,7 @@ import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
-import { PATHS } from '@/components/starter/nav';
+import { navParent, PATHS } from '@/components/starter/nav';
 import StarterHeader from '@/components/starter/Header.vue';
 import StarterSideNav from '@/components/starter/SideNav.vue';
 import StarterSettingDrawer from '@/components/starter/SettingDrawer.vue';
@@ -28,7 +28,7 @@ const layoutMode = computed(() => String(themeStore.layout?.mode || 'vertical'))
 const footerVisible = computed(() => themeStore.footer?.visible !== false);
 const fixedHeader = computed(() => Boolean(themeStore.fixedHeaderAndTab));
 const isHorizontal = computed(() => layoutMode.value === 'horizontal');
-const expanded = ref<string[]>(['dns']);
+const expanded = ref<string[]>([]);
 
 // Route-level page cache (starter "keep-alive" behaviour).
 //
@@ -37,13 +37,10 @@ const expanded = ref<string[]>(['dns']);
 // Views declare `defineOptions({ name: 'DNSZonesPage' })`; route names are
 // snake_case (`dns_zones`), which is why matching route names never worked.
 
-function groupFor(key: string) {
-  return key.split('_')[0];
-}
 watch(
   activeMenu,
   key => {
-    const group = groupFor(key);
+    const group = navParent(key)?.key;
     if (group && !expanded.value.includes(group)) expanded.value = [...expanded.value, group];
   },
   { immediate: true }

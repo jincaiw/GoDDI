@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Link as TLink, MessagePlugin, Tag as TTag } from 'tdesign-vue-next';
 import type { PrimaryTableCol } from 'tdesign-vue-next';
+import { formatAPITime } from '@/utils/datetime';
 import RemoteTable from '@/components/RemoteTable.vue';
 import { usePermission } from '@/composables/usePermission';
 import { ApiError } from '@/service/api/goddi/client';
@@ -142,12 +143,12 @@ const revisionColumns: PrimaryTableCol[] = [
     ellipsis: true,
     cell: (_h, { row }) => noteLabel((row as ConfigRevision).note)
   },
-  { colKey: 'created_at', title: t('settings.configVersions.createdAt'), width: 170 },
+  { colKey: 'created_at', title: t('settings.configVersions.createdAt'), width: 170, cell: (_h, { row }) => formatAPITime(row.created_at) },
   {
     colKey: 'applied_at',
     title: t('settings.configVersions.appliedAt'),
     width: 170,
-    cell: (_h, { row }) => (row as ConfigRevision).applied_at || '-'
+    cell: (_h, { row }) => formatAPITime((row as ConfigRevision).applied_at)
   },
   { colKey: 'applied_generation', title: t('settings.configVersions.appliedGeneration'), width: 130 },
   {
@@ -511,7 +512,7 @@ const releaseColumns: PrimaryTableCol[] = [
     ellipsis: true,
     cell: (_h, { row }) => (row as ConfigRelease).last_error || '-'
   },
-  { colKey: 'created_at', title: t('settings.configVersions.createdAt'), width: 170 },
+  { colKey: 'created_at', title: t('settings.configVersions.createdAt'), width: 170, cell: (_h, { row }) => formatAPITime(row.created_at) },
   {
     colKey: 'op',
     title: t('common.actions'),

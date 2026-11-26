@@ -115,11 +115,45 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
   await p2.waitForTimeout(1500);
   const adminTok = await p2.evaluate(() => sessionStorage.getItem('token'));
   const adminCsrf = await p2.evaluate(() => sessionStorage.getItem('csrf_token') || '');
+  // Reuse the test role. A fresh login obtains the effective permissions after each grant.
+  for (const [resource, allowed, allowedPath, denied, deniedPath] of [
+    ['dns', 'DNS 查询工具', '/tools/client', '审计日志', '/logs/audit'],
+    ['audit', '审计日志', '/logs/audit', 'DNS 查询工具', '/tools/client']
+  ]) {
+    const permission = perms.data.data.find(item => item.resource === resource && item.action === 'read');
+    const result = await api('PUT', `/roles/${roleID}/permissions`, { permission_ids: [permission.id] }, adminTok, adminCsrf);
+    step(`${resource}-only role configured`, result.status === 200);
+    await p.evaluate(() => sessionStorage.clear());
+    await p.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+    await p.locator('input').nth(0).fill(readerName);
+    await p.locator('input').nth(1).fill('AdminPass-0123456789');
+    await p.locator('button[type="submit"]').click();
+    await p.waitForURL('**/dashboard');
+    const search = p.locator('.td-quick-search input');
+    await search.fill(denied);
+    await p.locator('.td-search-empty').waitFor();
+    step(`${resource}-only search hides unauthorized page`, await p.getByRole('option').count() === 0);
+    await search.fill(allowed);
+    await p.getByRole('option', { name: allowed }).waitFor();
+    await search.press('Enter');
+    await p.waitForURL(`**${allowedPath}`);
+    await p.reload({ waitUntil: 'networkidle' });
+    const expandMenu = p.getByRole('button', { name: '展开菜单', exact: true });
+    if (await expandMenu.isVisible()) await expandMenu.click();
+    const side = p.locator('.td-aside');
+    step(`${resource}-only deep link expands correct group`, await side.getByRole('button', { name: '日志与诊断' }).getAttribute('aria-expanded') === 'true');
+    await side.getByRole('button', { name: allowed, exact: true }).waitFor({ state: 'visible' });
+    step(`${resource}-only menu matches search`, await side.getByRole('button', { name: allowed, exact: true }).isVisible() && await side.getByRole('button', { name: denied, exact: true }).count() === 0);
+    await p.goto(`${BASE}${deniedPath}`);
+    await p.waitForURL('**/403');
+    step(`${resource}-only restricted URL returns 403 page`, true);
+  }
   await api('DELETE', `/users/${userID}`, null, adminTok, adminCsrf);
   await api('DELETE', `/roles/${roleID}`, null, adminTok, adminCsrf);
   await b2.close();
   step('cleanup removed reader and role', true, '');
 
+  step('restricted roles register only valid route groups', !errs.some(message => message.includes('Error transforming route')));
   console.log('errors:', errs.length);
   errs.slice(0, 8).forEach(e => console.log('  ' + e));
   await b.close();

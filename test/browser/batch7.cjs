@@ -20,7 +20,7 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
  await check('/dns/forwarders','转发器');
  await check('/dns/blocked','阻断区域');
  await p.goto(BASE+'/tools/client',{waitUntil:'networkidle'}); await p.waitForTimeout(700);
- step('/tools/client renders', (await p.locator('body').innerText()).includes('调试客户端') && (await p.locator('.n-form-item, .n-card').count())===0 && (await p.locator('.t-form').count())>0, `forms=${await p.locator('.t-form').count()}`);
+ step('/tools/client renders', (await p.locator('body').innerText()).includes('DNS 查询工具') && (await p.locator('.n-form-item, .n-card').count())===0 && (await p.locator('.t-form').count())>0, `forms=${await p.locator('.t-form').count()}`);
 
  // forwarders tabs + create forwarder end-to-end
  await p.goto(BASE+'/dns/forwarders',{waitUntil:'networkidle'}); await p.waitForTimeout(700);

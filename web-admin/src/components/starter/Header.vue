@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { $t, getLocale } from '@/locales';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
-import { accessibleNav, NAV, PATHS } from '@/components/starter/nav';
+import { accessibleNav, NAV, navParent, PATHS } from '@/components/starter/nav';
 import { getConfigReplicationStatus } from '@/service/api/goddi/ha';
 import { getHAStatus } from '@/service/api/goddi/ha';
 import NodeModeBadge from '@/components/NodeModeBadge.vue';
@@ -71,6 +71,13 @@ const breadcrumbs = computed<BreadcrumbCrumb[]>(() => {
     }
   }
 
+  const group = navParent(activeMenuName || String(route.name));
+  if (group && !items.some(item => item.key === group.key)) {
+    // A menu group can span multiple URL namespaces. It has no destination of its own.
+    const routeGroup = matched.find(record => record.children.length && record.name !== route.name);
+    const index = items.findIndex(item => item.key === routeGroup?.name);
+    items.splice(Math.max(index, 0), index >= 0 ? 1 : 0, { key: group.key, label: String($t(group.labelKey as any)) });
+  }
   return items;
 });
 

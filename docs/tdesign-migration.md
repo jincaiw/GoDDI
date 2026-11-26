@@ -85,7 +85,7 @@
 **批次 7 已完成（round 104）**，新增 3 个纯 TDesign 页面：
 - `views/dns/forwarders/index.vue`：`t-tabs` 两个标签页（转发器 / 条件转发器）+ 新建/编辑/删除 + 启用开关 inline 更新。**修了既有功能 bug**：条件转发器原表单缺 `forwarder_ids`，后端 `CreateConditionalForwarder` 明确要求非空并返回 400，导致该功能从未可用；现增加转发器多选。
 - `views/dns/blocked/index.vue`：阻断列表表 + 规则子表 + 新建列表/规则弹窗 + 清空/刷新 + 临时禁用横幅（30s 轮询，卸载时清理）。
-- `views/tools/client/index.vue`：DNS 调试客户端，查询表单 + 应答表 + 「导入到区域」弹窗（`t-descriptions` 显示耗时/服务器）。
+- `views/tools/client/index.vue`：日志与诊断 → DNS 查询工具，查询表单 + 应答表 + 「导入到区域」弹窗（`t-descriptions` 显示耗时/服务器）。
 - 验证：`typecheck`=0、`build`=0、专项 9 项全 PASS、0 error；**端到端创建转发器 `tdfwd75209` 成功回显、真实 DNS 查询返回应答并渲染导入动作**；全量回归（核心/批次2–6/10 个未迁移页）全绿。
 
 **批次 8 已完成（round 105）**：迁移最大的常规列表页 `views/dns/zones/index.vue`（403 行）：

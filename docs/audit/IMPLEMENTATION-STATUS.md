@@ -1953,3 +1953,11 @@ TLS 为**可选**（nil=旧明文+token，兼容既有部署）；生产环境�
 - **H2 验收**：`make h2-config-replication` — node-a 建 scope → node-b 自动出现（控制库+数据面）→ 杀 node-a → node-b 自动提升并**从复制 scope 直接分配租约 10.77.3.121（无手工重建）**。PASS=10 FAIL=0。
 - **边界（不宣称）**：B 未实现——作者节点自身故障的自动切换、真实分区 fail-closed、跨节点 Revision/Hash 自动一致仍 NOT_VERIFIED；A 为单作者单向只读复制，默认关闭。
 - **回归**：`go test ./...` 103 ok / 0 FAIL；docs 守卫 PASS。
+
+## 1bo. 控制台导航 IA 与搜索权限一致性（2026-11-26，分支 task/nav-ia-implementation）
+
+- **问题**：侧栏按权限过滤，顶部快捷搜索却遍历完整 `NAV`（能搜到无权入口→点入 403）；顶层 8 项中 `工具` 仅含"调试客户端"，`系统管理`（用户/组/角色/令牌/会话）与 `系统设置`（子项同名"系统设置"）命名混淆。
+- **变更**：`NAV` 顶层 8→7——`工具`并入 `日志与诊断`（`调试客户端`→`DNS 查询工具`），`系统管理`→`身份与访问`，`系统设置`同名子项→`常规设置`；30 个入口、URL、读写权限不变。搜索改用 `accessibleNav`（与侧栏同一份可见树）；面包屑父级与分组展开改为按 `NAV` 树定位；分组标题改为原生按钮（`aria-expanded`，键盘可展开）。
+- **顺带修复**：受权限过滤后仍保留的空 layout 分组导致 `Error transforming route`（`filterRoutesByPermission` 现仅保留有子项的分组）；配置版本列表的创建/应用时间改用 `formatAPITime`（此前渲染 ISO 时间戳）。
+- **证据（隔离实例 + 真实 Chromium）**：`pnpm typecheck/oxlint/eslint/build` 0；`go vet ./...`、`gofmt` 干净；浏览器 **23 套件 `TOTAL_FAILS=0`**（含 `batch16` 的 dns-only/audit-only 双角色搜索、菜单、403 断言，`route-audit` 覆盖全部 `/settings/*` 与 `/tools/client` 并校验详情高亮）；e2e bare 4 + fixture 8 全过。
+- **脚本测量（非真人计时）**：四任务点击次数 DNS 查询 4→3（跨组消失），会话/审计 2、IPAM 4（入口改为连续顺序）。

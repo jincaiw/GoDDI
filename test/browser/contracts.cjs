@@ -37,7 +37,7 @@ const pathKeys = new Set([...pathsBlock.matchAll(/^\s+'?([a-zA-Z0-9_-]+)'?:\s*'[
 
 // Group parents are expandable menu sections, not navigable leaves. They are
 // listed in `expanded` rather than PATHS.
-const groupParents = new Set(['dns', 'dhcp', 'ipam', 'tools', 'admin', 'logs', 'settings']);
+const groupParents = new Set(['dns', 'dhcp', 'ipam', 'admin', 'logs', 'settings']);
 
 // 1. Every nav key and route-meta key needs a translation in both languages.
 for (const lang of langs) {

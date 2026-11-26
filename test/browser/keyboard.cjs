@@ -22,6 +22,9 @@ const { BASE, USER, PASS, shot, launchOpts } = require('./common.cjs');
  step('header accessible labels', labels>=4, `labels=${labels}`);
  await p.goto(`${BASE}/dashboard`,{waitUntil:'networkidle'}); await p.waitForTimeout(700);
  const expand=p.getByRole('button',{name:/展开菜单|expand/i}).first(); if(await expand.count()){ await expand.click(); await p.waitForTimeout(400); }
+ const dnsGroup=p.locator('.td-aside').getByRole('button',{name:'DNS',exact:true});
+ await dnsGroup.focus(); await p.keyboard.press('Enter');
+ step('keyboard expands DNS', await dnsGroup.getAttribute('aria-expanded')==='true');
  const zoneNav=p.locator('button.menu-key-target[aria-label="区域管理"]').first();
  await zoneNav.focus(); await p.keyboard.press('Enter'); await p.waitForTimeout(1200);
  step('keyboard navigation', p.url().includes('/dns/zones'), `url=${p.url()}`);

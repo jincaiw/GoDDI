@@ -68,11 +68,11 @@ export const NAV: NavItem[] = [
     children: [
       { key: 'dns_zones', labelKey: 'route.dns_zones', icon: 'internet', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_forwarders', labelKey: 'route.dns_forwarders', icon: 'swap', permission: { resource: 'dns', action: 'read' } },
+      { key: 'dns_cache', labelKey: 'route.dns_cache', icon: 'data', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_allowed', labelKey: 'route.dns_allowed', icon: 'check-circle', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_blocked', labelKey: 'route.dns_blocked', icon: 'error-circle', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_security', labelKey: 'route.dns_security', icon: 'secured', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_dnssec', labelKey: 'route.dns_dnssec', icon: 'lock-on', permission: { resource: 'dns', action: 'read' } },
-      { key: 'dns_cache', labelKey: 'route.dns_cache', icon: 'data', permission: { resource: 'dns', action: 'read' } },
       { key: 'dns_apps', labelKey: 'route.dns_apps', icon: 'app', permission: { resource: 'dns', action: 'read' } }
     ]
   },
@@ -94,27 +94,9 @@ export const NAV: NavItem[] = [
     icon: 'root-list',
     children: [
       { key: 'ipam_spaces', labelKey: 'route.ipam_spaces', icon: 'earth', permission: { resource: 'ipam', action: 'read' } },
-      { key: 'ipam_retirement-archive', labelKey: 'route.ipam_retirement-archive', icon: 'archive', permission: { resource: 'ipam', action: 'read' } },
       { key: 'ipam_subnets', labelKey: 'route.ipam_subnets', icon: 'fork', permission: { resource: 'ipam', action: 'read' } },
-      { key: 'ipam_addresses', labelKey: 'route.ipam_addresses', icon: 'location', permission: { resource: 'ipam', action: 'read' } }
-    ]
-  },
-  {
-    key: 'tools',
-    labelKey: 'route.tools',
-    icon: 'tools',
-    children: [{ key: 'tools_client', labelKey: 'route.tools_client', icon: 'terminal-rectangle', permission: { resource: 'dns', action: 'read' } }]
-  },
-  {
-    key: 'admin',
-    labelKey: 'route.admin',
-    icon: 'usergroup',
-    children: [
-      { key: 'admin_users', labelKey: 'route.admin_users', icon: 'user', permission: { resource: 'user', action: 'read' } },
-      { key: 'admin_roles', labelKey: 'route.admin_roles', icon: 'user-safety', permission: { resource: 'role', action: 'read' } },
-      { key: 'admin_groups', labelKey: 'route.admin_groups', icon: 'usergroup', permission: { resource: 'group', action: 'read' } },
-      { key: 'admin_tokens', labelKey: 'route.admin_tokens', icon: 'lock-on', permission: { resource: 'token', action: 'read' } },
-      { key: 'admin_sessions', labelKey: 'route.admin_sessions', icon: 'desktop', permission: { resource: 'user', action: 'read' } }
+      { key: 'ipam_addresses', labelKey: 'route.ipam_addresses', icon: 'location', permission: { resource: 'ipam', action: 'read' } },
+      { key: 'ipam_retirement-archive', labelKey: 'route.ipam_retirement-archive', icon: 'archive', permission: { resource: 'ipam', action: 'read' } }
     ]
   },
   {
@@ -122,9 +104,22 @@ export const NAV: NavItem[] = [
     labelKey: 'route.logs',
     icon: 'file-paste',
     children: [
-      { key: 'logs_audit', labelKey: 'route.logs_audit', icon: 'file-search', permission: { resource: 'audit', action: 'read' } },
       { key: 'logs_dns', labelKey: 'route.logs_dns', icon: 'chart-bar', permission: { resource: 'dns', action: 'read' } },
-      { key: 'logs_dhcp', labelKey: 'route.logs_dhcp', icon: 'file-1', permission: { resource: 'dhcp', action: 'read' } }
+      { key: 'logs_dhcp', labelKey: 'route.logs_dhcp', icon: 'file-1', permission: { resource: 'dhcp', action: 'read' } },
+      { key: 'tools_client', labelKey: 'route.tools_client', icon: 'terminal-rectangle', permission: { resource: 'dns', action: 'read' } },
+      { key: 'logs_audit', labelKey: 'route.logs_audit', icon: 'file-search', permission: { resource: 'audit', action: 'read' } }
+    ]
+  },
+  {
+    key: 'admin',
+    labelKey: 'route.admin',
+    icon: 'usergroup',
+    children: [
+      { key: 'admin_users', labelKey: 'route.admin_users', icon: 'user', permission: { resource: 'user', action: 'read' } },
+      { key: 'admin_groups', labelKey: 'route.admin_groups', icon: 'usergroup', permission: { resource: 'group', action: 'read' } },
+      { key: 'admin_roles', labelKey: 'route.admin_roles', icon: 'user-safety', permission: { resource: 'role', action: 'read' } },
+      { key: 'admin_tokens', labelKey: 'route.admin_tokens', icon: 'lock-on', permission: { resource: 'token', action: 'read' } },
+      { key: 'admin_sessions', labelKey: 'route.admin_sessions', icon: 'desktop', permission: { resource: 'user', action: 'read' } }
     ]
   },
   {
@@ -133,11 +128,16 @@ export const NAV: NavItem[] = [
     icon: 'setting',
     children: [
       { key: 'settings_system', labelKey: 'route.settings_system', icon: 'system-setting', permission: { resource: 'settings', action: 'read' } },
-      { key: 'settings_backup', labelKey: 'route.settings_backup', icon: 'cloud-upload', permission: { resource: 'backup', action: 'read' } },
-      { key: 'settings_config-versions', labelKey: 'route.settings_config-versions', icon: 'history', permission: { resource: 'settings', action: 'read' } }
+      { key: 'settings_config-versions', labelKey: 'route.settings_config-versions', icon: 'history', permission: { resource: 'settings', action: 'read' } },
+      { key: 'settings_backup', labelKey: 'route.settings_backup', icon: 'cloud-upload', permission: { resource: 'backup', action: 'read' } }
     ]
   }
 ];
+
+/** Locate the displayed group even when a bookmarked URL has a different prefix. */
+export function navParent(key: string) {
+  return NAV.find(item => item.children?.some(child => child.key === key));
+}
 
 /** route name -> path, kept in sync with src/router/elegant/routes.ts */
 export const PATHS: Record<string, string> = {

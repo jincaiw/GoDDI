@@ -30,7 +30,18 @@ const navItems = computed(() => accessibleNav(NAV, (resource, action) => authSto
       <template v-for="item in navItems" :key="item.key">
         <TSubmenu v-if="item.children" :value="item.key">
           <template #icon><TIcon :name="item.icon" /></template>
-          <template #title>{{ $t(item.labelKey as any) }}</template>
+          <template #title>
+            <button
+              v-if="!collapsed"
+              type="button"
+              class="menu-key-target"
+              :aria-expanded="expanded.includes(item.key)"
+              @click.stop="emit('expand', expanded.includes(item.key) ? expanded.filter(key => key !== item.key) : [...expanded, item.key])"
+            >
+              {{ $t(item.labelKey as any) }}
+            </button>
+            <span v-else>{{ $t(item.labelKey as any) }}</span>
+          </template>
           <TMenuItem
             v-for="child in item.children"
             :key="child.key"

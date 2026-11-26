@@ -16,7 +16,8 @@ const routes = [
   '/dns', '/dns/allowed', '/dns/apps', '/dns/blocked', '/dns/cache', '/dns/dnssec',
   '/dns/forwarders', '/dns/security', '/dns/zones',
   '/ipam', '/ipam/addresses', '/ipam/spaces', '/ipam/subnets', '/ipam/retirement-archive',
-  '/logs', '/logs/audit', '/logs/dhcp', '/logs/dns', '/settings'
+  '/logs', '/logs/audit', '/logs/dhcp', '/logs/dns', '/settings',
+  '/settings/system', '/settings/backup', '/settings/config-versions', '/tools/client'
 ];
 
 const I18N = /\b((?:common|route|dns|dhcp|ipam|admin|settings|logs|tools|haStatus|sessions|theme|page|form|icon|menu)\.[A-Za-z0-9_.]+)\b/g;
@@ -71,6 +72,13 @@ async function zoneDetailRoute(page) {
       await page.goto(BASE + route, { waitUntil: 'networkidle', timeout: 15000 });
       await page.waitForTimeout(350);
       text = await page.locator('body').innerText();
+      if (route === zoneRoute.route || route === '/tools/client') {
+        const expandMenu = page.getByRole('button', { name: '展开菜单', exact: true });
+        if (await expandMenu.isVisible()) await expandMenu.click();
+        const label = route === zoneRoute.route ? '区域管理' : 'DNS 查询工具';
+        const selected = page.locator('.td-aside .t-is-active').getByRole('button', { name: label, exact: true });
+        await selected.first().waitFor({ state: 'visible', timeout: 5000 });
+      }
     } catch (e) {
       text = 'NAV_ERROR ' + e.message.slice(0, 160);
     }

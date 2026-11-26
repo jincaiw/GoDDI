@@ -269,9 +269,8 @@ export const useRouteStore = defineStore(SetupStoreId.Route, () => {
         const permission = node.meta?.permission as { resource: string; action: string } | null | undefined;
 
         const selfAllowed = !permission || authStore.hasPermission(permission.resource, permission.action);
-        const hasVisibleChildren = Boolean(children && children.length > 0);
-
-        if (selfAllowed || hasVisibleChildren) {
+        // Layout groups cannot be transformed into standalone pages after all children are filtered.
+        if (children ? children.length > 0 : selfAllowed) {
           result.push(children ? { ...node, children } : node);
         }
       });
