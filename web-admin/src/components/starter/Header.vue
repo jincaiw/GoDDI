@@ -74,6 +74,7 @@ const breadcrumbs = computed<BreadcrumbCrumb[]>(() => {
   return items;
 });
 
+const navItems = computed(() => accessibleNav(NAV, (resource, action) => authStore.hasPermission(resource, action)));
 const quickSearch = ref('');
 const searchItems = computed(() => {
   const flatten = (items: typeof NAV): Array<{ key: string; label: string }> =>
@@ -81,7 +82,7 @@ const searchItems = computed(() => {
       ...(item.children ? flatten(item.children) : []),
       ...(!item.children ? [{ key: item.key, label: String($t(item.labelKey as any)) }] : [])
     ]);
-  return flatten(NAV);
+  return flatten(navItems.value);
 });
 
 /**
@@ -202,7 +203,6 @@ async function handleUserMenu(value: unknown) {
 }
 
 const userName = computed(() => authStore.userInfo.userName || 'Admin');
-const navItems = computed(() => accessibleNav(NAV, (resource, action) => authStore.hasPermission(resource, action)));
 async function handleLogout() {
   await authStore.resetStore();
   await router.push('/login');
