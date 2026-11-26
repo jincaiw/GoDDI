@@ -172,6 +172,10 @@ The frontend must be built before the Go binary because `web/dist` is embedded a
 - Back up `/var/lib/goddi` and test restore procedures regularly.
 - Use API token expiration, IP restrictions, least-privilege roles, and TOTP for administrators.
 
+## AI 开发规范
+
+所有 AI 编码工具（Codex、Claude Code 等）在本仓库工作前请阅读 [AGENTS.md](AGENTS.md)；Claude Code 见 [CLAUDE.md](CLAUDE.md)。要点：一任务一 Worktree、单一权威文档、禁止重复开发、破坏性操作需人工确认。
+
 ## License
 
 [MIT](LICENSE)
