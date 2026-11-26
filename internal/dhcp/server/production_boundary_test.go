@@ -80,7 +80,9 @@ func TestDefaultMutationPathsRetainExplicitMigrationBoundary(t *testing.T) {
 		},
 		{
 			name: "management owner wiring",
-			path: filepath.Join(root, "cmd", "goddi", "main.go"),
+			// The default-process assembly lives in serve.go after the cmd/goddi
+			// main.go split; guard the file that actually wires the mutation owner.
+			path: filepath.Join(root, "cmd", "goddi", "serve.go"),
 			must: []string{"MutationOwner:    dhcpSrv"},
 			forbid: []string{
 				"MutationOwner:    lease.NewManager(leaseMgrDB)",

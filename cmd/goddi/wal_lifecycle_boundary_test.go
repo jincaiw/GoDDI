@@ -8,20 +8,40 @@ import (
 	"testing"
 )
 
-// This is a migration boundary guard, not proof of production WAL assembly.
-// The staged WAL/applier helpers are intentionally not wired into the default
-// process until their transaction, readiness, and shutdown contracts are closed.
-func TestDefaultProcessLeavesWALProjectionLifecycleExplicitlyUnassembled(t *testing.T) {
+// packageSources concatenates the non-test Go sources of the command package so
+// these assembly guards stay independent of how main.go is split across files.
+func packageSources(t *testing.T) string {
+	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	mainPath := filepath.Join(filepath.Dir(file), "main.go")
-	data, err := os.ReadFile(mainPath)
+	dir := filepath.Dir(file)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read %s: %v", mainPath, err)
+		t.Fatalf("read dir %s: %v", dir, err)
 	}
-	source := string(data)
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		b.Write(data)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// This is a migration boundary guard, not proof of production WAL assembly.
+// The staged WAL/applier helpers are intentionally not wired into the default
+// process until their transaction, readiness, and shutdown contracts are closed.
+func TestDefaultProcessLeavesWALProjectionLifecycleExplicitlyUnassembled(t *testing.T) {
+	source := packageSources(t)
 
 	for _, required := range []string{
 		"dhcpSrv.Start(context.Background())",
@@ -64,16 +84,7 @@ func TestDefaultProcessLeavesWALProjectionLifecycleExplicitlyUnassembled(t *test
 }
 
 func TestDefaultProcessUsesFactsOnlyDNSConsumer(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	mainPath := filepath.Join(filepath.Dir(file), "main.go")
-	data, err := os.ReadFile(mainPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainPath, err)
-	}
-	source := string(data)
+	source := packageSources(t)
 
 	// The legacy DNS outbox queue was retired in round 286. The unified facts
 	// chain is now the only DNS producer: the facts consumer must still be
@@ -99,16 +110,7 @@ func TestDefaultProcessUsesFactsOnlyDNSConsumer(t *testing.T) {
 }
 
 func TestDefaultControlProcessRunsFactsConsumerLifecycle(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	mainPath := filepath.Join(filepath.Dir(file), "main.go")
-	data, err := os.ReadFile(mainPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainPath, err)
-	}
-	source := string(data)
+	source := packageSources(t)
 
 	// The assembly evolved (round 273): the data-plane relay copies the lease
 	// plane's producer outbox into the control inbox, and HA primaries run the
@@ -143,16 +145,7 @@ func TestDefaultControlProcessRunsFactsConsumerLifecycle(t *testing.T) {
 // and never construct the WAL pipeline, whose startup recovery and shutdown
 // ordering are exercised by tests but not yet wired into production.
 func TestDefaultProcessDoesNotAssembleWALPipeline(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	mainPath := filepath.Join(filepath.Dir(file), "main.go")
-	data, err := os.ReadFile(mainPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainPath, err)
-	}
-	source := string(data)
+	source := packageSources(t)
 	for _, forbidden := range []string{"OpenWALPipeline", "NewWALPipeline", "lease.NewWALLeaseStore"} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("default process unexpectedly assembles the opt-in WAL path %q", forbidden)
@@ -166,16 +159,7 @@ func TestDefaultProcessDoesNotAssembleWALPipeline(t *testing.T) {
 // DNS facts consumer) and must not silently wire the opt-in WAL lease store or
 // durable ACK gate.
 func TestDefaultFactsChainAssemblyMatchesGrayReview(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	mainPath := filepath.Join(filepath.Dir(file), "main.go")
-	data, err := os.ReadFile(mainPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainPath, err)
-	}
-	source := string(data)
+	source := packageSources(t)
 	for _, required := range []string{
 		"ipam.NewFactsPipeline(",
 		"dhcpinternal.NewDNSFactsConsumer(",
