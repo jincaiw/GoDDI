@@ -250,6 +250,16 @@ func TestATakeoverIsRefusedWhileThePrimaryStillAnswers(t *testing.T) {
 	staleAfter := 10 * time.Second
 	primary, _, mirrorStore := startPairWithPeerStaleAfter(t, staleAfter)
 
+	// The refusal is keyed on when this standby last HEARD from the primary
+	// (ha_peer_seq_at). startPair* only waits for the PRIMARY to see its mirror,
+	// so on a loaded, race-instrumented runner the standby can still be a
+	// heartbeat behind here; without this wait the takeover runs against "never
+	// heard from the peer", which is a different (and correctly permitted) state.
+	waitFor(t, "the standby to record the primary's watermarks", func() bool {
+		raw, err := mirrorStore.Meta(metaPeerSeqAt)
+		return err == nil && strings.TrimSpace(raw) != ""
+	})
+
 	cfg := testConfig(t, "standby")
 	cfg.PeerStaleAfter = staleAfter
 	op := NewOperator(cfg, mirrorStore)
