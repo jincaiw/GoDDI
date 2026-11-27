@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.25.3 — 2026-11-27
+
+- test(dhcp/ha): stabilise `TestATakeoverIsRefusedWhileThePrimaryStillAnswers` under `-race`. It only waited for the primary to see its mirror; on a loaded runner the standby could still be a heartbeat behind and the takeover ran against the "never heard from the peer" state, which is correctly permitted. The test now waits until the standby has persisted `ha_peer_seq_at` before asserting the refusal. Production logic is unchanged (Issue #8, PR #9).
+- Release housekeeping only; the shipped binaries behave the same as v0.25.2.
+
 ## v0.25.2 — 2026-11-27
 
 - Console navigation is task-first: top-level groups reduced from 8 to 7 (Tools folded into Logs and Diagnostics, Administration renamed Identity and Access, the duplicate System Settings child renamed General Settings, Debug Client renamed DNS Query Tool). All 30 entries, URLs and read/write permissions are unchanged.
