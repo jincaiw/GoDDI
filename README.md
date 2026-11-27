@@ -24,7 +24,7 @@ GoDDI is a compact, self-hosted DDI management platform that combines authoritat
 
 ## Version 0.25.1 Scope
 
-GoDDI v0.25.2 is a self-hosted DDI platform backed by SQLite/WAL. Its admin console has been rebuilt on the TDesign Vue Next Starter theme, replacing the earlier Naive UI frontend while keeping every route, API call and business flow available; it also keeps the v0.24.x security and quality updates and the supported Alpine runtime base for Docker deployments. Its production boundaries remain explicit:
+GoDDI v0.25.1 is a self-hosted DDI platform backed by SQLite/WAL. Its admin console has been rebuilt on the TDesign Vue Next Starter theme, replacing the earlier Naive UI frontend while keeping every route, API call and business flow available; it also keeps the v0.24.x security and quality updates and the supported Alpine runtime base for Docker deployments. Its production boundaries remain explicit:
 
 - **Implemented:** authoritative and recursive DNS, DHCP processing, IPAM, configuration revisions, backup/restore, metrics, the web console, and DoT/DoH/DoQ listener configuration. Real DoT/DoH/DoQ client handshakes still require deployment validation.
 - **Experimental/incomplete:** DHCP HA is not certified as GA. DNSSEC signing (RRSIG/DNSKEY) and NSEC/NSEC3 denial-of-existence are implemented and tested; serving a complete public chain and DS management still require deployment validation.
@@ -41,7 +41,7 @@ Download the release binary:
 
 ```bash
 curl -fL -o goddi \
-  https://github.com/jincaiw/GoDDI/releases/download/v0.25.2/goddi-v0.25.2-linux-amd64
+  https://github.com/jincaiw/GoDDI/releases/download/v0.25.1/goddi-v0.25.1-linux-amd64
 chmod +x goddi
 sudo install -m 0755 goddi /usr/local/bin/goddi
 ```
