@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.25.2 — 2026-11-27
+
+- Console navigation is task-first: top-level groups reduced from 8 to 7 (Tools folded into Logs and Diagnostics, Administration renamed Identity and Access, the duplicate System Settings child renamed General Settings, Debug Client renamed DNS Query Tool). All 30 entries, URLs and read/write permissions are unchanged.
+- Header quick search now uses the same permission-filtered navigation tree as the sidebar, so a restricted user can no longer search up to a page they cannot open.
+- Breadcrumbs and menu expansion resolve the parent group from the navigation tree, including groups that span several URL namespaces; group titles are native buttons and expand from the keyboard.
+- Fix empty layout groups left behind after permission filtering (they produced "Error transforming route" for restricted roles).
+- Render configuration-version history timestamps through the shared API-time formatter instead of raw ISO strings.
+
 ## v0.25.1 — 2026-11-20
 
 - Clear the CI gate debt that surfaced after v0.25.0. The branch had accumulated 51 un-pushed commits that never ran CI; this release makes all five CI jobs pass.
