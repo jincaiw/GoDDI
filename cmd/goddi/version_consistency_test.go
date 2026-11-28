@@ -61,3 +61,40 @@ func TestTheDockerfileDoesNotDefaultToAVersionNumber(t *testing.T) {
 			dockerfilePath, value)
 	}
 }
+
+// The CI workflow also passes a version to its arm64 smoke build and to the
+// release smoke script. Neither goes through docker-compose or main.go, so a
+// release that forgets them ships a binary that reports one number while CI
+// exercises another. This pins the two literals CI carries to the binary's
+// version, the same way the compose check above does.
+func TestTheCIBuildVersionMatchesTheBinary(t *testing.T) {
+	ciPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
+	raw, err := os.ReadFile(ciPath)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skipf("%s is not in this tree", ciPath)
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", ciPath, err)
+	}
+	text := string(raw)
+
+	build := regexp.MustCompile(`-X main\.Version=([^\s"']+)`).FindAllStringSubmatch(text, -1)
+	if len(build) == 0 {
+		t.Fatalf("no -X main.Version=... build flag found in %s", ciPath)
+	}
+	for _, m := range build {
+		if m[1] != Version {
+			t.Fatalf("%s builds with -X main.Version=%q while the binary reports %q; bump both or neither", ciPath, m[1], Version)
+		}
+	}
+
+	smoke := regexp.MustCompile(`release_smoke\.sh\s+\S+\s+(v[0-9][^\s"']*)`).FindAllStringSubmatch(text, -1)
+	if len(smoke) == 0 {
+		t.Fatalf("no release_smoke.sh ... <version> invocation found in %s", ciPath)
+	}
+	for _, m := range smoke {
+		if m[1] != Version {
+			t.Fatalf("%s runs release_smoke for %q while the binary reports %q; bump both or neither", ciPath, m[1], Version)
+		}
+	}
+}
